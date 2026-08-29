@@ -15,12 +15,12 @@
 ## The whole thing in nine lines
 
 1. **Product:** an egress firewall for AI traffic — redacts secrets and personal data out of outbound *and inbound* LLM/agent payloads, one way and never restored, and writes a tamper-evident evidence record.
-2. **Adoption:** change one line, your `base_url`.
+2. **Adoption:** platform or security deploys it once into the egress path — mesh sidecar or transparent gateway, inside their own perimeter. No application is modified, no team opts in, and no team can opt out.
 3. **Novelty pillar N1:** the LLM adjudicator is a *teacher*, not the runtime. It writes new deterministic detectors that get validated and promoted. **The firewall gets cheaper and faster the more traffic it sees.**
 4. **Novelty pillar N2:** compositional re-identification scoring — catches records with no flaggable entity that still identify a person. No entity-based tool sees these.
 5. **Novelty pillar N3:** format-preserving tokens with identity stable across agent hops, sessions, and restarts — derived one-way, never reversed — so multi-step agent chains stay coherent, the model's answer stays usable, and no original is stored anywhere to be recovered.
 6. **Moat (per GAP-01):** N2 is the technical moat, N1 is the story, agent-hop integrity and the inbound leg are the future, the ledger is the price ladder. Everything else is hygiene — build it, don't pitch it.
-7. **Monetization:** free shadow mode → Razorpay self-serve upgrade to enforce, metered on tokens scanned. COGS falls with usage.
+7. **Monetization:** 30-day self-hosted proof of value → annual per-BU Platform licence → org-wide Enterprise, invoiced through Razorpay and metered on tokens scanned (both legs). COGS falls with usage.
 8. **GTM:** OSS-led PLG + a free "Leak Report" diagnostic now; DPDP-compliance enterprise deals opportunistically (13 Nov 2026 enforcement, 13 May 2027 full compliance); vertical and OEM later.
 9. **Scoring:** Novelty L5 target, but the five product parameters are scored on every project — protect Job-to-be-done and Impact first. See SSOT §4.3.
 
