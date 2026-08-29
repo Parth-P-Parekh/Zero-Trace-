@@ -33,6 +33,10 @@ from typing import Any
 from ..contracts.entity_classes import EntityClass
 from ..contracts.types import Finding, Tier
 from ..spans.model import Span
+from .baseline_rules import (
+    BASELINE_KEY_RULES, BASELINE_MAX_LENGTH, BASELINE_MIN_LENGTH,
+    BASELINE_TABLE_CONFIDENCE, BASELINE_TABLE_HEADER, RuleWeakened, compile_baseline,
+)
 
 log = logging.getLogger(__name__)
 
@@ -63,54 +67,96 @@ class ContextRules:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "ContextRules":
-        """Load and compile. A malformed ruleset degrades to *no* S1 rather than taking
-        the gateway down -- S0 is the floor of the product and must keep running."""
+        """Baseline first, then config on top -- and config may only strengthen.
+
+        The baseline is compiled into ``baseline_rules.py`` and is always present. A
+        ruleset that lived only in an editable file could be silently emptied, and the
+        result is a control that reports itself healthy while catching nothing. So the
+        config layer can add rules, raise a confidence, or add placeholder patterns, and
+        nothing else. Anything weaker raises :class:`RuleWeakened` by name.
+
+        A missing or malformed config is fine -- the baseline still applies. A config
+        that tries to *weaken* is not fine, and is the one case that stops the load.
+        """
+        keys, structs, ignores = compile_baseline()
+        r = cls(key_rules=keys, structures=structs, ignore_values=ignores,
+                min_length=BASELINE_MIN_LENGTH, max_length=BASELINE_MAX_LENGTH,
+                table_header=re.compile(BASELINE_TABLE_HEADER),
+                table_confidence=BASELINE_TABLE_CONFIDENCE)
+
         path = path or DEFAULT_RULES
         try:
             import yaml
             raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except FileNotFoundError:
+            return r
         except Exception as exc:  # noqa: BLE001
-            log.error("S1 rules unavailable (%s); continuing with S0 only", exc)
-            return cls()
+            # Malformed config degrades to the baseline, which is still a working
+            # ruleset. S0 and the baseline S1 are the floor of the product.
+            log.error("rules.yaml unreadable (%s); using baseline only", exc)
+            return r
 
-        r = cls()
+        baseline_by_name = {b.name: b for b in BASELINE_KEY_RULES}
+        seen: set[str] = set()
+
         for row in raw.get("key_names", []):
+            name = row.get("name", "?")
+            seen.add(name)
             try:
+                conf = float(row["confidence"])
+                base = baseline_by_name.get(name)
+                if base is not None:
+                    if conf < base.confidence:
+                        raise RuleWeakened(
+                            name, f"confidence {conf} below baseline {base.confidence}")
+                    if row["pattern"] != base.pattern:
+                        raise RuleWeakened(name, "pattern differs from baseline")
+                    # Same rule, same or higher confidence -- replace the compiled one.
+                    for i, k in enumerate(r.key_rules):
+                        if k.name == name:
+                            r.key_rules[i] = KeyRule(
+                                name, EntityClass(row["entity_class"]),
+                                re.compile(row["pattern"]), conf)
+                            break
+                    continue
                 r.key_rules.append(KeyRule(
-                    name=row["name"],
-                    entity_class=EntityClass(row["entity_class"]),
-                    pattern=re.compile(row["pattern"]),
-                    confidence=float(row["confidence"]),
-                ))
+                    name, EntityClass(row["entity_class"]),
+                    re.compile(row["pattern"]), conf))
+            except RuleWeakened:
+                raise
             except (KeyError, ValueError, re.error) as exc:
-                # One bad rule is quarantined with a reason; it never aborts the load.
-                log.error("S1 key rule %r rejected: %s", row.get("name"), exc)
+                log.error("S1 key rule %r rejected: %s", name, exc)
+
+        missing = set(baseline_by_name) - seen
+        if missing and raw.get("key_names"):
+            # Deleting a baseline rule from the config is the quietest way to disable a
+            # detector, so it is treated exactly like lowering its confidence to zero.
+            raise RuleWeakened(sorted(missing)[0], "baseline rule absent from rules.yaml")
 
         for row in raw.get("structures", []):
+            name = row.get("name", "?")
+            if any(n == name for n, _ in r.structures):
+                continue                                  # baseline already has it
             try:
-                r.structures.append((row["name"], re.compile(row["pattern"])))
+                r.structures.append((name, re.compile(row["pattern"])))
             except (KeyError, re.error) as exc:
-                log.error("S1 structure %r rejected: %s", row.get("name"), exc)
+                log.error("S1 structure %r rejected: %s", name, exc)
 
         guards = raw.get("value_guards", {})
-        r.min_length = int(guards.get("min_length", 4))
-        r.max_length = int(guards.get("max_length", 512))
+        # Only tightening is allowed: a higher floor and a lower ceiling narrow what
+        # counts as a placeholder, which can only reduce misses.
+        r.min_length = max(r.min_length, int(guards.get("min_length", r.min_length)))
+        r.max_length = min(r.max_length, int(guards.get("max_length", r.max_length)))
         for pat in guards.get("ignore_values", []):
             try:
-                r.ignore_values.append(re.compile(pat))
+                r.ignore_values.append(re.compile(pat))   # additive: fewer false positives
             except re.error as exc:
                 log.error("S1 ignore_values %r rejected: %s", pat, exc)
 
         t = raw.get("tables", {})
         r.tables_enabled = bool(t.get("enabled", True))
-        if r.tables_enabled and t.get("sensitive_headers"):
-            try:
-                r.table_header = re.compile(t["sensitive_headers"])
-            except re.error as exc:
-                log.error("S1 table header rejected: %s", exc)
-                r.tables_enabled = False
-        r.table_confidence = float(t.get("confidence", 0.85))
-        r.table_max_rows = int(t.get("max_rows", 500))
+        r.table_confidence = max(r.table_confidence, float(t.get("confidence", 0)))
+        r.table_max_rows = int(t.get("max_rows", r.table_max_rows))
         return r
 
     # ---- guards ----

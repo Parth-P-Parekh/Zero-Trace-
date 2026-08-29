@@ -258,6 +258,25 @@ _PEM_KEY_TYPES = frozenset([
 ])
 
 
+#: Characters that make up a PEM body. Used to measure a truncated block.
+_PEM_BODY_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+)
+
+#: How much body a BEGIN line needs before a truncated block counts. One base64 line is
+#: 64 characters; requiring most of one keeps documentation that merely mentions
+#: "-----BEGIN RSA PRIVATE KEY-----" from firing while catching any real partial paste.
+_PEM_MIN_TRUNCATED_BODY = 48
+
+#: Bound on how far a truncated block is followed, so one malformed payload cannot turn
+#: into an unbounded scan.
+_PEM_MAX_BODY = 4096
+
+#: Whitespace tolerated inside a PEM body (line wrapping).
+_PEM_WHITESPACE = frozenset(chr(32) + chr(9) + chr(13) + chr(10))
+
+
+
 def pem_block_check(text: str, match_start: int, match_end: int,
                     full_text: str) -> tuple[bool, int]:
     """Validate PEM block: find matching END, verify key type.
@@ -278,8 +297,25 @@ def pem_block_check(text: str, match_start: int, match_end: int,
     # Look for matching END line
     expected_end = f"-----END {key_type}-----"
     end_pos = full_text.find(expected_end, match_end)
+
     if end_pos == -1:
-        return False, match_end
+        # Truncated block: a BEGIN line with no matching END. This happens constantly --
+        # a partial paste, a copy that clipped the tail, a log line that got cut. It is
+        # still unmistakably a private key, and returning False here meant the whole
+        # zero-tolerance class was missed on the most common accidental form.
+        #
+        # Require a substantial run of PEM body so a bare "-----BEGIN X-----" mentioned
+        # in prose or documentation does not fire on its own.
+        tail = full_text[match_end:match_end + _PEM_MAX_BODY]
+        body_chars = 0
+        for ch in tail:
+            if ch in _PEM_BODY_CHARS:
+                body_chars += 1
+            elif ch not in _PEM_WHITESPACE:
+                break
+        if body_chars < _PEM_MIN_TRUNCATED_BODY:
+            return False, match_end
+        return True, match_end + body_chars
 
     actual_end = end_pos + len(expected_end)
 

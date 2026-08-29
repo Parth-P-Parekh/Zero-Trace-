@@ -18,6 +18,9 @@ import pytest
 
 from gateway.contracts.entity_classes import EntityClass
 from gateway.detect.obfuscation import ObfuscationScanner
+from gateway.detect.baseline_rules import (
+    BASELINE_KEY_RULES, BASELINE_MIN_LENGTH, RuleWeakened,
+)
 from gateway.detect.s1_context import ContextRules, ContextScanner
 from gateway.detectors.example import EXAMPLE_DETECTORS
 from gateway.spans.model import Span
@@ -177,19 +180,116 @@ def test_bare_token_escalates_rather_than_enforcing(ctx):
     assert f and f[0].confidence < 0.75
 
 
-def test_a_broken_ruleset_degrades_to_no_s1(tmp_path):
-    """S0 is the floor of the product. A malformed config must not take it down."""
+def test_missing_config_still_detects(tmp_path):
+    """The baseline is compiled in, so a config that does not exist is not a gap."""
+    rules = ContextRules.load(tmp_path / "does_not_exist.yaml")
+    assert len(rules.key_rules) == len(BASELINE_KEY_RULES)
+    assert ContextScanner(rules)(span("password: hunter2"))
+
+
+def test_unreadable_config_degrades_to_baseline_not_to_nothing(tmp_path):
+    """A ruleset that lived only in an editable file could be silently emptied. The
+    baseline means a broken config costs the tenant's extensions, never the floor."""
     bad = tmp_path / "rules.yaml"
-    bad.write_text("key_names: [{name: x, entity_class: NOT_A_CLASS, pattern: '(', confidence: 1}]")
+    bad.write_text(": : not valid yaml : [")
     rules = ContextRules.load(bad)
-    assert rules.key_rules == []
-    assert ContextScanner(rules)(span("password: hunter2")) == []
+    assert len(rules.key_rules) == len(BASELINE_KEY_RULES)
+    assert ContextScanner(rules)(span("export DB_PASSWORD=hunter2"))
 
 
-def test_rules_are_data_not_code():
-    """A4 emits rules in this shape at runtime, and a tenant can extend them without a
-    deploy -- so the ruleset must load from the file, not from Python."""
+def _yaml_for(rules, *, override=None, extra="") -> str:
+    """Serialise a ruleset to YAML. Tests build configs from the baseline so they stay
+    correct when a baseline rule is added or retuned."""
+    override = override or {}
+    lines = ["key_names:"]
+    for b in rules:
+        conf = override.get(b.name, b.confidence)
+        lines.append(
+            f"  - {{name: {b.name}, entity_class: {b.entity_class.value}, "
+            f"pattern: '{b.pattern}', confidence: {conf}}}"
+        )
+    return "\n".join(lines) + "\n" + extra
+
+
+def test_config_may_not_lower_a_baseline_confidence(tmp_path):
+    """Dropping a rule below the enforcement threshold turns blocking into escalation
+    without removing anything -- the quietest way there is to disable a control."""
+    cfg = tmp_path / "rules.yaml"
+    cfg.write_text(_yaml_for(BASELINE_KEY_RULES, override={"password_key": 0.1}))
+    with pytest.raises(RuleWeakened, match="password_key"):
+        ContextRules.load(cfg)
+
+
+def test_config_may_not_delete_a_baseline_rule(tmp_path):
+    """Omission is deletion. Treated exactly like lowering the confidence to zero."""
+    cfg = tmp_path / "rules.yaml"
+    keep = [b for b in BASELINE_KEY_RULES if b.name != "secret_key"]
+    cfg.write_text(_yaml_for(keep))
+    with pytest.raises(RuleWeakened, match="secret_key"):
+        ContextRules.load(cfg)
+
+
+def test_config_may_raise_confidence_and_add_rules(tmp_path):
+    """The permitted direction: a tenant's own key names, and a stricter baseline."""
+    cfg = tmp_path / "rules.yaml"
+    extra = ("  - {name: acme_internal, entity_class: GENERIC_SECRET, "
+             "pattern: '(?i)acme[ _-]?seal', confidence: 0.95}")
+    cfg.write_text(_yaml_for(BASELINE_KEY_RULES,
+                             override={"bare_token_key": 0.99}, extra=extra))
+    rules = ContextRules.load(cfg)
+    by_name = {k.name: k for k in rules.key_rules}
+    assert by_name["bare_token_key"].confidence == 0.99      # raised
+    assert "acme_internal" in by_name                        # added
+    assert rules.classify_key("ACME SEAL") is not None
+
+
+def test_value_guards_may_only_tighten(tmp_path):
+    """A lower min_length widens what counts as a placeholder, which hides secrets."""
+    cfg = tmp_path / "rules.yaml"
+    cfg.write_text("value_guards: {min_length: 1, max_length: 99999}")
+    rules = ContextRules.load(cfg)
+    assert rules.min_length >= BASELINE_MIN_LENGTH
+    assert rules.max_length <= 512
+
+
+def test_baseline_is_code_not_config():
+    """The point of the whole arrangement: the floor cannot be edited away."""
     rules = ContextRules.load()
-    assert len(rules.key_rules) >= 4
-    assert len(rules.structures) >= 3
+    assert len(rules.key_rules) >= len(BASELINE_KEY_RULES)
+    assert len(rules.structures) >= 4
     assert rules.ignore_values
+
+
+# ---------------------------------------------------- truncated PEM blocks --
+
+_B64 = "MIIEowIBAAKCAQEAy8Dbv8prpJ/0kKhlGeJYozo2t60EG8L0561g13R29LvMR5hy"
+
+
+def _creds(text: str):
+    from gateway.detect.s0_credentials import scan_span_credentials
+    return scan_span_credentials(span(text))
+
+
+@pytest.mark.parametrize("label,text", [
+    ("complete block", "-----BEGIN RSA PRIVATE KEY-----\n" + _B64
+                       + "\n-----END RSA PRIVATE KEY-----"),
+    ("no END line",    "-----BEGIN RSA PRIVATE KEY-----\n" + _B64),
+    ("openssh, no END", "-----BEGIN OPENSSH PRIVATE KEY-----\n" + _B64),
+    ("EC, no END",      "-----BEGIN EC PRIVATE KEY-----\n" + _B64),
+])
+def test_private_keys_including_truncated(label, text):
+    """A BEGIN line with no matching END is the most common accidental form -- a partial
+    paste, a clipped copy, a log line cut off. It is still unmistakably a private key,
+    and requiring the END marker meant missing the whole zero-tolerance class on it."""
+    assert _creds(text), f"missed: {label}"
+
+
+@pytest.mark.parametrize("benign", [
+    "the file starts with -----BEGIN RSA PRIVATE KEY----- as expected",
+    "-----BEGIN RSA PRIVATE KEY-----\n\n\nnotes but no key material",
+    "grep for -----BEGIN in the repo to find committed keys",
+])
+def test_pem_headers_in_prose_do_not_fire(benign):
+    """A truncated block needs a substantial run of body, so documentation that merely
+    names the header is not a finding."""
+    assert _creds(benign) == [], f"false positive on: {benign}"
