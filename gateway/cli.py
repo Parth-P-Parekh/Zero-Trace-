@@ -105,6 +105,16 @@ def _status(args: argparse.Namespace) -> int:
                 print(f"    {'':17} {path}")
     if not any_wired:
         print("    nothing wired -- run `zerotrace enable`")
+    elif any(installer.installed_events(p)
+             for p in (installer.config_paths(user_scope=u)["codex"]
+                       for u in (True, False))):
+        print()
+        print("    ! codex: configured, NOT confirmed enforcing")
+        print("      Codex >=0.151 reads ~/.codex/hooks.json but silently declines to")
+        print("      run hooks it has not trusted -- no warning, no log line. Verified")
+        print("      on 0.151.0-alpha.7.1: a hook that only appends to a file never ran,")
+        print("      and a prompt carrying a live-shaped key reached the model.")
+        print("      Claude Code is unaffected. See docs/14_CODEX_HOOK_TRUST.md")
 
     exe = _console_script()
     print(f"\n  entry point  {exe or 'not installed (hooks point at this checkout)'}")
