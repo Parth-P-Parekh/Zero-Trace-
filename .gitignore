@@ -23,3 +23,6 @@ Thumbs.db
 
 # Ledger (file-backed until persistence lands)
 evidence/ledger/
+
+# PreToolUse cross-call fragment window (temp dir, but never commit one)
+zerotrace-window/

@@ -107,6 +107,14 @@ def _strings(obj, depth: int = 0) -> list[str]:
     return []
 
 
+def _window():
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from gateway.base.window import CallWindow
+
+    return CallWindow()
+
+
 def check(text: str, session_id: str) -> dict:
     if CHECKER:
         import urllib.error
@@ -172,8 +180,32 @@ def main() -> None:
     if not text.strip():
         allow()
 
+    session_id = str(event.get("session_id") or "")
+
+    # Fragments carried from the previous call, joined to this call's candidate runs.
+    # A credential split across two tool calls is invisible to both when each is scanned
+    # alone -- `printf 'sk-ant-ap'` then `printf 'i03-AbC9...'` leaves a whole key on
+    # disk and neither half fires. See gateway/base/window.py for why a tail window does
+    # not work here.
+    window = None
+    joins: tuple[str, ...] = ()
     try:
-        result = check(text, str(event.get("session_id") or ""))
+        window = _window()
+        joins = window.bridge(session_id, text).joins
+    except Exception:  # noqa: BLE001
+        # The window is an enhancement. Losing it costs one missed bridge, never a
+        # blocked tool call.
+        window, joins = None, ()
+
+    try:
+        result = check(text, session_id)
+        if result.get("allow", True) and joins:
+            # Scan the joins only when the call itself came back clean -- if it already
+            # failed there is nothing more to learn.
+            bridged = check(chr(10).join(joins), session_id)
+            if not bridged.get("allow", True):
+                result = dict(bridged)
+                result["split"] = True
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -186,11 +218,30 @@ def main() -> None:
 
     if not result.get("allow", False):
         classes = ", ".join(result.get("classes") or []) or "sensitive data"
+        if result.get("split"):
+            deny(
+                f"ZeroTrace blocked this {tool} call: joined with the previous call it "
+                f"forms {classes}. Nothing was run. Splitting a credential across two "
+                f"commands does not divide it -- the file on the other end is whole."
+            )
         deny(
             f"ZeroTrace blocked this {tool} call: its arguments contain {classes}. "
             f"Nothing was run and nothing was sent. Reference the secret by name and "
             f"let the command read it from the environment instead of inlining it."
         )
+
+    # Remember fragments only from a call that was *allowed*.
+    #
+    # A denied call has already been answered for, and carrying its content forward
+    # blocks the next, unrelated command for a credential the previous one contained.
+    # That is a false positive with a baffling message, and it is exactly what the test
+    # suite caught: `npm test -- --watch=false` denied as GITHUB_TOKEN because a
+    # ghp_ token from an earlier call was still in the window.
+    if window is not None:
+        try:
+            window.remember(session_id, text)
+        except Exception:  # noqa: BLE001
+            pass
 
     allow()
 

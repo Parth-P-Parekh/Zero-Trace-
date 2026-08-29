@@ -201,8 +201,17 @@ GH = "ghp_" + "Xk9mQ2wE7rT4yU6iO8pA1sD3fG5hJ7kL9zXQ"
 
 
 def run_pretool(tool: str, args: dict, env: dict | None = None):
+    """Each call gets its own window directory.
+
+    Without this the cross-call fragment window carries state between unrelated tests,
+    and a failure looks like a false positive in the detector rather than shared state
+    in the harness.
+    """
     import os
-    e = {**os.environ, "ZT_CHECKER": "", **(env or {})}
+    import tempfile
+    d = tempfile.mkdtemp(prefix="zt-hooktest-")
+    e = {**os.environ, "ZT_CHECKER": "", "TMPDIR": d, "TEMP": d, "TMP": d,
+         **(env or {})}
     return subprocess.run(
         [sys.executable, str(PRETOOL)],
         input=json.dumps({
