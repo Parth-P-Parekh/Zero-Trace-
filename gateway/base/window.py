@@ -310,8 +310,18 @@ class SinkAssembly:
             pass
 
 
-#: Where a payload is heading. An append target, or a file being written.
-_SINK = re.compile(r">>\s*(\S+)")
+#: Where a payload is heading.
+#:
+#: Broader than plain `>>` because sink grouping is now the *only* cross-call mechanism,
+#: so a destination it cannot name is a split it cannot reassemble. Covers redirection
+#: in both forms, `tee`, and the common download flags.
+_SINK = re.compile(
+    r">>?\s*(\S+)"                      # > file   and   >> file
+    r"|\btee\s+(?:-a\s+)?(\S+)"         # | tee -a file
+    # `\b` cannot match between a space and a hyphen -- both are non-word characters --
+    # so the flag form needs an explicit start-or-whitespace anchor.
+    r"|(?:^|\s)--?o(?:utput)?[=\s]\s*(\S+)"
+)
 
 
 def sink_of(tool: str, args: dict) -> str:
@@ -325,7 +335,10 @@ def sink_of(tool: str, args: dict) -> str:
         return str(path)
     if tool == "Bash":
         m = _SINK.search(str(args.get("command", "")))
-        return m.group(1) if m else ""
+        if not m:
+            return ""
+        # One alternative matched; the rest are None.
+        return next((g for g in m.groups() if g), "")
     return ""
 
 

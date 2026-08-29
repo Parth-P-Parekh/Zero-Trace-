@@ -116,9 +116,11 @@ def _session_tools():
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     from gateway.base.risk import SessionRisk
-    from gateway.base.window import CallWindow, SinkAssembly
+    from gateway.base.window import SinkAssembly
 
-    return CallWindow(), SessionRisk(), SinkAssembly()
+    # The first slot was the loose fragment window. It is gone; the tuple shape is kept
+    # so the call sites read the same and the change stays reviewable.
+    return None, SessionRisk(), SinkAssembly()
 
 
 def check(text: str, session_id: str) -> dict:
@@ -190,47 +192,47 @@ def main() -> None:
 
     session_id = str(event.get("session_id") or "")
 
-    # Fragments carried from the previous call, joined to this call's candidate runs.
-    # A credential split across two tool calls is invisible to both when each is scanned
-    # alone -- `printf 'sk-ant-ap'` then `printf 'i03-AbC9...'` leaves a whole key on
-    # disk and neither half fires. See gateway/base/window.py for why a tail window does
-    # not work here.
-    # Session risk decides how hard to look, not what the verdict is. A sequence of
-    # fragment-shaped appends to one file is not harmless even when no single command
-    # contains a credential -- the compositional move from CODE-01 §6.4, applied to
-    # commands instead of quasi-identifiers.
-    window = risk = None
+    # Reassembly by destination.
+    #
+    # A credential split across tool calls is invisible to each one alone. But a split
+    # has to be reassembled *somewhere* to be useful, and that somewhere is observable:
+    # successive appends to one file, successive edits to one path. Grouping by
+    # destination turns an unbounded join problem into an ordered concatenation, and it
+    # is what stops unrelated commands being spliced together.
+    #
+    # An earlier version also carried loose *fragments* between consecutive calls and
+    # joined each to every candidate run in the next one. It was removed: with no shared
+    # destination the pieces do not reassemble into anything usable, so it added almost
+    # nothing over sink grouping -- while producing repeated false positives on ordinary
+    # work. Writing a test fixture containing a key prefix poisoned the next unrelated
+    # command. See gateway/base/window.py.
+    risk = None
     joins: tuple[str, ...] = ()
     assessment = None
     try:
         # _session_tools() puts the repo root on sys.path, so it has to come first --
         # importing from `gateway` before it raises ModuleNotFoundError, which the
         # except below then swallows into "no window today" with no sign anything broke.
-        window, risk, assembly = _session_tools()
+        _, risk, assembly = _session_tools()
         from gateway.base.window import (  # noqa: PLC0415
             fragments_of, payload_of, sink_of,
         )
 
+        # Session risk decides how hard to look, never what the verdict is.
         assessment = risk.observe(
             session_id, text, had_fragment=bool(fragments_of(text))
         )
-        joins = window.bridge(session_id, text, limit=assessment.fragments).joins
 
-        # Reassembly by destination. The fragment window bridges consecutive calls; a
-        # three-way split defeats it. But a split has to be reassembled *somewhere* to be
-        # useful, and successive appends to one file are observable -- so group by sink
-        # and concatenate in order. Only payloads heading for the same destination are
-        # joined, which is what keeps unrelated commands from being spliced together.
         assembled = assembly.add(
             session_id, sink_of(tool, args if isinstance(args, dict) else {}),
             payload_of(tool, args if isinstance(args, dict) else {}),
         )
         if assembled:
-            joins = joins + (assembled,)
+            joins = (assembled,)
     except Exception:  # noqa: BLE001
-        # The window and the score are enhancements. Losing them costs one missed
-        # bridge, never a blocked tool call.
-        window, risk, joins, assessment = None, None, (), None
+        # Assembly and the score are enhancements. Losing them costs one missed
+        # reassembly, never a blocked tool call.
+        risk, joins, assessment = None, (), None
 
     try:
         result = check(text, session_id)
@@ -272,22 +274,6 @@ def main() -> None:
     if assessment is not None and assessment.escalate:
         try:
             _escalate(session_id, tool, text, assessment)
-        except Exception:  # noqa: BLE001
-            pass
-
-    # Remember fragments only from a call that was *allowed*.
-    #
-    # A denied call has already been answered for, and carrying its content forward
-    # blocks the next, unrelated command for a credential the previous one contained.
-    # That is a false positive with a baffling message, and it is exactly what the test
-    # suite caught: `npm test -- --watch=false` denied as GITHUB_TOKEN because a
-    # ghp_ token from an earlier call was still in the window.
-    if window is not None:
-        try:
-            window.remember(
-                session_id, text,
-                limit=assessment.fragments if assessment else None,
-            )
         except Exception:  # noqa: BLE001
             pass
 

@@ -161,11 +161,32 @@ class ObfuscationScanner:
                 if m is None:
                     continue
                 s, e = view.back(m.start, m.end)
+                if self._is_prose(text[hit.start() + s:hit.start() + e]):
+                    continue
                 e = self._trim_trailing_word(text, hit.start() + s, hit.start() + e)
                 found.append(
                     self._finding(span, d, m, hit.start() + s, e, "separators")
                 )
         return found
+
+    @staticmethod
+    def _is_prose(matched: str) -> bool:
+        """True when the repaired run is a sentence rather than a mangled token.
+
+        Trimming one trailing word is not enough. A sentence *about* credentials joins
+        into a convincing fake: a documentation line naming an anchor prefix and then
+        describing it in ordinary English collapses, once the spaces are stripped, into
+        the prefix followed by dozens of letters -- which clears any length floor. That
+        sentence is this product's own documentation, and it was being blocked.
+
+        The signal is how many word-shaped pieces the join had to cross. Real mangling
+        crosses at most one space into key material, and key material is not purely
+        alphabetic -- it carries digits or case changes. Prose is several all-letter
+        words in a row.
+        """
+        words = [w for w in matched.split(" ") if w]
+        wordish = sum(1 for w in words if len(w) >= 3 and w.isalpha())
+        return wordish >= 2
 
     @staticmethod
     def _trim_trailing_word(text: str, start: int, end: int) -> int:
