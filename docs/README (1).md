@@ -9,6 +9,7 @@
 | 3 | [Gap Analysis](03_GAP_ANALYSIS.md) | GAP-01 | Deciding what to cut and what to defend |
 | 4 | [GTM Options](04_GTM_OPTIONS.md) | GTM-01 | Revenue track, pitch framing, post-event |
 | 5 | [Traction Playbook](05_TRACTION_PLAYBOOK.md) | TRAC-01 | Demand evidence and traction inside the 24h window |
+| 6 | [Implementation Plan](CODE.md) | CODE-01 | **Writing code.** Layout, schema, stage-by-stage algorithms, gates, fallbacks |
 
 ---
 
