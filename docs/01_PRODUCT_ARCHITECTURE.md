@@ -6,17 +6,18 @@
 
 ## 1. Product Statement
 
-**ZeroTrace is an egress firewall for AI traffic that redacts secrets and personal data out of outbound LLM and agent payloads, restores them in the response, and rewrites its own detection rules as it learns.**
+**ZeroTrace is an egress firewall for AI traffic that redacts secrets and personal data out of outbound + inbound LLM and agent payloads, restores them in the response (remove this, no restoration), and rewrites its own detection rules as it learns.**
 
 One-line pitch: *Change your `base_url`. Nothing leaks after that.*
 
 ### 1.1 The problem, stated precisely
 
-Every prompt an organisation sends to a frontier model is an egress event to infrastructure it does not control. Three failure modes, in increasing order of how badly current tools handle them:
+Every prompt an organisation (a user can be a better representation than an organization?) sends to a frontier model is an egress event to infrastructure it does not control. Three failure modes, in increasing order of how badly current tools handle them:
 
 1. **Credential egress.** API keys, tokens, connection strings, private keys pasted into prompts or embedded in code snippets sent for review.
 2. **Personal data egress.** Customer records, support transcripts, KYC documents, medical notes fed into prompts for summarisation.
 3. **Agentic egress.** The one almost nobody covers. An agent's *tool result* — a CRM row, a database query result, an MCP server response — enters the context on hop 3 of a 7-hop chain. The human never typed it. No browser extension sees it. No endpoint DLP sees it. It goes straight out.
+4. We **can** also add inbound detection which filters the knowledge from the LLM's existing context/database from being streamed to an unauthorized user/security group.
 
 Industry context that sizes this: IBM's 2026 Cost of a Data Breach Report puts India's average breach at ₹25.5 crore, with shadow AI adding ₹1.79 crore where present and ranking among the top three cost-amplifying factors. Independent 2026 reporting on enterprise AI traffic puts the share of AI interactions carrying sensitive data near 40%.
 
@@ -81,7 +82,7 @@ Four planes. Keeping them separate is what makes the evidence claims (SSOT §5) 
                        │  S4 Policy decision   (<2ms)      │   └───────────────────────────┘
                        │  S5 Redact + vault mint (<5ms)    │                 │
                        │  ──▶ upstream (Hive API) ──▶      │                 │ async, off hot path
-                       │  S6 Re-hydrate response (<5ms)    │                 ▼
+                       │  S6 Re-hydrate response (<5ms) (to be removed)   │                 ▼
                        └──────────────┬────────────────────┘   ┌───────────────────────────┐
                                       │                        │  EVIDENCE PLANE           │
                                       └───────────────────────▶│  Hash-chained ledger      │
@@ -106,8 +107,8 @@ Four planes. Keeping them separate is what makes the evidence claims (SSOT §5) 
 | **C7** | Policy engine | Declarative YAML policy: per-tenant, per-actor, per-destination-model, per-entity-class → `allow / mask / tokenize / block / warn`. Versioned; every decision records the policy version. | Python + Pydantic | ✅ MUST |
 | **C8** | Token vault | **N3.** Mints referentially stable, format-preserving, type-consistent tokens. Scoped per tenant + session. TTL'd. Stores only encrypted originals + token map, never plaintext in logs. | Redis (hot) + Postgres (durable), AES-GCM | ✅ MUST (novelty core) |
 | **C9** | Re-hydrator | Reverse-maps tokens in the upstream response, including inside streamed chunks (buffer-and-scan across chunk boundaries). | Python | ✅ MUST |
-| **C10** | Adjudicator agent | LLM-based semantic review of escalated spans: is this actually sensitive, in this context, for this tenant? Returns verdict + rationale + a *generalisable pattern description*. | Hive model API | ✅ MUST (novelty core) |
-| **C11** | Synthesizer agent | **N1.** Consumes adjudicator findings, emits a candidate deterministic detector (regex + guard conditions + test cases). | Hive model API + sandboxed exec | ✅ MUST (novelty core) |
+| **C10** | Adjudicator agent | LLM-based semantic review of escalated spans: is this actually sensitive, in this context, for this tenant? Returns verdict + rationale + a *generalisable pattern description*. | Hive model API (this LLM is the same as the core LLM, no need for a separate API) | ✅ MUST (novelty core) |
+| **C11** | Synthesizer agent | **N1.** Consumes adjudicator findings, emits a candidate deterministic detector (regex + guard conditions + test cases). | Hive model API + sandboxed exec (this is also the same core LLM) | ✅ MUST (novelty core) |
 | **C12** | Detector validator & promoter | Runs the candidate against the full corpus. Promotes only if: recall improves, precision does not regress, and runtime is under budget. Otherwise quarantines with a reason. | Python | ✅ MUST (novelty core) |
 | **C13** | Evidence ledger | Append-only, hash-chained (`h_n = SHA256(h_{n-1} ‖ record)`). Stores decisions, span *classes* and offsets — **never the sensitive values themselves.** | Postgres | ✅ MUST |
 | **C14** | Counterfactual reporter | "If ZeroTrace had been off, N spans across M classes would have left the building." This is the Impact number (SSOT `EV-IMP-01/02`). | Python | ✅ MUST |
