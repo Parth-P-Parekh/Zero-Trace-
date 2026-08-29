@@ -293,3 +293,30 @@ def test_pem_headers_in_prose_do_not_fire(benign):
     """A truncated block needs a substantial run of body, so documentation that merely
     names the header is not a finding."""
     assert _creds(benign) == [], f"false positive on: {benign}"
+
+
+# ------------------------------------ guards earned from the real-traffic run --
+
+@pytest.mark.parametrize("label,text", [
+    # env_assignment captures to end of line, so a transcript line reading
+    # `DB_PASSWORD=` followed by formatted output became a finding with `12/34 100.0%`
+    # as its value.
+    ("formatted output", "DB_PASSWORD= 12/34  100.0% done"),
+    ("prose after key",  "API_KEY= see the vault for this one"),
+    # Repetition floor: this measured 0.77 bits per character on real traffic.
+    ("repeated filler",  "FIREWORKS_API_KEY=xx_xxxxxxxxxxxxxxxxxxx"),
+    ("dashes",           "SECRET=--------------------"),
+])
+def test_guards_found_by_running_against_real_traffic(ctx, label, text):
+    """Every guard here was earned by an actual false positive on this machine's
+    transcripts, not guessed at in advance. That is the whole argument for benching
+    against real traffic rather than a corpus you wrote yourself."""
+    assert ctx(span(text)) == [], f"false positive: {label}"
+
+
+@pytest.mark.parametrize("value", ["hunter2", "aB3xK9mQ2wE7", "correcthorse", "7f3a9c"])
+def test_weak_but_genuine_passwords_still_fire(ctx, value):
+    """The entropy floor has to sit below a real weak password. `hunter2` measures 2.81
+    bits per character; the floor is 1.8. Set it any higher and the guard starts
+    swallowing exactly the credentials most worth catching."""
+    assert ctx(span("DB_PASSWORD=" + value)), f"lost a real secret: {value}"

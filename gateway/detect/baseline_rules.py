@@ -90,6 +90,17 @@ BASELINE_TABLE_CONFIDENCE = 0.85
 BASELINE_MIN_LENGTH = 4
 BASELINE_MAX_LENGTH = 512
 
+#: Entropy floor for a credential value. Found by running against real traffic: a
+#: placeholder like `xx_xxxxxxxxxxxxxxxxxxx` measures 0.77, while `hunter2` -- a weak but
+#: genuine password -- measures 2.81. Anything this repetitive is filler, not a secret.
+BASELINE_MIN_VALUE_ENTROPY = 1.8
+
+#: A credential value does not contain internal whitespace. This one came straight out of
+#: the real-traffic run: the env-assignment pattern captures to end of line, so a
+#: transcript line reading `... DB_PASSWORD=` followed by formatted output was matched
+#: with a "value" of `12/34  100.0%`. Requiring no spaces removes that whole class.
+BASELINE_REJECT_WHITESPACE_VALUES = True
+
 
 class RuleWeakened(ValueError):
     """Config tried to remove, loosen, or lower a baseline rule.

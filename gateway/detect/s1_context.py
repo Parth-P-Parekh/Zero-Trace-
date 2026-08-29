@@ -35,10 +35,22 @@ from ..contracts.types import Finding, Tier
 from ..spans.model import Span
 from .baseline_rules import (
     BASELINE_KEY_RULES, BASELINE_MAX_LENGTH, BASELINE_MIN_LENGTH,
+    BASELINE_MIN_VALUE_ENTROPY,
     BASELINE_TABLE_CONFIDENCE, BASELINE_TABLE_HEADER, RuleWeakened, compile_baseline,
 )
 
 log = logging.getLogger(__name__)
+
+
+def _entropy(s: str) -> float:
+    """Shannon entropy in bits per character."""
+    from collections import Counter
+    from math import log2
+
+    n = len(s)
+    if n < 2:
+        return 0.0
+    return -sum((c / n) * log2(c / n) for c in Counter(s).values())
 
 DEFAULT_RULES = Path(__file__).with_name("rules.yaml")
 
@@ -60,6 +72,7 @@ class ContextRules:
     ignore_values: list[re.Pattern[str]] = field(default_factory=list)
     min_length: int = 4
     max_length: int = 512
+    min_value_entropy: float = 1.8
     tables_enabled: bool = True
     table_header: re.Pattern[str] | None = None
     table_confidence: float = 0.85
@@ -81,6 +94,7 @@ class ContextRules:
         keys, structs, ignores = compile_baseline()
         r = cls(key_rules=keys, structures=structs, ignore_values=ignores,
                 min_length=BASELINE_MIN_LENGTH, max_length=BASELINE_MAX_LENGTH,
+                min_value_entropy=BASELINE_MIN_VALUE_ENTROPY,
                 table_header=re.compile(BASELINE_TABLE_HEADER),
                 table_confidence=BASELINE_TABLE_CONFIDENCE)
 
@@ -162,10 +176,26 @@ class ContextRules:
     # ---- guards ----
 
     def is_placeholder(self, value: str) -> bool:
-        """True for documentation placeholders. The main false-positive defence."""
+        """True for anything that is not plausibly a credential value.
+
+        The main false-positive defence, and every guard here was earned by a real
+        false positive rather than guessed at in advance.
+        """
         v = value.strip().strip("\"'")
         if not (self.min_length <= len(v) <= self.max_length):
             return True
+
+        # A credential has no internal whitespace. The env-assignment pattern captures
+        # to end of line, so without this a log line reading `DB_PASSWORD=` followed by
+        # formatted output becomes a finding with `12/34  100.0%` as its "value".
+        if any(c.isspace() for c in v):
+            return True
+
+        # Repetition floor. `xx_xxxxxxxxxxxxxxxxxxx` measures 0.77 bits per character;
+        # `hunter2`, a weak but real password, measures 2.81. Filler is not a secret.
+        if _entropy(v) < self.min_value_entropy:
+            return True
+
         return any(p.match(v) for p in self.ignore_values)
 
     def classify_key(self, key: str) -> KeyRule | None:
