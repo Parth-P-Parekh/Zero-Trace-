@@ -97,7 +97,9 @@ def _partial_anchor(run: str) -> bool:
     return False
 
 
-def fragments_of(text: str, window: int = DEFAULT_WINDOW) -> list[str]:
+def fragments_of(
+    text: str, window: int = DEFAULT_WINDOW, limit: int | None = None
+) -> list[str]:
     """Runs from this call that could be the front half of a split credential.
 
     Deliberately narrow. A run only qualifies if it carries anchor evidence -- length
@@ -110,7 +112,7 @@ def fragments_of(text: str, window: int = DEFAULT_WINDOW) -> list[str]:
             run = run[-window:]
         if _partial_anchor(run):
             out.append(run)
-            if len(out) >= MAX_FRAGMENTS:
+            if len(out) >= (limit or MAX_FRAGMENTS):
                 break
     return out
 
@@ -169,9 +171,13 @@ class CallWindow:
             pass
         return [str(x) for x in data][:MAX_FRAGMENTS] if isinstance(data, list) else []
 
-    def bridge(self, session_id: str, text: str) -> Bridged:
-        """Joins to scan alongside this call's own text."""
-        carried = self._load(session_id)
+    def bridge(self, session_id: str, text: str, limit: int | None = None) -> Bridged:
+        """Joins to scan alongside this call's own text.
+
+        ``limit`` lets the session risk band scale how many fragments are carried, so
+        effort is spent where suspicion is rather than on every call (see `risk.py`).
+        """
+        carried = self._load(session_id)[: limit or MAX_FRAGMENTS]
         if not carried:
             return Bridged(())
         joins = tuple(
@@ -181,12 +187,12 @@ class CallWindow:
         )
         return Bridged(joins)
 
-    def remember(self, session_id: str, text: str) -> None:
+    def remember(self, session_id: str, text: str, limit: int | None = None) -> None:
         """Keep this call's partial-credential fragments, if it has any.
 
         Most calls have none and write nothing at all -- ``ls -la`` leaves no file.
         """
-        frags = fragments_of(text, self._window)
+        frags = fragments_of(text, self._window, limit=limit)
         p = self._path(session_id)
         if not frags:
             try:

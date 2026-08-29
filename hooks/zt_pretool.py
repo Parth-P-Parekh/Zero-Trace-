@@ -107,12 +107,13 @@ def _strings(obj, depth: int = 0) -> list[str]:
     return []
 
 
-def _window():
+def _session_tools():
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+    from gateway.base.risk import SessionRisk
     from gateway.base.window import CallWindow
 
-    return CallWindow()
+    return CallWindow(), SessionRisk()
 
 
 def check(text: str, session_id: str) -> dict:
@@ -187,15 +188,28 @@ def main() -> None:
     # alone -- `printf 'sk-ant-ap'` then `printf 'i03-AbC9...'` leaves a whole key on
     # disk and neither half fires. See gateway/base/window.py for why a tail window does
     # not work here.
-    window = None
+    # Session risk decides how hard to look, not what the verdict is. A sequence of
+    # fragment-shaped appends to one file is not harmless even when no single command
+    # contains a credential -- the compositional move from CODE-01 §6.4, applied to
+    # commands instead of quasi-identifiers.
+    window = risk = None
     joins: tuple[str, ...] = ()
+    assessment = None
     try:
-        window = _window()
-        joins = window.bridge(session_id, text).joins
+        # _session_tools() puts the repo root on sys.path, so it has to come first --
+        # importing from `gateway` before it raises ModuleNotFoundError, which the
+        # except below then swallows into "no window today" with no sign anything broke.
+        window, risk = _session_tools()
+        from gateway.base.window import fragments_of  # noqa: PLC0415
+
+        assessment = risk.observe(
+            session_id, text, had_fragment=bool(fragments_of(text))
+        )
+        joins = window.bridge(session_id, text, limit=assessment.fragments).joins
     except Exception:  # noqa: BLE001
-        # The window is an enhancement. Losing it costs one missed bridge, never a
-        # blocked tool call.
-        window, joins = None, ()
+        # The window and the score are enhancements. Losing them costs one missed
+        # bridge, never a blocked tool call.
+        window, risk, joins, assessment = None, None, (), None
 
     try:
         result = check(text, session_id)
@@ -230,6 +244,16 @@ def main() -> None:
             f"let the command read it from the environment instead of inlining it."
         )
 
+    # High risk escalates to Loop 2 -- features only, never the text, and never on the
+    # blocking path. The agent proposes additional checks for *later* calls in this
+    # session; it cannot gate this one, because a model round trip is 300-2000ms and
+    # this runs in front of every tool call (SKEL-01 §D.1).
+    if assessment is not None and assessment.escalate:
+        try:
+            _escalate(session_id, tool, text, assessment)
+        except Exception:  # noqa: BLE001
+            pass
+
     # Remember fragments only from a call that was *allowed*.
     #
     # A denied call has already been answered for, and carrying its content forward
@@ -239,11 +263,38 @@ def main() -> None:
     # ghp_ token from an earlier call was still in the window.
     if window is not None:
         try:
-            window.remember(session_id, text)
+            window.remember(
+                session_id, text,
+                limit=assessment.fragments if assessment else None,
+            )
         except Exception:  # noqa: BLE001
             pass
 
     allow()
+
+
+def _escalate(session_id: str, tool: str, text: str, assessment) -> None:
+    """Hand the *shape* of this session to Loop 2. No values leave."""
+    from gateway.base.window import fragments_of
+    from gateway.intel.features import shape_of
+
+    from gateway.intel.agent import EscalationQueue  # noqa: F401  (documents the sink)
+
+    payload = {
+        "session": session_id[:8],
+        "tool": tool,
+        "risk": assessment.value,
+        "band": assessment.band,
+        # Shapes, not fragments: `sk-ant-ap` becomes `aa-aaa-aa`.
+        "shapes": [shape_of(f, cap=24) for f in fragments_of(text)][:3],
+    }
+    path = Path(os.environ.get("ZT_ESCALATION_LOG", "")) if os.environ.get(
+        "ZT_ESCALATION_LOG") else None
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + chr(10))
 
 
 if __name__ == "__main__":
