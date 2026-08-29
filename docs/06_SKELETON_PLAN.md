@@ -1241,7 +1241,8 @@ six preconditions there hold. Headline items:
 - [ ] Gateway forwards to `api.anthropic.com` holding the real key; key never logged
 - [ ] `scripts/zt-claude.ps1` and `.sh` wrapper set `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`
 - [ ] `X-ZeroTrace-Actor` header injected; **spoofability documented in the README scope note**
-- [ ] Streamed requests pass through with `X-ZeroTrace-Degraded: stream_unscanned` + ledger record
+- [ ] **Outbound is scanned even when the response streams** — the request body is complete.
+      Only the inbound leg degrades: `X-ZeroTrace-Degraded: inbound_stream_unscanned` + ledger record
 - [ ] **Demo:** a planted `sk-ant-*` key in a real `claude` prompt is blocked with a 403 and a ledger id
 - [ ] Error contract honest: `zt.blocked_by_policy` 403, `zt.dispatch_verification_failed` 500,
       `zt.upstream_unavailable` 502. **Never a 200 with a fabricated body**
@@ -1250,7 +1251,7 @@ six preconditions there hold. Headline items:
 - [ ] 64-char sliding window; SSE frames **re-serialised, never byte-patched**
 - [ ] Chunk-boundary test: a 40-char secret split at every offset
 - [ ] Client abort → buffered tail discarded, `request.decided` still written with `truncated: true`
-- [ ] `stream_unscanned` degrade header removed from the codebase
+- [ ] `inbound_stream_unscanned` degrade header removed from the codebase
 
 ### M7 — Claude sidebar
 - [ ] MV3 extension, `claude.ai` host permission only

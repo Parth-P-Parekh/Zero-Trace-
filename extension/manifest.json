@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "ZeroTrace",
+  "version": "0.1.0",
+  "description": "Checks prompts for credentials and sensitive data before they leave the browser.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:8080/*", "http://localhost:8080/*"],
+  "background": { "service_worker": "background.js" },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*", "https://chatgpt.com/*"],
+      "js": ["inject.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://claude.ai/*", "https://chatgpt.com/*"],
+      "js": ["bridge.js"],
+      "world": "ISOLATED",
+      "run_at": "document_start"
+    }
+  ]
+}
