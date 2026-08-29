@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zerotrace"
+version = "0.1.0"
+description = "Stops credentials and sensitive data leaving through AI coding tools"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+# Deliberately minimal. The hooks run on a bare interpreter with nothing installed --
+# that is what makes `zerotrace enable` a single step on a new machine. The production
+# scan engines are an extra, and their absence degrades to slower pure-Python fallbacks
+# rather than to a failure.
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Real scan engines. Without these the fallbacks run, log loudly, and refuse to start
+# under ZT_ENV=prod.
+engines = [
+    "pyahocorasick>=2.1",
+    "google-re2>=1.1",
+]
+# The gateway service, needed only for the browser extension or a shared checker.
+service = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+]
+# Loop 2's model-backed adjudicator. Absent, it degrades to the stub.
+intel = [
+    "anthropic>=0.75",
+]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+zerotrace = "gateway.cli:main"
+
+[tool.setuptools]
+packages = ["gateway", "gateway.base", "gateway.contracts", "gateway.detect",
+            "gateway.detectors", "gateway.intel", "gateway.ledger", "gateway.spans",
+            "gateway.vault", "hooks"]
+
+[tool.setuptools.package-data]
+"gateway.detect" = ["rules.yaml"]
+"gateway.intel" = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["gateway/tests", "algorithm_tests"]

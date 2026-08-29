@@ -170,10 +170,22 @@ class Checker:
 
         degraded = None
         if verdict is Verdict.AMBER and self._cfg.max_tier < Tier.SEMANTIC:
-            # Nowhere left to escalate: tier 3 does not exist yet. Resolve per the
-            # declared stance rather than pretending an escalation happened.
-            if self._cfg.fail == "closed":
-                verdict = Verdict.RED
+            # Nowhere left to escalate: tier 3 does not exist yet.
+            #
+            # This deliberately does NOT become red under `fail: closed`, and the
+            # distinction is the point: "I could not check" and "I checked and I am
+            # unsure" are different states, and only the first is what a fail-closed
+            # stance is for. Conflating them makes the whole 0.35-0.75 band enforce,
+            # which nullifies every rule deliberately tuned below the threshold --
+            # `session_id` at 0.55 exists precisely so it escalates rather than blocks,
+            # and it was blocking ordinary Python source that merely mentions it.
+            #
+            # High-precision credential detectors emit 0.95-0.99. Anything sitting at
+            # 0.55 is uncertain by construction, so what is given up here is small and
+            # what is bought is a control people leave switched on.
+            #
+            # Genuine degradation -- checker_timeout, payload_too_large -- still fails
+            # closed in `_degraded()`. That path is untouched.
             degraded = "amber_no_tier3"
 
         return CheckResult(

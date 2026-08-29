@@ -1,4 +1,4 @@
-"""The side-car checker — ZeroTrace as a tool beside the agent, not a harness in front.
+﻿"""The side-car checker — ZeroTrace as a tool beside the agent, not a harness in front.
 
     user types a prompt
           |
@@ -39,8 +39,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .contracts.entity_classes import Family
-from .contracts.types import Actor, CheckResult, may_enforce
+from .contracts.types import Actor, CheckResult, Verdict, may_enforce
 from .spans.model import Span, SpanTree
+
+_ENFORCE_AT = 0.75
+
+#: Degradations that deny. A scan that could not run is different from a scan
+#: that ran and was unsure -- only the first is what a fail-closed stance is for.
+_DEGRADED_DENIES = frozenset({"checker_timeout", "payload_too_large"})
 
 
 def text_tree(text: str, *, origin: str = "user") -> SpanTree:
@@ -77,12 +83,27 @@ def to_verdict(check: CheckResult, actor: Actor | None = None) -> CheckVerdict:
     extremely common in coding work and stopping on it would train the user to
     uninstall the hook.
     """
-    blocking = [
-        f for f in check.findings
-        if not f.advisory_only and may_enforce("user", f.family)
-    ]
+    # Only findings that actually drove the verdict may deny.
+    #
+    # Filtering on `advisory_only` alone ignored confidence entirely, so anything in the
+    # escalation band denied — which silently undid every rule deliberately tuned below
+    # the enforcement threshold. `session_id` sits at 0.55 precisely so it escalates
+    # rather than enforces, and it was denying ordinary source code that mentions it.
+    #
+    # A verdict of green or amber means the checker did not conclude this was worth
+    # acting on, and the side-car must not act on it either.
+    blocking = (
+        [
+            f for f in check.findings
+            if not f.advisory_only
+            and may_enforce("user", f.family)
+            and f.confidence >= _ENFORCE_AT
+        ]
+        if check.verdict is Verdict.RED
+        else []
+    )
 
-    if check.degraded and not blocking:
+    if check.degraded in _DEGRADED_DENIES and not blocking:
         # We could not finish checking. Say so rather than implying a clean result.
         return CheckVerdict(
             allow=False,

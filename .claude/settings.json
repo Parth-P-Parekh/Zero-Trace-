@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/hooks/zt_check.py",
+              "--claude"
+            ],
+            "timeout": 10,
+            "statusMessage": "ZeroTrace checking prompt..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/hooks/zt_pretool.py",
+              "--claude"
+            ],
+            "timeout": 10,
+            "statusMessage": "ZeroTrace checking tool call..."
+          }
+        ],
+        "matcher": "Bash|apply_patch|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*"
+      }
+    ]
+  }
+}

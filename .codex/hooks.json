@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 C:/Users/parth/Desktop/Zero-Trace-/hooks/zt_check.py --codex",
+            "commandWindows": "C:\\Users\\parth\\AppData\\Local\\Programs\\Python\\Python312\\python.exe C:\\Users\\parth\\Desktop\\Zero-Trace-\\hooks\\zt_check.py --codex",
+            "timeout": 10,
+            "statusMessage": "ZeroTrace checking prompt..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 C:/Users/parth/Desktop/Zero-Trace-/hooks/zt_pretool.py --codex",
+            "commandWindows": "C:\\Users\\parth\\AppData\\Local\\Programs\\Python\\Python312\\python.exe C:\\Users\\parth\\Desktop\\Zero-Trace-\\hooks\\zt_pretool.py --codex",
+            "timeout": 10,
+            "statusMessage": "ZeroTrace checking tool call..."
+          }
+        ],
+        "matcher": "Bash|apply_patch|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*"
+      }
+    ]
+  }
+}

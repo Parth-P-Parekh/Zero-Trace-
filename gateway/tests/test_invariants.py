@@ -301,9 +301,15 @@ def test_oversized_payload_degrades_deterministically():
     assert r.degraded == "payload_too_large"
 
 
-def test_amber_resolves_deterministically_without_tier3():
-    """SKEL-01 §D.4.1 — tier 3 does not exist in the skeleton, so amber must resolve
-    per the declared stance and may never mean 'wait for the adjudicator'."""
+def test_amber_does_not_enforce_without_tier3():
+    """SKEL-01 §D.4.1 — tier 3 does not exist, so amber has nowhere to escalate to.
+
+    It must **not** become red. "I could not check" and "I checked and I am unsure" are
+    different states, and only the first is what a fail-closed stance is for. Conflating
+    them made the entire 0.35–0.75 escalation band enforce, which nullified every rule
+    deliberately tuned below the threshold — and blocked ordinary source code that
+    merely mentions `session_id`.
+    """
 
     class Wobbly(Detector):
         name = "wobbly"
@@ -316,8 +322,35 @@ def test_amber_resolves_deterministically_without_tier3():
     p = DetectorPack.build([Wobbly()], version=1)
     closed = Checker(p, NullSpanCache(), KEY, CheckerConfig(ceiling_ms=5_000, fail="closed"))
     r = asyncio.run(closed.check(tree_of({"a": "wobble"}), "acme"))
-    assert r.verdict is Verdict.RED
+
+    assert r.verdict is Verdict.AMBER, "an uncertain finding must stay uncertain"
     assert r.degraded == "amber_no_tier3"
+
+    from gateway.check import to_verdict
+    assert to_verdict(r).allow, "amber denied with no class the user could act on"
+
+
+def test_a_genuine_degradation_still_fails_closed():
+    """The distinction the fix rests on: a scan that could not *run* still denies under
+    `fail: closed`. That path is deliberately untouched."""
+    from gateway.check import to_verdict
+
+    cfg = CheckerConfig(ceiling_ms=5_000, fail="closed",
+                        limits=ScanLimits(max_request_chars=50))
+    checker = Checker(pack(), NullSpanCache(), KEY, cfg)
+    r = asyncio.run(checker.check(tree_of({"a": "x" * 500}), "acme"))
+
+    assert r.degraded == "payload_too_large"
+    assert not to_verdict(r).allow, "a scan that could not run must still deny"
+
+
+def test_high_confidence_findings_still_enforce():
+    """The fix must not have opened a hole — anything at or above the band top denies."""
+    from gateway.check import to_verdict
+
+    checker = Checker(pack(), NullSpanCache(), KEY, CheckerConfig(ceiling_ms=5_000))
+    payload = {"a": "key sk-ant-api03-" + "z" * 40}
+    assert not to_verdict(asyncio.run(checker.check(tree_of(payload), "acme"))).allow
 
 
 # ------------------------------------------------------------------- policy --
