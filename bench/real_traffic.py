@@ -41,6 +41,16 @@ from gateway.detectors.example import EXAMPLE_DETECTORS            # noqa: E402
 from gateway.intel.features import shape_of                        # noqa: E402
 
 
+#: This repo's own project directory.
+#:
+#: Its transcripts are full of credential-shaped strings -- every fixture typed while
+#: building the detectors ends up there -- so a block on one of them is the tool finding
+#: its own test data, not a false positive. Counting those in the headline number makes
+#: it drift as development continues, which is worse than useless: the metric moves for
+#: reasons unrelated to the detectors.
+SELF_PROJECT = "Zero-Trace"
+
+
 def transcripts() -> list[Path]:
     root = Path.home() / ".claude" / "projects"
     return sorted(root.rglob("*.jsonl"))
@@ -185,8 +195,16 @@ def main() -> None:
     print(f"  median turn        {int(statistics.median(sizes)):,} chars")
     print(f"  largest turn       {max(sizes):,} chars\n")
 
+    own = [f for f in flagged if SELF_PROJECT in f["project"]]
+    external = [f for f in flagged if SELF_PROJECT not in f["project"]]
+    n_ext = sum(1 for t in sample if SELF_PROJECT not in t["project"])
+
     print(f"  BLOCKED            {len(flagged)} / {n}"
           f"   ({len(flagged) / n * 100:.1f}%)")
+    print(f"    self-referential {len(own)}"
+          f"   (this repo's own transcripts; its fixtures are real-shaped credentials)")
+    print(f"    external         {len(external)} / {n_ext}"
+          f"   <- the number that means something")
     print(f"  clean              {n - len(flagged)} / {n}\n")
 
     print("  latency (cold, no cache)")
