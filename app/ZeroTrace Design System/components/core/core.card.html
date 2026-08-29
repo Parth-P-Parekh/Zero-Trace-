@@ -1,0 +1,37 @@
+<!-- @dsCard group="Components" viewport="700x340" name="Core" subtitle="Buttons, cards, badges, tags, metrics, dots" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{padding:20px;background:var(--paper)}.lbl{font:var(--type-eyebrow);letter-spacing:var(--tr-caps);text-transform:uppercase;color:var(--muted);margin-bottom:9px}.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.stack{display:flex;flex-direction:column;gap:18px}</style>
+</head><body><div id="root"></div>
+<script type="text/babel">
+const { Button, IconButton, Card, Badge, Tag, Metric, StatusDot, Icon } = window.ZeroTraceDesignSystem_7f4295;
+function Demo(){return (
+<div className="stack">
+  <div><div className="lbl">Buttons</div><div className="row">
+    <Button>Start sweeping</Button>
+    <Button variant="secondary" iconEnd="arrow-right">Restart investigation</Button>
+    <Button variant="ghost" icon="copy">Copy patch</Button>
+    <Button pill variant="secondary" size="sm">Docs</Button>
+    <Button disabled>Dispatch</Button>
+    <IconButton name="more-horizontal" label="Actions"/>
+  </div></div>
+  <div><div className="lbl">Badges · tags · dots</div><div className="row">
+    <Badge tone="clean" status="clean">Clean</Badge>
+    <Badge tone="redacted" status="redacted">(2) redacted</Badge>
+    <Badge tone="blocked" status="blocked">Blocked</Badge>
+    <Badge>gpt-4o</Badge>
+    <Tag>us_ssn</Tag><Tag mono>v2.8.5</Tag><Tag removable>database</Tag>
+    <span className="row" style={{gap:6,font:'var(--type-body-sm)',color:'var(--text-quiet)'}}><StatusDot state="ink" live/> streaming</span>
+  </div></div>
+  <div><div className="lbl">Cards · metrics</div>
+    <Card tone="shell" pad={10} style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+      <Card pad={18}><Metric label="Payloads swept" value="1.24M" note="last 24h"/></Card>
+      <Card tone="dark" pad={18}><Metric label="Added latency" value="4" unit="ms" onDark/></Card>
+    </Card>
+  </div>
+</div>)}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script></body></html>

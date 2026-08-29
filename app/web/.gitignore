@@ -1,0 +1,9 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.env*.local
+
+# Next 16 writes these on dev runs; agentRules is off but keep the guard.
+AGENTS.md
+CLAUDE.md

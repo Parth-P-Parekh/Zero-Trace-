@@ -1,0 +1,12 @@
+<!-- @dsCard group="Motion" viewport="700x160" name="Easing & duration" subtitle="No bounce, no overshoot. 80 / 140 / 200 / 320 ms, plus one 900ms drain." -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css"><style>html,body{margin:0}body{background:var(--paper);padding:18px;font-family:var(--font-core)}.g{display:flex;gap:16px}.c{flex:1}.k{font:var(--type-mono-sm);color:var(--text-quiet);margin-bottom:8px}
+.tr{height:6px;border-radius:3px;background:rgba(17,17,17,.11);position:relative;overflow:hidden}
+.tr i{position:absolute;inset:0;width:40%;border-radius:3px;background:var(--ink);opacity:.72}
+.e1 i{animation:zt-scan 1.4s var(--ease-out) infinite}.e2 i{animation:zt-scan 1.4s var(--ease-in-out) infinite}.e3 i{animation:zt-scan 1.4s linear infinite}
+.d{display:flex;gap:22px;margin-top:16px;font:var(--type-mono-sm);color:var(--text-quiet);padding-top:12px;box-shadow:inset 0 1px 0 var(--border-hairline)}</style></head><body>
+<div class="g">
+<div class="c"><div class="k">--ease-out · entrances</div><div class="tr e1"><i></i></div></div>
+<div class="c"><div class="k">--ease-in-out · state</div><div class="tr e2"><i></i></div></div>
+<div class="c"><div class="k">linear · streams</div><div class="tr e3"><i></i></div></div>
+</div>
+<div class="d"><span>80ms instant</span><span>140ms hover</span><span>200ms base</span><span>320ms slow</span><span style="color:var(--ink)">900ms drain</span></div></body></html>
