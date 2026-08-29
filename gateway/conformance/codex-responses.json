@@ -1,0 +1,31 @@
+{
+  "name": "codex-responses",
+  "provider": "openai",
+  "path": "/v1/responses",
+  "request": {
+    "model": "gpt-5",
+    "instructions": "You are Codex. Keep edits focused.",
+    "tools": [{
+      "type": "function",
+      "name": "apply_patch",
+      "description": "Apply a patch without changing its bytes.",
+      "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}
+    }],
+    "input": [{"role": "user", "content": [{"type": "input_text", "text": "inspect the retry path"}]}],
+    "prompt_cache_key": "zt-conformance-codex",
+    "stream": true
+  },
+  "expected_origins": {
+    "instructions": "system",
+    "tools[0].description": "tool_definition",
+    "input[0].content[0].text": "user",
+    "prompt_cache_key": "metadata"
+  },
+  "protected_paths": ["instructions", "tools"],
+  "cache_markers": ["zt-conformance-codex"],
+  "sse_frames": [
+    "event: response.created\ndata: {\"type\":\"response.created\"}\n\n",
+    "event: response.output_text.delta\ndata: {\"delta\":\"ok\"}\n\n",
+    "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"
+  ]
+}

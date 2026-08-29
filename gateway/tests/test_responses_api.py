@@ -215,6 +215,9 @@ def test_outbound_is_fully_scanned_even_when_streaming(monkeypatch):
     with TestClient(create_app()) as c:
         r = c.post("/v1/responses", json=p)
         assert r.headers["X-ZeroTrace-Action"] == "block"
+        assert r.headers["content-type"].startswith("text/event-stream")
+        assert b"event: response.completed" in r.content
+        assert LIVE.encode() not in r.content
 
 
 def test_wants_stream_detection():

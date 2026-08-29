@@ -5,8 +5,9 @@ Reads the hook event on stdin, checks the prompt text, and either stays quiet (a
 or denies with a reason the user can act on.
 
 **It sends the prompt text and nothing else.** Not the transcript, not the tool
-definitions, not the system prompt. Claude Code then sends its own request untouched, so
-skills keep working and the upstream prompt cache is never invalidated.
+definitions, not the system prompt. Claude Code or Codex then sends its own request
+untouched, so skills and MCP definitions keep working and the upstream prompt cache is
+never invalidated.
 
 Two modes, and **embedded is the default**:
 
@@ -23,7 +24,7 @@ entire conversation resent on every turn, which is O(n²) across a session. This
 ever sees the one prompt just typed, so there is no history to re-scan and no cache to
 keep warm — which is exactly why it does not need a long-lived process.
 
-Install:  ``python hooks/install.py``
+Install:  ``python hooks/install.py`` (installs both Claude and Codex hooks)
 
 Environment:
 
@@ -43,6 +44,7 @@ EVENT = "UserPromptSubmit"
 CHECKER = os.environ.get("ZT_CHECKER", "").rstrip("/")
 FAIL = os.environ.get("ZT_FAIL", "closed").lower()
 TIMEOUT_S = float(os.environ.get("ZT_TIMEOUT_S", "5"))
+HOST = "codex" if "--codex" in sys.argv else "claude"
 
 #: The repo root, derived from this file's own location so the hook works no matter
 #: which directory Claude Code runs it from.
@@ -50,19 +52,24 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def deny(reason: str) -> None:
-    """Block the prompt. Exit 2 erases it and shows the reason."""
-    json.dump(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": EVENT,
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        },
-        sys.stdout,
-    )
+    """Block using the active host's documented output contract."""
+    if HOST == "codex":
+        # Codex parses blocking JSON from a successful command hook. Its alternate
+        # exit-2 contract expects plain feedback on stderr, not JSON on stdout.
+        json.dump({"decision": "block", "reason": reason}, sys.stdout)
+    else:
+        json.dump(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": EVENT,
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            },
+            sys.stdout,
+        )
     sys.stdout.write("\n")
-    sys.exit(2)
+    sys.exit(0 if HOST == "codex" else 2)
 
 
 def allow() -> None:
@@ -136,6 +143,7 @@ def check_service(text: str, session_id: str, cwd: str | None) -> dict:
             "content-type": "application/json",
             "x-zerotrace-channel": "cli",
             "x-zerotrace-session": session_id or "",
+            "x-zerotrace-harness": HOST,
         },
         method="POST",
     )
@@ -161,6 +169,7 @@ def check_service(text: str, session_id: str, cwd: str | None) -> dict:
 # ---------------------------------------------------------------------- main --
 
 def main() -> None:
+    global HOST
     try:
         event = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -168,7 +177,16 @@ def main() -> None:
         print("zerotrace: could not parse hook input; allowing", file=sys.stderr)
         sys.exit(0)
 
-    text = event.get("user_input") or event.get("user_input_raw") or ""
+    # The installer supplies an explicit flag. Field detection also keeps direct
+    # invocation with a raw Codex event safe.
+    if "--claude" not in sys.argv and "prompt" in event:
+        HOST = "codex"
+    text = (
+        event.get("prompt")
+        or event.get("user_input")
+        or event.get("user_input_raw")
+        or ""
+    )
     if not text.strip():
         allow()
 

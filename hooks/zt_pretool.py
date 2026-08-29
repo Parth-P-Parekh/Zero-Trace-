@@ -3,14 +3,15 @@
 
 `UserPromptSubmit` covers what the user types. This covers the other direction: the
 arguments the agent is about to hand a tool. A credential reaches a tool argument
-without ever being typed -- Claude reads it from a file on one turn and puts it in a
+without ever being typed -- an agent reads it from a file on one turn and puts it in a
 `curl` command on the next -- and that is both an execution and a transcript entry.
 
 What it checks:
 
     Bash          the command line -- `curl -H "Authorization: Bearer sk-..."`,
                   `export AWS_SECRET_ACCESS_KEY=...`, an inline connection string
-    Write, Edit   the content about to be written to disk
+    Write, Edit,
+    apply_patch   the content about to be written to disk
     WebFetch      the URL, which may carry a token in a query parameter
     mcp__*        every string argument, since MCP tools take arbitrary payloads
 
@@ -21,7 +22,7 @@ which is the proxy's leg, not this one. Claiming this hook closes that gap would
 wrong, and the honest summary is: `UserPromptSubmit` covers typed input, `PreToolUse`
 covers tool arguments, and file contents pulled into context need the proxy.
 
-Install:  ``python hooks/install.py``     (installs both hooks)
+Install:  ``python hooks/install.py``     (installs both hooks for both hosts)
 
 Environment: same as ``zt_check.py`` -- ZT_CHECKER, ZT_FAIL, ZT_TIMEOUT_S.
 """
@@ -37,6 +38,7 @@ EVENT = "PreToolUse"
 CHECKER = os.environ.get("ZT_CHECKER", "").rstrip("/")
 FAIL = os.environ.get("ZT_FAIL", "closed").lower()
 ROOT = Path(__file__).resolve().parent.parent
+HOST = "codex" if "--codex" in sys.argv else "claude"
 
 #: Argument fields worth scanning, by tool. Scanning *every* field would mean checking
 #: timeouts and booleans; these are the ones that carry free text.
@@ -47,6 +49,9 @@ INTERESTING: dict[str, tuple[str, ...]] = {
     "NotebookEdit": ("new_source",),
     "WebFetch": ("url", "prompt"),
     "WebSearch": ("query",),
+    # Codex reports Edit/Write aliases with this canonical name and places the patch in
+    # tool_input.command.
+    "apply_patch": ("command",),
 }
 
 #: Tools whose arguments are never worth scanning -- a path or a pattern, no payload.
@@ -65,9 +70,9 @@ def deny(reason: str) -> None:
         sys.stdout,
     )
     sys.stdout.write("\n")
-    # Exit 2 blocks unconditionally. Exit 0 with a deny decision would also block, but 2
-    # is the documented enforcing path and cannot be overridden by a later handler.
-    sys.exit(2)
+    # Codex consumes this structured decision on exit 0. Claude retains its existing
+    # exit-2 enforcing path.
+    sys.exit(0 if HOST == "codex" else 2)
 
 
 def allow() -> None:
@@ -125,7 +130,9 @@ def check(text: str, session_id: str) -> dict:
             f"{CHECKER}/v1/prompt/check",
             data=json.dumps({"text": text, "session_id": session_id}).encode(),
             headers={"content-type": "application/json",
-                     "x-zerotrace-channel": "cli"},
+                     "x-zerotrace-channel": "cli",
+                     "x-zerotrace-harness": HOST,
+                     "x-zerotrace-session": session_id},
             method="POST",
         )
         try:

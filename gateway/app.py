@@ -46,6 +46,7 @@ from .base.checker import Checker, CheckerConfig
 from .base.policy import StubPolicyClient
 from .base.scanner import DetectorPack, assert_production_engines
 from .contracts.types import Action, Actor
+from .coverage import CoverageMonitor
 from .detect.encodings import EncodedScanner
 from .detect.obfuscation import ObfuscationScanner
 from .detect.s0_credentials import scan_span_credentials
@@ -102,6 +103,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.policy = StubPolicyClient()
     app.state.intel = IntelPlane()
+    app.state.coverage = CoverageMonitor()
     # File-backed until persistence lands; the chain semantics are the Postgres ones.
     app.state.ledger = Ledger(JsonlLedgerStore(os.getenv("ZT_LEDGER_DIR", "evidence/ledger")))
     log.info("gateway up: %d detectors, pack v%d",
@@ -128,6 +130,16 @@ async def readyz(request: Request) -> dict[str, Any]:
     check is not ready to be in the path."""
     cfg: CheckerConfig = request.app.state.checker._cfg
     return {"status": "ok", "fail": cfg.fail, "pack_version": request.app.state.pack.version}
+
+
+@router.get("/v1/coverage")
+async def coverage(request: Request) -> dict[str, Any]:
+    """Harnesses observed by this gateway process.
+
+    This is traversal evidence, not a network-wide coverage percentage.  The response
+    advertises that limitation until a DNS/flow-log denominator is connected.
+    """
+    return request.app.state.coverage.snapshot()
 
 
 @router.post("/v1/messages")
@@ -197,6 +209,10 @@ async def prompt_check(request: Request) -> Response:
             reason_classes=list(verdict.classes),
             tenant_key=request.app.state.checker._tenant_key),
     )
+    _record_coverage(
+        request, actor, provider="checker",
+        outcome="allowed" if verdict.allow else "blocked",
+    )
     return JSONResponse(
         {
             "allow": verdict.allow,
@@ -230,8 +246,13 @@ async def prompt_scan(request: Request) -> Response:
 
     outcome = await _run(request, tree, actor)
     if isinstance(outcome, Response):
+        _record_coverage(request, actor, provider="scan", outcome="failed")
         return outcome
     check, decision, plan, dispatched = outcome
+    _record_coverage(
+        request, actor, provider="scan",
+        outcome="blocked" if dispatched is None else "allowed",
+    )
 
     # A block must come back in the *scan* shape, not a provider shape: the extension
     # reads `action` to decide whether to refuse submission, and a chat-completion body
@@ -263,17 +284,20 @@ async def _proxy(request: Request, *, provider: str, path: str) -> Response:
         tree = SpanTree(body, extract_spans(body), provider=provider)
     except MalformedJSON as exc:
         # A payload we cannot parse is a payload we cannot prove we redacted.
+        _record_coverage(request, actor, provider=provider, outcome="failed")
         return _error(400, "zt.malformed_payload", str(exc))
 
     outcome = await _run(request, tree, actor)
     if isinstance(outcome, Response):
+        _record_coverage(request, actor, provider=provider, outcome="failed")
         return outcome
     check, decision, plan, dispatched = outcome
 
     if dispatched is None:
         await _record(request, actor, check, decision, plan,
                       destination=provider, dispatched=False)
-        return _blocked(check, decision, provider)
+        _record_coverage(request, actor, provider=provider, outcome="blocked")
+        return _blocked(check, decision, provider, path=path, body=body)
 
     # Headers go in via `extra` rather than being set afterwards: a StreamingResponse
     # has already begun once it is returned, so mutating .headers then is too late.
@@ -282,6 +306,7 @@ async def _proxy(request: Request, *, provider: str, path: str) -> Response:
     )
     await _record(request, actor, check, decision, plan,
                   destination=provider, dispatched=True)
+    _record_coverage(request, actor, provider=provider, outcome="allowed")
     return resp
 
 
@@ -339,10 +364,56 @@ async def _run(request: Request, tree: SpanTree, actor: Actor):
     return check, decision, plan, dispatched
 
 
-_FORWARD_HEADERS = {
-    "content-type", "authorization", "x-api-key", "anthropic-version",
-    "anthropic-beta", "openai-organization", "openai-beta", "openai-project",
-}
+_HOP_BY_HOP_HEADERS = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
+})
+_REBUILT_REQUEST_HEADERS = frozenset({"host", "content-length"})
+
+
+def _forward_headers(headers) -> list[tuple[str, str]]:
+    """Preserve end-to-end request headers, including unknown provider betas.
+
+    RFC hop-by-hop fields and fields named by ``Connection`` stop at this proxy.
+    Host/content-length are rebuilt by httpx.  ZeroTrace control fields are consumed
+    locally and must not disclose identity or policy metadata to the provider.
+    """
+    raw = getattr(headers, "raw", None)
+    if raw is None:
+        pairs = [(str(k), str(v)) for k, v in headers.items()]
+    else:
+        pairs = [
+            (k.decode("latin-1"), v.decode("latin-1")) for k, v in raw
+        ]
+    connection_fields = {
+        token.strip().lower()
+        for key, value in pairs if key.lower() == "connection"
+        for token in value.split(",") if token.strip()
+    }
+    denied = _HOP_BY_HOP_HEADERS | _REBUILT_REQUEST_HEADERS | connection_fields
+    return [
+        (key, value) for key, value in pairs
+        if key.lower() not in denied
+        and not key.lower().startswith("x-zerotrace-")
+    ]
+
+
+def _response_headers(
+    headers, extra: dict[str, str] | None = None, *, decoded_body: bool = False
+) -> dict[str, str]:
+    """Relay provider metadata while removing response hop-by-hop framing."""
+    connection_fields = {
+        token.strip().lower()
+        for token in headers.get("connection", "").split(",") if token.strip()
+    }
+    denied = _HOP_BY_HOP_HEADERS | {"content-length"} | connection_fields
+    if decoded_body:
+        # httpx decodes gzip/br for .content/.aread(). Keeping Content-Encoding would
+        # make the harness try to decode already-decoded bytes a second time.
+        denied = denied | {"content-encoding"}
+    relayed = {key: value for key, value in headers.items() if key.lower() not in denied}
+    relayed.update(extra or {})
+    return relayed
 
 
 def _wants_stream(body: bytes) -> bool:
@@ -370,7 +441,7 @@ async def _dispatch(
     """
     import httpx
 
-    fwd = {k: v for k, v in headers.items() if k.lower() in _FORWARD_HEADERS}
+    fwd = _forward_headers(headers)
     url = UPSTREAM[provider] + path
 
     if not _wants_stream(body):
@@ -382,8 +453,7 @@ async def _dispatch(
         return Response(
             content=r.content,
             status_code=r.status_code,
-            media_type=r.headers.get("content-type", "application/json"),
-            headers=extra or {},
+            headers=_response_headers(r.headers, extra, decoded_body=True),
         )
 
     # -- streaming --------------------------------------------------------------
@@ -402,8 +472,7 @@ async def _dispatch(
         await client.aclose()
         return Response(
             content=payload, status_code=upstream.status_code,
-            media_type=upstream.headers.get("content-type", "application/json"),
-            headers=extra or {},
+            headers=_response_headers(upstream.headers, extra, decoded_body=True),
         )
 
     async def relay():
@@ -416,13 +485,12 @@ async def _dispatch(
             await upstream.aclose()
             await client.aclose()
 
-    hdrs = dict(extra or {})
+    hdrs = _response_headers(upstream.headers, extra)
     hdrs["X-ZeroTrace-Degraded"] = "inbound_stream_unscanned"
     hdrs["Cache-Control"] = "no-cache"
     return StreamingResponse(
         relay(),
         status_code=upstream.status_code,
-        media_type=upstream.headers.get("content-type", "text/event-stream"),
         headers=hdrs,
     )
 
@@ -450,6 +518,28 @@ def _resolve_actor(request: Request, *, default_channel: str) -> Actor:
 
 def _request_id(request: Request) -> str:
     return request.headers.get("x-zerotrace-request-id") or f"req_{id(request):x}"
+
+
+def _harness(request: Request) -> str:
+    explicit = request.headers.get("x-zerotrace-harness", "").strip().lower()
+    if explicit:
+        return explicit[:80]
+    user_agent = request.headers.get("user-agent", "").lower()
+    for name in ("codex", "cursor", "claude"):
+        if name in user_agent:
+            return name
+    return {
+        "/v1/responses": "openai-responses-compatible",
+        "/v1/chat/completions": "openai-chat-compatible",
+        "/v1/messages": "anthropic-compatible",
+    }.get(request.url.path, "unknown")
+
+
+def _record_coverage(request: Request, actor: Actor, *, provider: str, outcome: str) -> None:
+    request.app.state.coverage.record(
+        harness=_harness(request), route=request.url.path, provider=provider,
+        channel=actor.channel, outcome=outcome,
+    )
 
 
 async def _record(request, actor, check, decision, plan, *, destination, dispatched):
@@ -499,7 +589,9 @@ def _headers(check, decision, plan) -> dict[str, str]:
     return h
 
 
-def _blocked(check, decision, provider: str) -> Response:
+def _blocked(
+    check, decision, provider: str, *, path: str = "", body: bytes = b"{}"
+) -> Response:
     """An attributed enforcement notice, in the provider's own response shape."""
     classes = sorted({f.entity_class.value for f in check.enforceable_findings})
     message = (
@@ -512,6 +604,80 @@ def _blocked(check, decision, provider: str) -> Response:
         return _error(403, "zt.blocked_by_policy", message)
 
     now = int(time.time())
+    if path == "/v1/responses":
+        try:
+            requested_model = json.loads(body).get("model", "zerotrace-policy")
+        except (ValueError, AttributeError):
+            requested_model = "zerotrace-policy"
+        item_id = f"msg_zt_{now}"
+        response_id = f"resp_zt_{now}"
+        item = {
+            "id": item_id, "type": "message", "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text", "text": message, "annotations": [],
+            }],
+        }
+        payload = {
+            "id": response_id, "object": "response", "created_at": now,
+            "status": "completed", "error": None, "incomplete_details": None,
+            "model": requested_model, "output": [item], "output_text": message,
+            "parallel_tool_calls": True, "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "store": False, "tools": [], "metadata": {},
+            "usage": {
+                "input_tokens": 0, "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 0,
+            },
+        }
+        if _wants_stream(body):
+            in_progress = dict(payload, status="in_progress", output=[], usage=None)
+            events = [
+                ("response.created", {"type": "response.created",
+                                      "sequence_number": 0, "response": in_progress}),
+                ("response.output_item.added", {
+                    "type": "response.output_item.added", "sequence_number": 1,
+                    "output_index": 0, "item": dict(item, status="in_progress", content=[]),
+                }),
+                ("response.content_part.added", {
+                    "type": "response.content_part.added", "sequence_number": 2,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                }),
+                ("response.output_text.delta", {
+                    "type": "response.output_text.delta", "sequence_number": 3,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "delta": message, "logprobs": [],
+                }),
+                ("response.output_text.done", {
+                    "type": "response.output_text.done", "sequence_number": 4,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "text": message, "logprobs": [],
+                }),
+                ("response.content_part.done", {
+                    "type": "response.content_part.done", "sequence_number": 5,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "part": item["content"][0],
+                }),
+                ("response.output_item.done", {
+                    "type": "response.output_item.done", "sequence_number": 6,
+                    "output_index": 0, "item": item,
+                }),
+                ("response.completed", {"type": "response.completed",
+                                        "sequence_number": 7, "response": payload}),
+            ]
+            stream = "".join(
+                f"event: {event}\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
+                for event, value in events
+            )
+            return Response(
+                stream, media_type="text/event-stream",
+                headers=_headers(check, decision, None),
+            )
+        return JSONResponse(payload, headers=_headers(check, decision, None))
+
     if provider == "anthropic":
         payload: dict[str, Any] = {
             "id": f"msg_zt_{now}", "type": "message", "role": "assistant",

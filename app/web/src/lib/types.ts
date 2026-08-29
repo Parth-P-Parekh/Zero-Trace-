@@ -211,6 +211,29 @@ export interface CoverageReport {
   demoNetwork: boolean;
 }
 
+export interface HarnessCoverageRow {
+  harness: string;
+  route: string;
+  provider: string;
+  channel: string;
+  requests: number;
+  allowed: number;
+  blocked: number;
+  failed: number;
+  last_seen: string;
+}
+
+export interface HarnessCoverageSnapshot {
+  scope: 'gateway_observed_only';
+  direct_egress_visible: false;
+  denominator_available: false;
+  started_at: string;
+  generated_at: string;
+  total_requests: number;
+  unclassified_requests: number;
+  harnesses: HarnessCoverageRow[];
+}
+
 export type LicenceTier = 'pov' | 'platform' | 'enterprise' | 'sovereign';
 
 export interface UsageDay {

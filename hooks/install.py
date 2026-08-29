@@ -1,42 +1,51 @@
 #!/usr/bin/env python3
-"""Install the ZeroTrace UserPromptSubmit hook into .claude/settings.json.
+"""Install ZeroTrace hooks for Claude Code and Codex.
 
-Merges rather than overwrites: existing hooks are preserved, and re-running is a no-op.
+Existing hooks are merged rather than overwritten, and re-running is idempotent.
 
-    python hooks/install.py            # project-local .claude/settings.json
-    python hooks/install.py --user     # ~/.claude/settings.json (all projects)
+    python hooks/install.py                # project-local, both hosts
+    python hooks/install.py --user         # user-level, both hosts
+    python hooks/install.py --claude-only
+    python hooks/install.py --codex-only
     python hooks/install.py --remove
+
+Claude stores hooks in ``.claude/settings.json``. Codex stores them in
+``.codex/hooks.json`` and requires command hooks to be expressed as one command string.
 """
 
 from __future__ import annotations
 
 import json
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
-#: Both hooks, and what each actually covers.
-#:
-#: UserPromptSubmit sees what the user types. PreToolUse sees the arguments a tool is
-#: about to be given -- a credential reaches those without ever being typed, when the
-#: agent reads it from a file on one turn and puts it in a command on the next.
-#:
-#: Neither covers a file's *contents* entering the transcript: PreToolUse fires before
-#: the tool runs, so on a Read it sees the path only. That needs the proxy.
+# UserPromptSubmit sees what the user types. PreToolUse sees arguments about to be
+# given to Bash, file editing, or MCP tools. Neither sees file contents returned by a
+# Read; covering tool output requires PostToolUse or the Responses proxy.
 HOOKS = (
     ("UserPromptSubmit", "zt_check.py", None, "ZeroTrace checking prompt..."),
-    ("PreToolUse", "zt_pretool.py", "Bash|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*",
-     "ZeroTrace checking tool call..."),
+    (
+        "PreToolUse",
+        "zt_pretool.py",
+        "Bash|apply_patch|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*",
+        "ZeroTrace checking tool call...",
+    ),
 )
 MARKERS = tuple(h[1] for h in HOOKS)
 
 
-def entry(project_dir: str, script: str, matcher: str | None, status: str) -> dict:
+def claude_entry(
+    script_path: str, script: str, matcher: str | None, status: str
+) -> dict:
+    """Claude command hooks keep the executable and arguments separate."""
     block: dict = {
         "hooks": [
             {
                 "type": "command",
                 "command": "python",
-                "args": [f"{project_dir}/hooks/{script}"],
+                "args": [f"{script_path}/{script}", "--claude"],
                 "timeout": 10,
                 "statusMessage": status,
             }
@@ -47,66 +56,171 @@ def entry(project_dir: str, script: str, matcher: str | None, status: str) -> di
     return block
 
 
+def codex_entry(
+    root: Path, script: str, matcher: str | None, status: str
+) -> dict:
+    """Codex command hooks use one shell command plus a Windows override."""
+    path = (root / "hooks" / script).resolve()
+    posix_command = f"python3 {shlex.quote(path.as_posix())} --codex"
+    windows_command = subprocess.list2cmdline(
+        [sys.executable, str(path), "--codex"]
+    )
+    handler = {
+        "type": "command",
+        "command": posix_command,
+        "commandWindows": windows_command,
+        "timeout": 10,
+        "statusMessage": status,
+    }
+    block: dict = {"hooks": [handler]}
+    if matcher:
+        block["matcher"] = matcher
+    return block
+
+
 def load(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         sys.exit(f"{path} is not valid JSON ({exc}); fix it before installing.")
+    if not isinstance(data, dict):
+        sys.exit(f"{path} must contain a JSON object.")
+    return data
+
+
+def _handler_is_zerotrace(handler: object) -> bool:
+    if not isinstance(handler, dict):
+        return False
+    command = str(handler.get("command") or "")
+    command_windows = str(handler.get("commandWindows") or "")
+    raw_args = handler.get("args") or []
+    args = " ".join(str(x) for x in raw_args) if isinstance(raw_args, list) else ""
+    return any(
+        marker in command or marker in command_windows or marker in args
+        for marker in MARKERS
+    )
+
+
+def _without_zerotrace(block: object) -> tuple[object | None, bool]:
+    """Remove only our handlers, preserving neighbors in a shared matcher block."""
+    if not isinstance(block, dict):
+        return block, False
+    handlers = block.get("hooks", [])
+    if not isinstance(handlers, list):
+        return block, False
+    kept = [handler for handler in handlers if not _handler_is_zerotrace(handler)]
+    if len(kept) == len(handlers):
+        return block, False
+    if not kept:
+        return None, True
+    updated = dict(block)
+    updated["hooks"] = kept
+    return updated, True
+
+
+def update_file(
+    path: Path,
+    *,
+    host: str,
+    root: Path,
+    user_scope: bool,
+    remove: bool,
+) -> bool:
+    """Merge or remove this project's ZeroTrace entries in one hook file."""
+    data = load(path)
+    hooks = data.get("hooks")
+    if hooks is None:
+        hooks = {}
+        data["hooks"] = hooks
+    if not isinstance(hooks, dict):
+        sys.exit(f"{path}: `hooks` must be a JSON object.")
+
+    changed = False
+    for event, script, matcher, status in HOOKS:
+        existing = hooks.get(event, [])
+        if not isinstance(existing, list):
+            sys.exit(f"{path}: `hooks.{event}` must be a JSON array.")
+        kept: list[object] = []
+        removed_existing = False
+        for candidate in existing:
+            cleaned, removed = _without_zerotrace(candidate)
+            removed_existing = removed_existing or removed
+            if cleaned is not None:
+                kept.append(cleaned)
+
+        if remove:
+            changed = changed or removed_existing
+            if kept:
+                hooks[event] = kept
+            else:
+                hooks.pop(event, None)
+            continue
+
+        if host == "claude":
+            script_root = str(root) if user_scope else "${CLAUDE_PROJECT_DIR}"
+            block = claude_entry(script_root + "/hooks", script, matcher, status)
+        else:
+            block = codex_entry(root, script, matcher, status)
+        hooks[event] = kept + [block]
+        changed = changed or hooks[event] != existing
+
+    if not hooks:
+        data.pop("hooks", None)
+
+    if changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return changed
 
 
 def main() -> None:
     remove = "--remove" in sys.argv
     user_scope = "--user" in sys.argv
+    claude_only = "--claude-only" in sys.argv
+    codex_only = "--codex-only" in sys.argv
+    if claude_only and codex_only:
+        sys.exit("Choose at most one of --claude-only and --codex-only.")
 
-    settings = (
-        Path.home() / ".claude" / "settings.json"
-        if user_scope
-        else Path.cwd() / ".claude" / "settings.json"
+    root = Path.cwd().resolve()
+    selected = (
+        ("claude",)
+        if claude_only
+        else ("codex",)
+        if codex_only
+        else ("claude", "codex")
     )
-    project_dir = "${CLAUDE_PROJECT_DIR}" if not user_scope else str(Path.cwd())
 
-    data = load(settings)
-    hooks = data.setdefault("hooks", {})
-    existing = hooks.get(EVENT, [])
+    paths = {
+        "claude": (
+            Path.home() / ".claude" / "settings.json"
+            if user_scope
+            else root / ".claude" / "settings.json"
+        ),
+        "codex": (
+            Path.home() / ".codex" / "hooks.json"
+            if user_scope
+            else root / ".codex" / "hooks.json"
+        ),
+    }
 
-    # Drop any previous ZeroTrace entry so re-running is idempotent and --remove works.
-    kept = [
-        block
-        for block in existing
-        if not any(
-            MARKER in " ".join(h.get("args", []) or []) or MARKER in (h.get("command") or "")
-            for h in block.get("hooks", [])
+    verb = "Removed" if remove else "Installed"
+    any_changed = False
+    for host in selected:
+        changed = update_file(
+            paths[host], host=host, root=root, user_scope=user_scope, remove=remove
         )
-    ]
+        any_changed = any_changed or changed
+        if changed:
+            print(f"{verb} ZeroTrace {host.title()} hooks -> {paths[host]}")
 
-    if remove:
-        if len(kept) == len(existing):
-            print("ZeroTrace hook not installed; nothing to remove.")
-            return
-        if kept:
-            hooks[EVENT] = kept
-        else:
-            hooks.pop(EVENT, None)
-        if not hooks:
-            data.pop("hooks", None)
-        settings.parent.mkdir(parents=True, exist_ok=True)
-        settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        print(f"Removed ZeroTrace hook from {settings}")
-        return
-
-    hooks[EVENT] = kept + [entry(project_dir)]
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-    print(f"Installed ZeroTrace UserPromptSubmit hook -> {settings}")
-    print()
-    print("Start the checker before your next prompt:")
-    print("    uvicorn gateway.app:app --port 8080")
-    print()
-    print("With the checker down, prompts are blocked (ZT_FAIL=closed).")
-    print("Set ZT_FAIL=open to work unprotected instead.")
+    if not any_changed:
+        action = "remove" if remove else "install"
+        print(f"Nothing to {action}; ZeroTrace hook configuration is already current.")
+    elif not remove:
+        print("\nEmbedded checking is enabled by default; no gateway process is required.")
+        print("Set ZT_CHECKER=http://host:port to use the shared gateway service instead.")
 
 
 if __name__ == "__main__":

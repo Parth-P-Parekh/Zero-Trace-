@@ -105,11 +105,15 @@ def test_empty_prompt_is_allowed(client):
 
 # ------------------------------------------------------------ the hook script --
 
-def run_hook(event: dict, env: dict | None = None) -> subprocess.CompletedProcess:
+def run_hook(
+    event: dict,
+    env: dict | None = None,
+    cli_args: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess:
     import os
     e = {**os.environ, **(env or {})}
     return subprocess.run(
-        [sys.executable, str(HOOK)],
+        [sys.executable, str(HOOK), *cli_args],
         input=json.dumps(event), text=True, capture_output=True, env=e, timeout=30,
     )
 
@@ -158,6 +162,49 @@ def test_hook_emits_the_documented_deny_shape():
     assert isinstance(out["permissionDecisionReason"], str)
 
 
+def test_codex_hook_reads_prompt_and_emits_codex_block_shape():
+    r = run_hook(
+        {"hook_event_name": "UserPromptSubmit", "prompt": f"my key is {LIVE_KEY}",
+         "session_id": "s"},
+        {"ZT_CHECKER": ""},
+        ("--codex",),
+    )
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["decision"] == "block"
+    assert "ANTHROPIC_KEY" in out["reason"]
+    assert LIVE_KEY not in r.stdout
+
+
+def test_codex_hook_allows_clean_prompt_silently():
+    r = run_hook(
+        {"hook_event_name": "UserPromptSubmit", "prompt": "add a focused test",
+         "session_id": "s"},
+        {"ZT_CHECKER": ""},
+        ("--codex",),
+    )
+    assert r.returncode == 0
+    assert r.stdout == "" and r.stderr == ""
+
+
+def test_installer_emits_codex_command_shape_and_preserves_sibling_hooks():
+    from hooks.install import _without_zerotrace, codex_entry
+
+    block = codex_entry(Path.cwd(), "zt_check.py", None, "Checking")
+    handler = block["hooks"][0]
+    assert "args" not in handler
+    assert "--codex" in handler["command"]
+    assert "--codex" in handler["commandWindows"]
+
+    sibling = {"type": "command", "command": "python other_hook.py"}
+    cleaned, removed = _without_zerotrace({
+        "matcher": "Bash",
+        "hooks": [handler, sibling],
+    })
+    assert removed is True
+    assert cleaned == {"matcher": "Bash", "hooks": [sibling]}
+
+
 # ------------------------------------------------------- embedded mode (default) --
 
 def test_embedded_mode_needs_no_server():
@@ -200,7 +247,12 @@ PRETOOL = Path(__file__).resolve().parents[2] / "hooks" / "zt_pretool.py"
 GH = "ghp_" + "Xk9mQ2wE7rT4yU6iO8pA1sD3fG5hJ7kL9zXQ"
 
 
-def run_pretool(tool: str, args: dict, env: dict | None = None):
+def run_pretool(
+    tool: str,
+    args: dict,
+    env: dict | None = None,
+    cli_args: tuple[str, ...] = (),
+):
     """Each call gets its own window directory.
 
     Without this the cross-call fragment window carries state between unrelated tests,
@@ -213,7 +265,7 @@ def run_pretool(tool: str, args: dict, env: dict | None = None):
     e = {**os.environ, "ZT_CHECKER": "", "TMPDIR": d, "TEMP": d, "TMP": d,
          **(env or {})}
     return subprocess.run(
-        [sys.executable, str(PRETOOL)],
+        [sys.executable, str(PRETOOL), *cli_args],
         input=json.dumps({
             "hook_event_name": "PreToolUse", "tool_name": tool,
             "tool_input": args, "session_id": "s",
@@ -239,6 +291,19 @@ def test_secrets_in_tool_arguments_are_blocked(tool, args):
     out = json.loads(r.stdout)["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
     assert LIVE_KEY not in r.stdout and GH not in r.stdout   # never echo the secret
+
+
+def test_codex_apply_patch_is_scanned_under_its_canonical_name():
+    r = run_pretool(
+        "apply_patch",
+        {"command": f"*** Begin Patch\n+token = '{LIVE_KEY}'\n*** End Patch"},
+        cli_args=("--codex",),
+    )
+    assert r.returncode == 0
+    out = json.loads(r.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    assert out["permissionDecision"] == "deny"
+    assert LIVE_KEY not in r.stdout
 
 
 @pytest.mark.parametrize("tool,args", [
@@ -271,6 +336,7 @@ def test_read_is_skipped_entirely():
     here. Covering those needs the proxy."""
     from importlib import util
     spec = util.spec_from_file_location("zt_pretool", PRETOOL)
-    m = util.module_from_spec(spec); spec.loader.exec_module(m)
+    m = util.module_from_spec(spec)
+    spec.loader.exec_module(m)
     assert m.harvest("Read", {"file_path": "/etc/shadow"}) == ""
     assert "Read" in m.SKIP

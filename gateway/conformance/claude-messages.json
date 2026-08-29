@@ -1,0 +1,29 @@
+{
+  "name": "claude-code-messages",
+  "provider": "anthropic",
+  "path": "/v1/messages",
+  "request": {
+    "model": "claude-sonnet-4-5",
+    "system": [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}],
+    "tools": [{
+      "name": "Bash",
+      "description": "Run a shell command.",
+      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}},
+      "cache_control": {"type": "ephemeral"}
+    }],
+    "messages": [{"role": "user", "content": [{"type": "text", "text": "inspect the retry path"}]}],
+    "stream": true
+  },
+  "expected_origins": {
+    "system[0].text": "system",
+    "tools[0].description": "tool_definition",
+    "messages[0].content[0].text": "user"
+  },
+  "protected_paths": ["system", "tools"],
+  "cache_markers": ["cache_control"],
+  "sse_frames": [
+    "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+    "event: content_block_delta\ndata: {\"delta\":{\"text\":\"ok\"}}\n\n",
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+  ]
+}

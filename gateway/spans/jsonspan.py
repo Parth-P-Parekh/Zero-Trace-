@@ -20,7 +20,7 @@ byte range plus the character offset at which they start, and
 from __future__ import annotations
 
 import json
-from typing import Iterator
+from dataclasses import replace
 
 from ..contracts.types import Leg, Origin
 from .model import Span
@@ -66,7 +66,49 @@ def extract_spans(
     scanner.skip_ws()
     if scanner.pos != len(raw):
         raise MalformedJSON(f"trailing content at byte {scanner.pos}")
-    return spans
+    return _apply_message_roles(raw, spans)
+
+
+def _apply_message_roles(raw: bytes, spans: list[Span]) -> list[Span]:
+    """Classify OpenAI/Anthropic message content by its sibling ``role`` field.
+
+    The byte scanner sees one field at a time, so it cannot know a sibling role while
+    walking ``content``.  This small semantic pass keeps system/developer messages
+    read-only even when a protocol places them inside ``messages[]`` or ``input[]``.
+    """
+    try:
+        document = json.loads(raw)
+    except (TypeError, ValueError):
+        return spans
+    if not isinstance(document, dict):
+        return spans
+    roles: dict[str, Origin] = {}
+    role_origins: dict[str, Origin] = {
+        "system": "system", "developer": "system", "user": "user",
+        "assistant": "assistant", "tool": "tool_result", "function": "tool_result",
+    }
+    for field in ("messages", "input"):
+        items = document.get(field)
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items):
+            if isinstance(item, dict) and isinstance(item.get("role"), str):
+                origin = role_origins.get(item["role"].lower())
+                if origin is not None:
+                    roles[f"{field}[{index}]"] = origin
+    if not roles:
+        return spans
+
+    out: list[Span] = []
+    for span in spans:
+        origin = span.origin
+        if origin not in {"metadata", "tool_definition", "tool_call", "tool_result"}:
+            for prefix, role_origin in roles.items():
+                if span.path == prefix or span.path.startswith(prefix + "."):
+                    origin = role_origin
+                    break
+        out.append(span if origin == span.origin else replace(span, origin=origin))
+    return out
 
 
 class _Scanner:
@@ -197,7 +239,7 @@ def _nested(
     if len(text) < _MIN_NESTED_LEN:
         return []
     stripped = text.lstrip()
-    if not stripped[:1] in ("{", "["):
+    if stripped[:1] not in ("{", "["):
         return []
 
     try:
@@ -251,6 +293,8 @@ _METADATA_KEYS = frozenset({
     "role", "type", "id", "model", "object", "created", "status", "index",
     "cache_control", "anthropic_version", "stop_reason", "finish_reason",
     "usage", "service_tier", "previous_response_id", "schema", "format",
+    "prompt_cache_key", "prompt_cache_options", "prompt_cache_retention",
+    "prompt_cache_breakpoint",
 })
 
 
