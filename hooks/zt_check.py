@@ -92,6 +92,7 @@ def check_embedded(text: str, session_id: str) -> dict:
     from gateway.check import text_tree, to_verdict
     from gateway.detectors.example import EXAMPLE_DETECTORS
 
+    from gateway.detect.encodings import EncodedScanner
     from gateway.detect.obfuscation import ObfuscationScanner
     from gateway.detect.s0_credentials import scan_span_credentials
     from gateway.detect.s1_context import ContextScanner
@@ -100,7 +101,12 @@ def check_embedded(text: str, session_id: str) -> dict:
     pack = DetectorPack.build(
         detectors,
         version=1,
-        scanners=[scan_span_credentials, ObfuscationScanner(detectors), ContextScanner()],
+        scanners=[
+            scan_span_credentials,
+            ObfuscationScanner(detectors),
+            ContextScanner(),
+            EncodedScanner(scan_span_credentials),
+        ],
     )
     checker = Checker(
         pack,

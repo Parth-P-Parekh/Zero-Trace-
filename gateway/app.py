@@ -46,6 +46,7 @@ from .base.checker import Checker, CheckerConfig
 from .base.policy import StubPolicyClient
 from .base.scanner import DetectorPack, assert_production_engines
 from .contracts.types import Action, Actor
+from .detect.encodings import EncodedScanner
 from .detect.obfuscation import ObfuscationScanner
 from .detect.s0_credentials import scan_span_credentials
 from .detect.s1_context import ContextScanner
@@ -85,6 +86,10 @@ async def lifespan(app: FastAPI):
             # with no shape -- `DB_PASSWORD=hunter2` -- which is most of what a
             # retrieved config file or runbook contains.
             ContextScanner(),
+            # Decode-and-rescan for encodings that occur without intent -- base64 is
+            # how k8s Secrets are stored and what PowerShell's ToBase64String emits.
+            # Reuses the S0 scanner, so every class it knows is covered here too.
+            EncodedScanner(scan_span_credentials),
         ],
     )
     app.state.cache = InMemorySpanCache()
