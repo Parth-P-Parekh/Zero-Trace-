@@ -47,17 +47,66 @@ Note that unknown fields in this config are **ignored, not rejected**, so a
 misconfiguration here can never announce itself. That is why `status` now separates
 "configured" from "confirmed enforcing" rather than reporting Codex as protected.
 
+## How Codex decides trust
+
+Found in the binary, so this is what the shipped build does, not documentation.
+
+**Trust is granted by review, not by writing the file.** The TUI carries
+`tui/src/startup_hooks_review.rs` with the strings `Failed to trust hooks: ` and
+`failed to load startup hook review state: `, plus `tui/src/bottom_pane/hooks_browser_view.rs`
+(`No hooks installed for this event.`) and `tui/src/hooks_rpc.rs` (`hooks/list`). So on
+interactive startup Codex reviews hooks it has not seen and asks. There is no
+`hooks/trust` RPC in the app-server method table -- the decision goes through config
+persistence, which is why `codex exec` can never grant it: a non-interactive run has
+nobody to ask, so an unreviewed hook stays `untrusted` -> `notLoaded`, silently.
+
+**Trust is pinned to content, not to path.** Each hook carries `currentHash`, and
+`modified` is a trust state alongside `managed`/`trusted`/`untrusted`. Editing a trusted
+`hooks.json` moves it back to `modified` and it stops running until re-reviewed.
+
+**The escape hatch is per-invocation, and named accordingly.**
+
+    --dangerously-bypass-hook-trust
+        Run enabled hooks without requiring persisted hook trust for this invocation.
+        DANGEROUS. Intended only for automation that already vets hook sources.
+
+The word *persisted* in that help text is the confirmation that trust is stored state,
+and `dangerously` is Codex telling you what it thinks of skipping it.
+
+### What this means for us
+
+Three consequences, in order of how much they cost:
+
+1. **`zerotrace enable` cannot grant trust and must not pretend to.** Writing the file is
+   necessary and not sufficient. The user has to launch interactive Codex once and
+   approve.
+2. **Every `zerotrace enable` re-run de-trusts us.** Rewriting `hooks.json` changes its
+   hash, which flips trust to `modified`. So a re-install, an upgrade, or a path change
+   silently disarms Codex until the user re-approves. Any future installer work should
+   write the file only when the content actually differs, and say plainly when it changed.
+3. **This is a reasonable design and we should not fight it.** A hook file is arbitrary
+   code execution on every prompt. Codex requiring a human to look at it once is the
+   correct call, and it is the same reason ZeroTrace itself refuses to fail open.
+
 ## Not yet tested
 
-`codex ... -c bypass_hook_trust=true`. It is the single most likely switch, but it
-disables a security control in someone else's tool, so it is the user's call to run,
-not something ZeroTrace should set on their machine.
+Both remaining steps are the user's to run: Claude Code's classifier declines to
+execute `--dangerously-*` flags on their behalf, which is the right default.
 
-    codex exec -s read-only -c bypass_hook_trust=true "..."
+1. **The real fix** -- launch interactive Codex in a terminal once, in this directory,
+   and accept the hook review when it appears:
 
-Also untested: whether the VS Code side panel shows a hook-trust prompt on first
-launch. The trust model is app-server-centric and the side panel is an app-server
-client, so an approval affordance may exist there that `codex exec` has no way to show.
+        codex
+
+   Then check the sidebar. Trust is persisted, so approving once should carry across
+   sessions and into the side panel.
+
+2. **The confirmation, if the review never appears** -- one invocation, proves trust was
+   the only blocker:
+
+        codex exec -s read-only --dangerously-bypass-hook-trust "test prompt with a key"
+
+   If that blocks and plain `codex exec` does not, the diagnosis is closed.
 
 ## Consequence for the product
 

@@ -114,6 +114,9 @@ def _status(args: argparse.Namespace) -> int:
         print("      run hooks it has not trusted -- no warning, no log line. Verified")
         print("      on 0.151.0-alpha.7.1: a hook that only appends to a file never ran,")
         print("      and a prompt carrying a live-shaped key reached the model.")
+        print("      Fix: run `codex` interactively once and accept the hook")
+        print("      review. Trust is pinned to this file's hash, so re-running")
+        print("      `zerotrace enable` de-trusts it and needs re-approval.")
         print("      Claude Code is unaffected. See docs/14_CODEX_HOOK_TRUST.md")
 
     exe = _console_script()
