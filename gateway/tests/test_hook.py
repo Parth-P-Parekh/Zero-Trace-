@@ -340,3 +340,30 @@ def test_read_is_skipped_entirely():
     spec.loader.exec_module(m)
     assert m.harvest("Read", {"file_path": "/etc/shadow"}) == ""
     assert "Read" in m.SKIP
+
+
+def test_stated_host_is_not_overridden_by_payload_sniffing():
+    """`zerotrace hook --host claude` must stay Claude, whatever the payload looks like.
+
+    Claude's UserPromptSubmit event carries a `prompt` field -- the same field the Codex
+    sniff keys on. Before HOST_LOCKED, dispatching through the CLI read every Claude
+    prompt as Codex, wrote Codex's `{"decision": "block"}` shape and exited 0. Claude
+    ignores both, so the hook failed open on every prompt while still reporting itself as
+    installed. That is the one failure mode with no visible symptom, so it gets a test.
+    """
+    import hooks.zt_check as mod
+
+    saved = (mod.HOST, mod.HOST_LOCKED)
+    try:
+        mod.HOST, mod.HOST_LOCKED = "claude", True
+        with pytest.raises(SystemExit) as exc:
+            mod.deny("nope")
+        # Claude enforces on exit 2; exit 0 would be advisory and ignored.
+        assert exc.value.code == 2
+
+        mod.HOST, mod.HOST_LOCKED = "codex", True
+        with pytest.raises(SystemExit) as exc:
+            mod.deny("nope")
+        assert exc.value.code == 0
+    finally:
+        mod.HOST, mod.HOST_LOCKED = saved

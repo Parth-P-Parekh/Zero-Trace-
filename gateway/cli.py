@@ -38,17 +38,22 @@ def _install(args: argparse.Namespace) -> int:
     from hooks import install as installer
 
     hosts = _hosts(args)
-    scope = "user" if not args.project else "project"
-    installer.apply(hosts=hosts, user_scope=not args.project, remove=False,
-                    command=_hook_command())
+    user_scope = not args.project
+    installer.apply(hosts=hosts, user_scope=user_scope, remove=False)
+    paths = installer.config_paths(user_scope=user_scope)
 
-    print(f"ZeroTrace enabled for: {', '.join(hosts)}  ({scope} scope)")
+    print(f"ZeroTrace enabled  ({'this machine' if user_scope else 'this directory'})\n")
+    for host in hosts:
+        events = installer.installed_events(paths[host])
+        print(f"  {host:8} {', '.join(events) or 'nothing'}")
+        print(f"           {paths[host]}")
     print()
-    print("  Checks run in-process. Nothing to start.")
-    print("  Existing sessions keep their old config -- restart them to pick this up.")
+    print("  Covers the terminal CLI and the IDE side panel -- both read this file.")
+    print("  Existing sessions keep the config they started with. Restart them.")
     print()
-    print("  A shared service is faster if you make many tool calls:")
-    print("      docker compose up -d && setx ZT_CHECKER http://127.0.0.1:8080")
+    print("  Checks run in-process; nothing needs starting. If you make many tool")
+    print("  calls, a shared service is ~80x cheaper per call:")
+    print("      docker compose up -d   &&   setx ZT_CHECKER http://127.0.0.1:8080")
     return 0
 
 
@@ -56,9 +61,12 @@ def _uninstall(args: argparse.Namespace) -> int:
     from hooks import install as installer
 
     hosts = _hosts(args)
-    installer.apply(hosts=hosts, user_scope=not args.project, remove=True,
-                    command=_hook_command())
-    print(f"ZeroTrace disabled for: {', '.join(hosts)}")
+    changed = installer.apply(hosts=hosts, user_scope=not args.project, remove=True)
+    if changed:
+        print(f"ZeroTrace disabled for: {', '.join(changed)}")
+    else:
+        print("ZeroTrace was not enabled here; nothing to remove.")
+    print("Running sessions keep enforcing until they are restarted.")
     return 0
 
 
@@ -70,17 +78,13 @@ def _hosts(args: argparse.Namespace) -> tuple[str, ...]:
     return ("claude", "codex")
 
 
-def _hook_command() -> list[str]:
-    """How a harness should invoke us.
+def _console_script() -> str | None:
+    """The installed `zerotrace` entry point, if this was pip-installed.
 
-    Prefers the installed console script, because it survives the source moving. Falls
-    back to ``python -m gateway.cli`` when running from a checkout that was never
-    pip-installed, which is the common case during development.
+    Reported by `status` so it is visible whether hooks are wired to a stable command or
+    to a path into a checkout that can move.
     """
-    exe = shutil.which("zerotrace")
-    if exe:
-        return [exe, "hook"]
-    return [sys.executable, "-m", "gateway.cli", "hook"]
+    return shutil.which("zerotrace")
 
 
 # --------------------------------------------------------------------- status --
@@ -92,15 +96,20 @@ def _status(args: argparse.Namespace) -> int:
 
     print("  hooks")
     any_wired = False
-    for host, path in installer.config_paths(user_scope=True).items():
-        events = installer.installed_events(path)
-        if events:
-            any_wired = True
-            print(f"    {host:8} {', '.join(events):32} {path}")
-        else:
-            print(f"    {host:8} {'not enabled':32} {path}")
+    for scope, user in (("machine", True), ("project", False)):
+        for host, path in installer.config_paths(user_scope=user).items():
+            events = installer.installed_events(path)
+            if events:
+                any_wired = True
+                print(f"    {host:8} {scope:8} {', '.join(events)}")
+                print(f"    {'':17} {path}")
     if not any_wired:
-        print("\n    Nothing is wired. Run `zerotrace enable`.")
+        print("    nothing wired -- run `zerotrace enable`")
+
+    exe = _console_script()
+    print(f"\n  entry point  {exe or 'not installed (hooks point at this checkout)'}")
+    if not exe:
+        print("    -> `pip install -e .` makes the hook command survive the source moving")
 
     print("\n  detection engines")
     from gateway.base import scanner
@@ -117,13 +126,12 @@ def _status(args: argparse.Namespace) -> int:
     print(f"    on failure {os.getenv('ZT_FAIL', 'closed')}")
 
     print("\n  carried cross-call state")
-    frag, sink, risk = _state_counts()
-    print(f"    fragments  {frag}")
-    print(f"    assemblies {sink}")
-    print(f"    sessions   {risk}")
-    if frag or sink:
-        print("    -> `zerotrace reset` clears these. Stale pieces from earlier work")
-        print("       can join with a later command and block it.")
+    _, sink, risk = _state_counts()
+    print(f"    assemblies {sink}   (payloads grouped by write destination)")
+    print(f"    sessions   {risk}   (risk counters; no text)")
+    if sink:
+        print("    -> `zerotrace reset` clears these. Pieces written to one destination")
+        print("       are concatenated, so test fixtures can linger for the TTL.")
     return 0
 
 
@@ -202,7 +210,9 @@ def _hook(args: argparse.Namespace) -> int:
     else:
         from hooks import zt_check as mod
 
+    # Stated, not guessed -- see HOST_LOCKED in zt_check.
     mod.HOST = host
+    mod.HOST_LOCKED = True
     mod.run(event)          # exits via sys.exit with the harness's convention
     return 0
 

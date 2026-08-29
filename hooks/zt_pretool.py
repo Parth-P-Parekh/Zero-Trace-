@@ -183,7 +183,11 @@ def main() -> None:
     except (json.JSONDecodeError, ValueError):
         print("zerotrace: could not parse hook input; allowing", file=sys.stderr)
         sys.exit(0)
+    run(event)
 
+
+def run(event: dict) -> None:
+    """Decide on one already-parsed hook event. See `zt_check.run` for why."""
     tool = event.get("tool_name", "")
     args = event.get("tool_input") or {}
     text = harvest(tool, args if isinstance(args, dict) else {})

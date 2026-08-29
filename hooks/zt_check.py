@@ -46,6 +46,13 @@ FAIL = os.environ.get("ZT_FAIL", "closed").lower()
 TIMEOUT_S = float(os.environ.get("ZT_TIMEOUT_S", "5"))
 HOST = "codex" if "--codex" in sys.argv else "claude"
 
+#: True when the host was stated rather than guessed -- by an installer flag, or by
+#: `zerotrace hook --host`. Guessing must not override a caller who knows: Claude's
+#: UserPromptSubmit payload also has a `prompt` field, so the sniff below would read a
+#: Claude event as Codex, emit Codex's block shape, exit 0, and be ignored -- failing
+#: open with no sign.
+HOST_LOCKED = "--codex" in sys.argv or "--claude" in sys.argv
+
 #: The repo root, derived from this file's own location so the hook works no matter
 #: which directory Claude Code runs it from.
 ROOT = Path(__file__).resolve().parent.parent
@@ -169,17 +176,27 @@ def check_service(text: str, session_id: str, cwd: str | None) -> dict:
 # ---------------------------------------------------------------------- main --
 
 def main() -> None:
-    global HOST
     try:
         event = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         # Malformed hook input is our bug, not the user's. Never block on it.
         print("zerotrace: could not parse hook input; allowing", file=sys.stderr)
         sys.exit(0)
+    run(event)
 
-    # The installer supplies an explicit flag. Field detection also keeps direct
-    # invocation with a raw Codex event safe.
-    if "--claude" not in sys.argv and "prompt" in event:
+
+def run(event: dict) -> None:
+    """Decide on one already-parsed hook event.
+
+    Split from `main()` so `zerotrace hook` can read stdin once, look at the event name,
+    and dispatch here — rather than every hook re-reading a stream that has already been
+    consumed.
+    """
+    global HOST
+
+    # Only sniff when nobody told us. The installer passes an explicit flag and
+    # `zerotrace hook` passes --host; a guess must never override either.
+    if not HOST_LOCKED and "prompt" in event:
         HOST = "codex"
     text = (
         event.get("prompt")

@@ -29,7 +29,10 @@ HOOKS = (
     (
         "PreToolUse",
         "zt_pretool.py",
-        "Bash|apply_patch|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*",
+        # PowerShell is here because leaving it out was a real hole: on Windows it is a
+        # full shell, and while this tool was blocking its own development it was the
+        # one write path still open.
+        "Bash|PowerShell|apply_patch|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*",
         "ZeroTrace checking tool call...",
     ),
 )
@@ -172,6 +175,62 @@ def update_file(
     if changed:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return changed
+
+
+def config_paths(user_scope: bool = True, root: Path | None = None) -> dict:
+    """Where each harness keeps its hook configuration.
+
+    User scope is the default because it is what "activate it once and every new session
+    is covered" means. Project scope only applies inside that directory, which is why an
+    earlier project-scoped install looked like it had silently stopped working.
+    """
+    base = (root or Path.cwd()).resolve()
+    home = Path.home()
+    return {
+        "claude": (home if user_scope else base) / ".claude" / "settings.json",
+        "codex": (home if user_scope else base) / ".codex" / "hooks.json",
+    }
+
+
+def installed_events(path: Path) -> list:
+    """Hook events in this file that are ours. Empty when nothing is wired."""
+    data = load(path)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return []
+    found = []
+    for event, blocks in hooks.items():
+        if not isinstance(blocks, list):
+            continue
+        if any(
+            any(_handler_is_zerotrace(h) for h in block.get("hooks", []))
+            for block in blocks
+            if isinstance(block, dict)
+        ):
+            found.append(event)
+    return found
+
+
+def apply(
+    *,
+    hosts: tuple = ("claude", "codex"),
+    user_scope: bool = True,
+    remove: bool = False,
+    root: Path | None = None,
+) -> list:
+    """Write or remove hook configuration. Returns the hosts that changed.
+
+    The single entry point the CLI calls, so `zerotrace enable` and this module's own
+    `main()` cannot drift apart.
+    """
+    base = (root or Path(__file__).resolve().parent.parent).resolve()
+    paths = config_paths(user_scope=user_scope, root=base)
+    changed = []
+    for host in hosts:
+        if update_file(paths[host], host=host, root=base,
+                       user_scope=user_scope, remove=remove):
+            changed.append(host)
     return changed
 
 
