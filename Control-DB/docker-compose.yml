@@ -1,0 +1,66 @@
+# Part A: postgres, redis, gateway. Nothing else yet (SKEL-01 M0).
+#
+# The dnsmasq / demo-app / web services from CODE-01 §2 arrive with Part C and
+# the console. Adding them now would be three more things to debug before the
+# thing they support exists.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: zt
+      POSTGRES_PASSWORD: zt
+      POSTGRES_DB: zerotrace
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zt -d zerotrace"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: migrate, then seed. The gateway waits for it to finish cleanly.
+  migrate:
+    build: .
+    env_file: .env
+    environment:
+      ZT_PG_DSN: postgresql+asyncpg://zt:zt@postgres:5432/zerotrace
+      ZT_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && python -m scripts.seed_demo"
+    restart: "no"
+
+  gateway:
+    build: .
+    env_file: .env
+    environment:
+      ZT_PG_DSN: postgresql+asyncpg://zt:zt@postgres:5432/zerotrace
+      ZT_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
