@@ -61,6 +61,96 @@ Everything in that diagram is required for the skeleton to count as done. Nothin
 That last row is the skeleton's single biggest honesty risk. It is declared in a header,
 in the ledger, and in the README. It is not quietly ignored.
 
+### 1.2 Parallel development — mutually exclusive tracks
+
+**Rule: no file is edited by two people.** Parts A and B are built as two independently
+runnable services that share a frozen contract and nothing else. Each has its own app, its
+own database schema, its own migration chain, its own tests, its own compose service and its
+own env prefix. Neither can block or break the other, and neither needs the other to run.
+
+Integration is a separate, planned piece of work with its own document: **MERGE-01
+(`docs/07_MERGE_PLAN.md`)**. It is not something that happens gradually.
+
+#### The two services
+
+| | **Track A — control plane** | **Track B — data plane** |
+|---|---|---|
+| Directory | `policy_service/` | `gateway/` |
+| Owns | identity, actors, groups, policy engine, action lattice, control-plane API | interception routes, normalise/denormalise, spans, S0/S1 detection, vault, redaction, `verify_dispatch` |
+| DB schema | `ctl` | `dp` |
+| Alembic chain | `migrations/ctl/` — own `version_table` | `migrations/dp/` — own `version_table` |
+| Env prefix | `ZTA_` | `ZTB_` |
+| Compose service | `policy` | `gateway` |
+| Runs standalone | yes — `make dev-a` | yes — `make dev-b` |
+
+One Postgres container, **two schemas, two independent Alembic chains.** Alembic supports a
+per-chain `version_table_schema`, so the two histories never touch. This is the specific fix
+for the branched-`down_revision` failure that two developers autogenerating migrations
+against one chain will otherwise hit at the worst possible hour.
+
+#### The contract — the only shared thing, frozen before either track starts
+
+`contracts/` is written once, in a single session with both people present, then **locked**.
+Nobody edits it during parallel work; a change requires both people to stop and agree.
+
+It contains exactly three types and one call:
+
+```
+Actor    { id, tenant_id, role, groups[] }
+Finding  { span_path, entity_class, confidence, stage, leg }     # never span text
+Decision { action, rule_index, policy_version, exception_applied }
+
+POST /decide  { actor, findings[], risk, leg, destination } -> Decision
+```
+
+**Track B calls Track A over HTTP during development.** That is what makes the tracks
+genuinely exclusive rather than nominally so — the seam is a JSON payload, not a Python
+import, so there is no shared module for either side to edit. Track B develops against a
+30-line stub server that returns fixed decisions; Track A develops against its own endpoint
+with curl and pytest.
+
+**A property worth noticing:** the contract passes `span_path`, `entity_class` and
+`confidence` — **never span text**. Track A therefore never receives a sensitive value and is
+structurally outside the blast radius of `test_privacy_invariant`. That is a real security
+property of the split, not just a coordination convenience, and it should survive the merge.
+
+#### What gets duplicated, deliberately
+
+`clock.py`, `errors.py` and a basic `logging.py` exist in both trees. That is roughly 80
+duplicated lines and it is the price of exclusivity — de-duplicating them at merge is
+mechanical, whereas a shared utility module that both people edit is exactly the coupling
+this split exists to remove.
+
+One exception: **the redacting log processor lives only in Track B.** It depends on the seed
+credential patterns, which are Track B's, and Track A never sees a value that would need
+redacting.
+
+#### Two ledger chains, not one
+
+Track A appends `policy.updated`, `exception.approved`, `licence.changed` to a chain in
+`ctl`. Track B appends `request.decided`, `detector.promoted` to a chain in `dp`. Each is
+independently hash-verified; `make verify` checks both.
+
+This is not a compromise made for the split. An administrative-acts chain and a
+decisions chain, separately verifiable, is a defensible end state — MERGE-01 records the
+decision to keep them separate rather than treating unification as inevitable.
+
+#### Transport at merge
+
+The HTTP hop costs 1–3ms, which does not fit the 2ms S4 budget (CODE-01 §6.5). It does not
+have to: the contract is defined as an interface with two implementations —
+`HttpPolicyClient` for development, `InProcessPolicyEngine` for the merged build. Same
+signature, same JSON shape, different transport. Swapping it is one line of wiring, and
+MERGE-01 specifies it.
+
+#### Track C runs alongside both
+
+Interception depends on neither track. A passthrough gateway — `ANTHROPIC_BASE_URL` → us →
+`api.anthropic.com`, no scanning, no policy — is buildable on day one, needs no contract, and
+is the fastest way to capture the real Claude Code payloads that Track B's round-trip test
+needs (§5, item 4). Third person takes it; with two people, whoever is on Track B does it
+first, since Track B is where the captured payloads are consumed.
+
 ---
 
 ## PART A — Control-group DB
@@ -415,24 +505,60 @@ config of neither tool containing anything a normal user would call a modificati
 
 ## 2. Milestones
 
-Each milestone ends with a `make` target that exits non-zero on failure. No milestone
-starts before the previous one's target is green.
+Each milestone ends with a `make` target that exits non-zero on failure. Within a track,
+no milestone starts before the previous one is green. **Across tracks there is no ordering
+at all** — A and B advance independently and neither can block the other.
 
-| M | Name | Exit criterion (the `make` target asserts this) |
+### Shared, before the split
+
+| M | Name | Exit criterion |
 |---|---|---|
-| **M0** | Skeleton up | `make dev` brings up postgres + redis + gateway; `/healthz` 200; empty-commit provenance started; `.env.example` complete |
-| **M1** | Part A — DB | Migration applied; seed creates 1 tenant, 2 groups, 3 actors; `identity.resolve()` returns the right Actor for a dev token |
-| **M2** | Part A — policy | Two actors, same request, different responses; rule index + policy version in the ledger; BU-raises-only validated at publish |
-| **M3** | Part B — detect | S0 credential + PII detectors pass unit tests; AC prefilter + re2 confirm; 15-case corpus committed; S0 benchmarked on a real long transcript |
-| **M3b** | Span cache | 10-turn seeded conversation shows >90% cache hit from turn 2; pack-version bump invalidates; Redis covered by the privacy invariant |
-| **M4** | Part B — redact | `verify_dispatch` green; `test_privacy_invariant` green; ledger chain verifies via `make verify` |
-| **M5** | Part C — Claude Code | Real `claude` CLI through the gateway; a planted key is blocked; non-streaming path proven |
-| **M6** | Streaming | Sliding-window scan (CODE-01 §9.2); the degrade header disappears; chunk-boundary tests at every offset |
-| **M7** | Part C — sidebar | Extension blocks a planted key on claude.ai; fail-closed verified with the gateway stopped |
-| **M8** | Codex + VS Code | Same proof on `OPENAI_BASE_URL`; VS Code route decided and documented |
-| **M9** | Rejoin CODE-01 | S2 NER, S3 composite, A2 adjudicator, **detector confidence posteriors + decay quarantine (§B.6)** — the full plan resumes from here |
+| **M0** | Foundations | `docker compose up` brings up postgres + redis; both service skeletons answer `/healthz`; `contracts/` written and **locked**; empty-commit provenance started; `.env.example` complete for both prefixes |
 
-**M0–M5 is the skeleton.** M6 is the honesty debt and is not optional. M7–M8 is coverage.
+M0 is done by one person and merged before either track starts. `contracts/` is the output
+that matters: three types and one call, agreed in a single session with both people present.
+
+### Track A — control plane (`policy_service/`, schema `ctl`)
+
+| M | Name | Exit criterion (`make dev-a`, `make test-a`) |
+|---|---|---|
+| **A1** | Identity + groups | `ctl` migration applied; seed creates 1 tenant, 2 groups, 3 actors; `identity.resolve()` returns the right Actor for a dev token; unregistered path serves rather than rejects |
+| **A2** | Policy engine | `POST /decide` returns a `Decision` for a fixture finding set; action lattice enforced; BU-raises-only validated at publish; `policy.updated` on the `ctl` chain; `make verify --chain ctl` green |
+
+Track A never sees span text. It is tested entirely against committed `Finding` fixtures.
+
+### Track B — data plane (`gateway/`, schema `dp`)
+
+| M | Name | Exit criterion (`make dev-b`, `make test-b`) |
+|---|---|---|
+| **B1** | Spans + detect | Round-trip `denormalise(normalise(x)) == x` byte-for-byte on **real captured payloads**; AC prefilter + re2 confirm; S0 credential + PII classes pass unit tests; 15-case corpus committed; S0 benchmarked on a long transcript |
+| **B1b** | Span cache | 10-turn seeded conversation shows >90% cache hit from turn 2; pack-version bump invalidates; Redis covered by the privacy invariant |
+| **B2** | Vault + redact | `verify_dispatch` green; `test_privacy_invariant` green; `request.decided` on the `dp` chain; `make verify --chain dp` green |
+
+Track B develops against a 30-line stub returning fixed decisions. It reaches a full green
+end-to-end path without Track A existing.
+
+### Track C — interception (starts day one, no contract needed)
+
+| M | Name | Exit criterion |
+|---|---|---|
+| **C1** | Passthrough | Real `claude` CLI through a no-op gateway to `api.anthropic.com`; **real payloads captured and committed** as B1's fixtures |
+
+C1 is the unblocker for B1's round-trip test, so it runs first if there are only two people.
+
+### Merge and beyond
+
+| M | Name | Exit criterion |
+|---|---|---|
+| **M-MERGE** | Integration | **MERGE-01 (`docs/07_MERGE_PLAN.md`)** — six steps, gate test is two actors / one request / two responses |
+| **M5** | Claude Code enforced | A planted `sk-ant-*` key in a real `claude` prompt is blocked; non-streaming path proven end to end |
+| **M6** | Streaming | Sliding-window scan (CODE-01 §9.2); the degrade header disappears; chunk-boundary tests at every offset |
+| **M7** | Claude sidebar | Extension blocks a planted key on claude.ai; fail-closed verified with the gateway stopped |
+| **M8** | Codex + VS Code | Same proof on `OPENAI_BASE_URL`; VS Code route decided and documented |
+| **M9** | Rejoin CODE-01 | S2 NER, S3 composite, A2 adjudicator, **detector confidence posteriors + decay quarantine (§B.6)** |
+
+**M0 → (A ∥ B ∥ C) → M-MERGE → M5 is the skeleton.** M6 is the honesty debt and is not
+optional. M7–M8 is coverage.
 
 ---
 
@@ -455,7 +581,7 @@ starts before the previous one's target is green.
 
 ## 4. Checklist
 
-### M0 — Skeleton up
+### M0 — Foundations (shared, before the split)
 - [ ] `git commit --allow-empty -m "G0: provenance start"`; 45-minute commit timer set
 - [ ] `docker-compose.yml`: postgres, redis, gateway. Nothing else yet
 - [ ] `requirements.txt` pinned via pip-compile; **never floated**
@@ -463,10 +589,15 @@ starts before the previous one's target is green.
 - [ ] `config.py` fails loudly on a missing required var; never silently defaults a security setting
 - [ ] `clock.now()` helper; no `datetime.now()` anywhere else
 - [ ] `structlog` JSON + redacting processor **wired now**, not retrofitted
-- [ ] `make dev` / `make test` / `make verify` targets exist and run
-- [ ] `/healthz` and `/readyz` return 200
+- [ ] `make dev-a` / `make dev-b` / `make test-a` / `make test-b` / `make verify` exist and run
+- [ ] Both service skeletons answer `/healthz` and `/readyz`
+- [ ] **`contracts/` written and locked** — `Actor`, `Finding`, `Decision`, and the
+      `POST /decide` JSON schema. Agreed in one session with both people present
+- [ ] `contracts/` carries a README saying: a change here stops both tracks
+- [ ] Two Alembic chains configured with separate `version_table_schema` (`ctl`, `dp`)
+- [ ] Env prefixes split: `ZTA_` and `ZTB_`. No variable read by both services
 
-### M1 — Control-group DB
+### A1 — Identity + groups  *(Track A)*
 - [ ] Alembic migration 001: `tenants`, `actors`, `groups`, `sessions`, `ledger`
 - [ ] `groups` table added to CODE-01 §4.1 in the same commit
 - [ ] `actor_has_identity` CHECK constraint present
@@ -476,7 +607,7 @@ starts before the previous one's target is green.
 - [ ] Unregistered actors are **served**, flagged, and policy-masked — never rejected
 - [ ] No `virtual_key_hash` column anywhere. Developer-held keys do not exist in this product
 
-### M2 — Policy engine
+### A2 — Policy engine  *(Track A)*
 - [ ] Alembic migration 002: `policies`, `policy_exceptions` (with `no_self_approval` CHECK)
 - [ ] `policy/schema.py` — pydantic, **unknown keys are a validation error**
 - [ ] Action lattice `allow < warn < tokenize < mask < block`
@@ -486,7 +617,7 @@ starts before the previous one's target is green.
 - [ ] Policies immutable; publish writes a new version and appends `policy.updated`
 - [ ] **Test:** two actors, one request, two responses, both in the ledger
 
-### M3 — Detection
+### B1 — Spans + detection  *(Track B)*
 - [ ] `google-re2` only. A `re` import in `detect/` is a review rejection
 - [ ] `pyahocorasick` T1 automaton over literal credential anchors, built once at pack load
 - [ ] T2: one re2 alternation for anchorless shape classes (PAN, Aadhaar, CC, IFSC, GSTIN, IBAN)
@@ -509,7 +640,7 @@ starts before the previous one's target is green.
 - [ ] `confidence` read from the detector row, **never hardcoded at the call site**;
       `confirmed`/`rejected` counters exist and sit at zero until M9
 
-### M3b — Span cache (conversation resend)
+### B1b — Span cache (conversation resend)  *(Track B)*
 - [ ] Cache key = `(tenant_id, detector_pack_version, HMAC(k_tenant, span.text))`
 - [ ] **HMAC under the tenant key, not a bare hash** — a raw digest is a confirmation oracle
 - [ ] Cache stores **findings only**. Decisions are recomputed per actor, every request
@@ -519,7 +650,7 @@ starts before the previous one's target is green.
 - [ ] **Test:** a seeded 10-turn conversation shows >90% hit ratio from turn 2 onward
 - [ ] **Test:** a promoted detector fires on cached history, not just on the new turn
 
-### M4 — Redaction and proof
+### B2 — Vault + redaction  *(Track B)*
 - [ ] `vault/derive.py`: HMAC-SHA256, one-way, scoped. **No FPE, no decrypt path, no `undo_token()`**
 - [ ] Format-preserving tokens pass the same validator the original passed (1,000-token test per class)
 - [ ] Collision retry 3→4→5→6 chars, then `VaultCollisionError` + ledger event, fail closed
@@ -532,7 +663,19 @@ starts before the previous one's target is green.
 - [ ] **`test_privacy_invariant` green** — tables, logs, and evidence pack all clean
 - [ ] `X-ZeroTrace-*` response headers on every call
 
-### M5 — Claude Code interception
+### M-MERGE — Integration
+
+Full checklist lives in **MERGE-01 (`docs/07_MERGE_PLAN.md`)**. Do not start until all
+six preconditions there hold. Headline items:
+
+- [ ] `contracts/` still shows one commit in `git log`
+- [ ] Step 1 (runtime unified, still HTTP) → Step 2 (gate test) → Step 3 (transport swap)
+- [ ] Gate test: two actors, one request, two responses — passes on **both** transports
+- [ ] `test_privacy_invariant` green across the merged system, Redis included
+- [ ] `make dev-a` and `make dev-b` still work after the merge
+- [ ] Policy-service-down behaviour declared and tested against `ZT_FAIL`
+
+### C1 / M5 — Claude Code  *(Track C, then post-merge)*
 - [ ] `/v1/messages` byte-compatible with the real API (non-streaming) against captured payloads
 - [ ] Gateway forwards to `api.anthropic.com` holding the real key; key never logged
 - [ ] `scripts/zt-claude.ps1` and `.sh` wrapper set `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`
@@ -572,13 +715,21 @@ starts before the previous one's target is green.
 
 ---
 
-## 5. The first four things to type
+## 5. The first five things to do, in order
 
-1. `git commit --allow-empty -m "M0: skeleton start"`
-2. `docker-compose.yml` + `requirements.txt` + `.env.example`
-3. Migration 001 and `scripts/seed_demo.py` — Part A's tables exist before anything reads them
-4. The round-trip normaliser test, with a **real captured Claude Code payload** as the fixture
+1. `git commit --allow-empty -m "M0: provenance start"` — and set the 45-minute commit timer
+2. **Both people, one session, one hour: write `contracts/` and lock it.** Three types and one
+   call. Everything after this depends on it being right, and it is the only hour in the plan
+   where both people must be in the same conversation
+3. M0 foundations — compose, two service skeletons, two Alembic chains, two env prefixes
+4. **Track C first:** passthrough gateway, real `claude` CLI through it, **capture and commit
+   real payloads**. This unblocks Track B and takes an afternoon
+5. Split. Track A starts at A1, Track B starts at B1 against its stub. Neither talks to the
+   other again until MERGE-01's preconditions are met
 
-Capture that payload before writing the normaliser. Everything in Part B is built on the
-assumption that we can put a request back together byte-for-byte, and that assumption is
-cheap to verify and expensive to discover was wrong.
+Step 4 before step 5 is the one ordering that matters outside the tracks. Everything in Track
+B rests on being able to reassemble a request byte-for-byte, and that assumption is cheap to
+verify against a real payload and expensive to discover was wrong against a synthetic one.
+
+Step 2 is the one people skip. Don't — an hour spent agreeing what `confidence` means is
+the difference between a half-day merge and a bad one.
