@@ -47,6 +47,7 @@ Decided once, here, so nobody relitigates them at T+9 on three hours of sleep.
 | Language, data plane | Python 3.12, async throughout | Team fluency beats theoretical throughput at 24h. The hot path is I/O-bound on the upstream call. | Go — faster, nobody writes it fast enough tonight |
 | Web framework | FastAPI + uvicorn; `httpx.AsyncClient` upstream | Streaming passthrough, native pydantic, OpenAPI for free | Flask; raw Starlette |
 | Validation | pydantic v2 | Policy schema, API contracts and agent tool arguments all validate through one system | dataclasses + hand-rolled checks |
+| Scan strategy | **`pyahocorasick` literal prefilter → targeted `re2` confirm** (§6.1). Never a sequential loop over patterns | One linear pass finds every credential anchor; the specific regex runs only at candidate offsets. On a payload with no secrets the prefilter is the only work done | **Hyperscan/Vectorscan** — faster, but x86-only (ARM needs Vectorscan), reports match *ends* not start offsets (we need exact `[start,end)` for `tree.replace()`), and its database compile fights runtime detector hot-swap (§10.5) |
 | Regex engine | **`google-re2`** (`import re2`) for every detector | Linear time, no catastrophic backtracking. **Non-negotiable: A4 writes regexes at runtime.** A ReDoS in a security product is the whole story going wrong, on stage | `re` — one generated `(a+)+$` and the hot path hangs |
 | NER | spaCy `en_core_web_sm` + transliteration gazetteer | 3–10ms CPU on short spans, fits the 25ms budget | GLiNER — better recall, 30–80ms; available behind `ZT_NER_BACKEND=gliner` if the budget allows |
 | Datastore | Postgres 16 (durable) + Redis 7 (cache, queues) | Ledger needs transactional append; token lookups need sub-ms | SQLite — no concurrent writers, no `LISTEN/NOTIFY` |
@@ -98,10 +99,13 @@ zerotrace/
     spans/
       model.py                   Span, SpanTree, Finding, Decision
       paths.py                   span_path grammar, parse/format, safe indexing
+      pathsafe.py                generalise non-vocabulary path segments (§5.2)
 
     detect/
       registry.py                detector load, compile cache, hot-swap on promotion
-      s0_deterministic.py        regex + checksums + entropy
+      prefilter.py               Aho-Corasick literal anchors, built once per pack
+      cache.py                   span-level finding memoisation (§6.1c)
+      s0_deterministic.py        prefilter → re2 confirm → checksums → entropy
       s1_context.py              proximity and key-name heuristics
       s2_ner.py                  spaCy backend + gazetteer, per-class thresholds
       s3_composite.py            C6 — compositional re-identification scorer (N2)
@@ -131,6 +135,8 @@ zerotrace/
       synthesizer.py             A4 (C11)
       validator.py               A5 (C12) — corpus run, gates, promote/quarantine
       explainer.py               A7 (C15)
+      features.py                EscalationFeatures — the blind contract (§10.2)
+      shapes.py                  char-class skeletons; no free-text field anywhere
       dsl.py                     constrained detector DSL + compiler to re2
       tools.py                   tool schemas shared by the agents
       prompts/                   one .md per agent, versioned — no inline prompt strings
@@ -249,15 +255,24 @@ ZT_OIDC_CLIENT_ID=zerotrace
 ZT_OIDC_CLIENT_SECRET=TODO
 ZT_SCIM_TOKEN=TODO
 
-# --- detection budgets (ms) — enforced, not aspirational ---
-ZT_BUDGET_S0_MS=3
-ZT_BUDGET_S1_MS=8
-ZT_BUDGET_S2_MS=25
-ZT_BUDGET_S3_MS=10
-ZT_BUDGET_S4_MS=2
-ZT_BUDGET_S5_MS=5
-ZT_BUDGET_S6_MS=8
+# --- detection budgets (ms) — enforced at runtime, not aspirational ---
+# Envelope: green path p95 < 10ms; 50ms is a HARD p100 ceiling with a watchdog.
+# Tiers 0-2 run on every request; tier 3 runs on amber spans only.
+ZT_BUDGET_CACHE_MS=0.2              # tier 0 — span finding lookup
+ZT_BUDGET_S0_MS=1.5                 # tier 1 — cache-miss spans only
+ZT_BUDGET_S1_MS=1.5                 # tier 2 — S0-unresolved spans only
+ZT_BUDGET_S4_MS=0.5                 # policy, Redis-cached rule resolution
+ZT_BUDGET_S5_MS=2                   # only when action != allow
+ZT_BUDGET_VERIFY_MS=0.5             # verify_dispatch, only when a redaction was planned
+ZT_BUDGET_S2_MS=25                  # tier 3 — amber spans only
+ZT_BUDGET_S3_MS=5                   # tier 3 — amber finding sets only
+ZT_BUDGET_S6_MS=8                   # inbound leg
+ZT_CHECKER_CEILING_MS=50            # runtime watchdog; on fire → declared amber stance
 ZT_STREAM_WINDOW_CHARS=64
+
+# --- span cache (§6.1c) — load-bearing for the 10ms budget, not an optimisation ---
+ZT_SPAN_CACHE_TTL_S=3600
+ZT_SPAN_CACHE_MAX_SPAN_BYTES=65536
 
 # --- intelligence plane ---
 ZT_ESCALATION_BAND_LO=0.35
@@ -558,7 +573,9 @@ segment   := identifier
 index     := integer
 ```
 
-Rules: paths are stable across a request's lifetime, they are the only thing written to `findings`, and they are safe to log. `paths.py` provides `parse`, `format`, and `get_in`/`set_in` with bounds checks — an index out of range raises, never silently no-ops, because a silent no-op means a span was not redacted while the record says it was.
+Rules: paths are stable across a request's lifetime and are the only thing written to `findings`.
+
+**Paths are not unconditionally safe to log.** A real path can read `messages[2].tool_result.patients.rajesh_kumar.diagnosis` — the path itself carries the identifier. `pathsafe.py` classifies each segment before the path is written anywhere: numeric indices and segments in the known schema vocabulary (`messages`, `content`, `tool_result`, `customer`, `input`, class names …) pass through; any other identifier segment becomes a stable per-tenant HMAC stub — `patients.⟨seg_7f2⟩.diagnosis` — which keeps the path groupable and diffable without carrying the name. This applies to `findings`, the ledger, logs, the console and the escalation queue, and it is covered by `test_privacy_invariant`. `paths.py` provides `parse`, `format`, and `get_in`/`set_in` with bounds checks — an index out of range raises, never silently no-ops, because a silent no-op means a span was not redacted while the record says it was.
 
 ### 5.3 Normalisers (C2)
 
@@ -593,11 +610,12 @@ async def handle(req: Request) -> Response:
     tenant  = actor.tenant
     tree    = normalise(await req.json(), provider_of(req))
 
-    with t("S0"): findings  = s0_deterministic(tree, registry.for_tenant(tenant))
-    with t("S1"): findings += s1_context(tree, findings)
-    with t("S2"): findings += await s2_ner(tree, findings)      # only unresolved spans
-    with t("S3"): risk      = s3_composite(tree, findings)
-    with t("S4"): decision  = policy.decide(tenant, actor, findings, risk, leg="outbound")
+    # LOOP 1 — the checker. Synchronous, never calls a model. §6.1d
+    #   tier 0-2 run always; tier 3 runs on amber spans only; watchdog at 50ms.
+    check = await run_checker(tree, tenant, deadline=settings.checker_ceiling_ms)
+
+    with t("S4"): decision  = policy.decide(tenant, actor, check.findings,
+                                            check.risk, leg="outbound")
     with t("S5"): plan      = redact(tree, decision)            # only if action != allow
 
     body = denormalise(tree)
@@ -607,26 +625,57 @@ async def handle(req: Request) -> Response:
     if req.stream:
         return StreamingResponse(stream_scan(upstream, actor, t))  # S6, §9
     with t("S6"): resp = await inbound_scan(upstream, actor)
-    await ledger.append(tenant, "request.decided", record(t, decision, plan))
-    await intel.maybe_escalate(findings, risk, decision)          # S7, async, never awaited inline
+    await ledger.append(tenant, "request.decided", record(t, decision, plan, check))
+    # LOOP 2 — blind agent. Async, post-response, features only, never the span text. §10.2
+    await intel.maybe_escalate(features_of(check), decision)
     return resp
 ```
 
-Two properties of this function are load-bearing. **`verify_dispatch` runs before the upstream call, on the serialised body**, so the claim in the ledger is about the bytes that actually left. And **`maybe_escalate` enqueues; it never awaits the adjudicator.** The moment somebody awaits an LLM call in this function, p95 becomes 800ms and the product's central argument is gone.
+Three properties of this function are load-bearing.
 
-### 6.1 S0 — deterministic detectors (C3, budget 3ms)
+**`verify_dispatch` runs before the upstream call, on the serialised body**, so the claim in the ledger is about the bytes that actually left.
+
+**`maybe_escalate` enqueues; it never awaits the adjudicator.** The moment somebody awaits an LLM call in this function, p95 becomes 800ms and the product's central argument is gone.
+
+**`maybe_escalate` receives features, never span text** (`features_of`, §10.2). There is no code path from the hot path to a model that carries a raw value.
+
+### 6.0.1 The latency envelope
+
+The checker is the only thing between the user and their model, so its cost is the product's cost. Two numbers, both enforced:
+
+| | Target | Enforced by |
+|---|---|---|
+| **Green path** (no findings, or findings resolved at tier 1–2) | **p95 < 10ms** | `pytest-benchmark` against `.env`, on a real long-transcript payload |
+| **Any path** | **50ms hard p100 ceiling** | a **runtime watchdog** — not a test |
+
+Measured as: gateway receives the request → upstream dispatch begins, plus the inbound scan. Upstream time is excluded; it is not ours.
+
+The ceiling is a guard, not an assertion. At `ZT_CHECKER_CEILING_MS` the checker stops where it is, applies the declared amber stance (§6.1d), sets `X-ZeroTrace-Degraded: checker_timeout`, increments `zt_checker_timeout_total` and writes a ledger record. **A budget that exists only in a test is a budget that is exceeded in production.**
+
+Reaching this envelope depends on two mechanisms that are therefore not optional: the Aho-Corasick prefilter (§6.1a) and the span cache (§6.1c). A cold 200KB agentic payload cannot be scanned in 1.5ms — and does not have to be, because by turn 30 of a conversation ~95% of its spans are cache hits.
+
+### 6.1 S0 — deterministic detectors (C3, budget 1.5ms, cache-miss spans only)
 
 ```python
 def s0_deterministic(tree: SpanTree, detectors: CompiledPack) -> list[Finding]
 ```
 
-Three sub-passes over every span, in cost order:
+**Never a sequential loop over patterns, and never one big alternation over every byte.** The scan is a prefilter that finds candidate *offsets*, then a confirm step that runs one specific pattern at each. On a payload containing no secrets — the overwhelmingly common case — only the prefilter runs.
 
-**(a) Prefixed credentials** — a single alternation compiled once, because scanning 30 patterns separately over every span is what blows the budget:
+| Tier | Mechanism | Covers | Cost |
+|---|---|---|---|
+| **T1** | `pyahocorasick` automaton over **literal anchors** — `sk-ant-`, `sk-`, `ghp_`, `AKIA`, `ASIA`, `AIza`, `xox`, `rzp_live_`, `rzp_test_`, `eyJ`, `-----BEGIN`, `postgres://`, `mongodb+srv://` … | every prefixed credential class | one linear pass, no backtracking, returns candidate offsets |
+| **T2** | one small `re2` alternation over **shape classes with no literal anchor** | §6.1(b) — PAN, Aadhaar, card, IFSC, GSTIN, IBAN | one pass; these collapse to a few digit/uppercase-run shapes |
+| **T3** | the specific pattern **plus its checksum**, run only at the offsets T1/T2 returned | confirmation | k tiny matches, k usually 0 |
+
+The automaton is built once per detector pack, at load, and rebuilt on hot-swap (§10.5) — never per request.
+
+**(a) Prefixed credentials** — anchors for T1, confirm patterns for T3:
 
 | Class | Pattern (re2) | Post-check |
 |---|---|---|
-| `OPENAI_KEY` | `sk-[A-Za-z0-9]{20,}` | entropy ≥ 3.5 |
+| `ANTHROPIC_KEY` | `sk-ant-[A-Za-z0-9_\-]{20,}` | — · **we intercept Claude tooling; a user pasting their own key is the single most likely leak on this build** |
+| `OPENAI_KEY` | `sk-[A-Za-z0-9]{20,}` | entropy ≥ 3.5 · distinct from `sk-ant-` (the hyphen after `ant` excludes it) |
 | `GITHUB_TOKEN` | `gh[pousr]_[A-Za-z0-9]{36,}` | — |
 | `AWS_ACCESS_KEY` | `(AKIA\|ASIA)[0-9A-Z]{16}` | — |
 | `RAZORPAY_KEY` | `rzp_(live\|test)_[A-Za-z0-9]{14,}` | — |
@@ -634,7 +683,7 @@ Three sub-passes over every span, in cost order:
 | `GOOGLE_API_KEY` | `AIza[0-9A-Za-z_\-]{35}` | — |
 | `STRIPE_KEY` | `[sr]k_(live\|test)_[A-Za-z0-9]{20,}` | — |
 | `JWT` | `eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+` | base64url-decodes to JSON |
-| `PRIVATE_KEY` | `-----BEGIN [A-Z ]*PRIVATE KEY-----` | — |
+| `PRIVATE_KEY` | `-----BEGIN [A-Z ]*PRIVATE KEY-----` | match the BEGIN line, then **consume to the matching END line** — covers RSA, EC, OPENSSH, PKCS#8. Never regex the base64 body |
 | `DB_URI` | `(postgres(ql)?\|mysql\|mongodb(\+srv)?\|redis)://[^\s"']+:[^\s"'@]+@` | password group non-empty |
 
 **(b) Checksummed identifiers** — regex is the candidate filter, the checksum is the decision. This is what keeps false positives near zero on a 12-digit number.
@@ -651,9 +700,69 @@ Three sub-passes over every span, in cost order:
 
 **(c) High-entropy strings** — for the secrets nobody prefixed. Candidates: length ≥ 20, charset ⊆ base64/hex, no whitespace. Shannon entropy ≥ 4.0 bits/char for base64, ≥ 3.0 for hex. Guards that kill the obvious false positives: skip anything matching a known hash length with a hash-shaped context (`sha256:`), skip UUIDs, skip content inside a fenced code block whose language is `json` and whose key name is on the safe list. Emits at confidence 0.55 — deliberately inside the escalation band, because entropy alone is a hypothesis, not a finding.
 
-**Failure mode:** budget exceeded → log, continue. S0 is never skipped; it is the floor of the product.
+**Failure mode:** budget exceeded → log, continue, and record the overrun on the request. S0 is never skipped; it is the floor of the product. The 50ms watchdog (§6.0.1) is a separate, harder stop that applies to the checker as a whole.
 
-### 6.2 S1 — contextual heuristics (C4, budget 8ms)
+### 6.1c The span cache — the conversation-resend problem (C3)
+
+**Chat APIs are stateless. Every turn resends the entire conversation.** Scanning turn *n* costs O(n) spans, so a session costs **O(n²)**. A 30-turn Claude Code session with tool results in the transcript re-scans the same ~200KB twenty-nine times, unchanged. Per-request budgets stay green throughout while the session quietly degrades — per-request benchmarking is structurally blind to this.
+
+**The fix is a content-addressed finding cache**, and under the §6.0.1 envelope it is not an optimisation but a requirement.
+
+```
+key   = (tenant_id, detector_pack_version, HMAC(k_tenant, span.text))
+value = list[Finding]        ← detection results only
+```
+
+Conversation history is append-only, so `messages[0 .. n-1]` are byte-identical between turns and hit the cache. The uncached delta is the new user message plus any new tool result — precisely the text never examined before. Expected hit rate in a long session is above 90%.
+
+**Four rules, each a correctness trap if missed:**
+
+1. **Cache the detection, never the decision.** Findings are a property of the text. Actions are a property of `(actor, groups, policy version, leg, destination)` and are recomputed every request. A cached *decision* would let one actor inherit another's clearance — the exact failure the inbound leg exists to prevent.
+2. **The detector pack version is in the key.** When A4 promotes a detector and the registry hot-swaps (§10.5), every entry computed under the old pack is stale. Without the version in the key a newly promoted detector never fires on history — and the **G4 beat is precisely "the same class is caught on the next request."** Version the key or the novelty proof breaks.
+3. **The key is an HMAC under the tenant key, not a bare digest.** A raw SHA-256 of span text is a confirmation oracle: anyone holding the cache can test whether a *guessed* value was ever sent. HMAC removes that — the same construction as `vault_tokens.value_hmac` (§7.4). `tenant_id` in the key prevents cross-tenant hits.
+4. **Redis is in scope for `test_privacy_invariant`.** §19.2 dumps every table and every log line; the cache holds span-derived data, so the test reads Redis too, or the invariant has a hole from the day this ships.
+
+**What this changes in the pitch.** The claim stops being "25ms added latency" and becomes **"~4ms on the green path, and it gets cheaper as the conversation grows."** That is both a better number and a more honest one. Emit `zt_span_cache_hit_ratio` alongside the stage histograms.
+
+**Non-goals.** S3 operates on the whole finding set and recomputes over cached ∪ fresh findings each turn — pure computation, cheap. The inbound leg sees novel text every time and gets no benefit; expected, not a bug.
+
+### 6.1d The checker — green, amber, red
+
+S0–S3 are tiers of one thing, and that thing returns a verdict:
+
+```python
+CheckResult = { verdict: "green" | "amber" | "red",
+                confidence: float,
+                tier_reached: int,          # 0..3
+                findings: list[Finding],    # class + span_path only, never a value
+                risk: float,
+                degraded: str | None }
+```
+
+| Tier | Runs | Budget |
+|---|---|---|
+| 0 | span cache lookup | 0.2ms |
+| 1 | S0 deterministic, cache-miss spans only | 1.5ms |
+| 2 | S1 context, S0-unresolved spans only | 1.5ms |
+| **exit** | **green or red — the common case, ≈ 4ms total** | |
+| 3 | S2 NER + S3 composite, **amber spans only** | 25ms + 5ms |
+
+- **green** → dispatch unmodified.
+- **red** → the policy action applies.
+- **amber** → escalate to the next deterministic tier. **At the top tier amber must resolve deterministically — it may never mean "wait for the adjudicator."** A code path that awaits the escalation queue in-request is a review rejection.
+
+The top-tier amber stance is declared, not implicit:
+
+| `ZT_FAIL` | Top-tier amber resolves to |
+|---|---|
+| `closed` (prod, demo) | the finding's policy action, as though red |
+| `open` (dev) | the tenant `default` action, with a degrade header |
+
+Either way the request resolves in-budget and the case is enqueued to the blind agent (§10.2). **The escalation improves the next request; it never blocks this one.**
+
+**Why the amber band matters commercially.** Every promoted detector converts a class of ~36ms amber decisions into ~4ms green-or-red ones. `EV-NOV-03` is usually read as a falling *cost* curve; it is also a falling *latency* curve, which is the version a user feels.
+
+### 6.2 S1 — contextual heuristics (C4, budget 1.5ms, S0-unresolved spans only)
 
 Cheap, high-precision rules that work on *position* rather than content. They run after S0 and only over spans S0 did not resolve.
 
@@ -664,7 +773,7 @@ Cheap, high-precision rules that work on *position* rather than content. They ru
 
 Each rule is a data row in `seed/*.yaml`, not a Python branch, so A4 can later emit the same shape.
 
-### 6.3 S2 — entity recognition (C5, budget 25ms)
+### 6.3 S2 — entity recognition (C5, budget 25ms, **tier 3 — amber spans only**)
 
 Runs **only** on spans that are natural language and unresolved after S0/S1 — in practice about 35% of spans, which is what makes the 25ms affordable.
 
@@ -677,7 +786,7 @@ async def s2_ner(tree, findings) -> list[Finding]
 - Per-class confidence thresholds, tuned against the corpus, not guessed: `PERSON` 0.60, `ORG` 0.70, `GPE` 0.65, `DATE` 0.75.
 - **Hard 25ms timeout with fail-open.** On timeout: emit no S2 findings, set `degraded="s2_timeout"`, and surface `X-ZeroTrace-Degraded: s2_timeout` on the response. Silence about degradation is the same sin as a canned response.
 
-### 6.4 S3 — compositional re-identification scorer (C6, N2, budget 10ms)
+### 6.4 S3 — compositional re-identification scorer (C6, N2, budget 5ms, **tier 3**)
 
 The novelty core. Operates on the *finding set*, not on text, so it is pure computation.
 
@@ -715,11 +824,11 @@ composite_risk = reid × conf_factor
 
 **Thresholds.** `> 0.6` → tokenize (PROD-01 §9). `> 0.6` with zero entity-based findings → escalate to A2 regardless of confidence band: this is exactly the class no entity tool catches, so it is the class the adjudicator should be teaching us about.
 
-### 6.5 S4 — policy decision (C7, budget 2ms)
+### 6.5 S4 — policy decision (C7, budget 0.5ms)
 
 See §8 for the engine. At this stage it is a pure function of `(policy_version, actor, findings, risk, leg, destination)` → `Decision`, and it is cached: the resolved rule set per `(tenant, actor.role, actor.groups, leg)` lives in Redis with the policy version in the key, so a policy publish invalidates by construction rather than by TTL.
 
-### 6.6 S5 — redaction and token derivation (C8, budget 5ms)
+### 6.6 S5 — redaction and token derivation (C8, budget 2ms)
 
 Only runs when `action != allow`. See §7 for the derivation itself. The stage's job is planning and applying:
 
@@ -947,11 +1056,33 @@ Redis Stream `zt:escalate`, one consumer group, worker-side. Enqueue conditions 
 
 Backpressure: if the stream exceeds 10k entries, drop sampled entries first and never drop band or composite entries. Record the drop as a metric; a silent drop makes the escalation-rate curve (`EV-NOV-03`) a lie.
 
-**What is enqueued is the span text plus its class hypothesis** — this is the one place sensitive text is handled outside the request, it lives in Redis with a 1-hour TTL, and it is excluded from the ledger. Note it in the threat model rather than discovering it in review.
+**What is enqueued is a feature vector. The span text is never enqueued, and no model in this system ever sees a raw value.**
+
+```
+EscalationFeatures {
+  span_path_safe       # path with non-vocabulary segments HMAC-generalised (§5.2)
+  key_name             # last path segment, allowlist-checked
+  shape                # char-class skeleton: "ABCPZ1234C" -> "AAAAA9999A"
+  length, charset_class, shannon_entropy
+  detectors_fired      # [{id, class, confidence}]
+  detectors_near_miss  # prefilter anchored, confirm failed  <- highest-signal field
+  checksum_results     # {luhn: false, verhoeff: null}
+  neighbour_classes    # classes found in sibling spans
+  origin, leg
+}
+```
+
+**The guarantee is structural, not procedural: the schema has no free-text field.** There is no `text: str` for anyone to populate at T+17 under deadline pressure. It is backed by `test_escalation_blindness` (§19.4), which serialises the escalation payload for every corpus case and asserts no `sensitive_literals` value appears in it.
+
+Entries live in Redis with a 1-hour TTL and are excluded from the ledger.
+
+**This supersedes the earlier design in which span text was enqueued.** That version carved out an explicit exception to §7 — "the one place sensitive text is handled outside the request" — and told us to record it in the threat model. The exception is now closed, which is a materially stronger claim: the pitch line is no longer only *"seize the database and the sensitive data is not in it"* but *"…and our own AI never saw it either."*
+
+**What it costs, honestly.** Blindness is not free, and the cost is uneven. Free-text entity adjudication degrades — *"is `Aaaaa Aaaaaa` a person's name?"* is barely answerable from shape. Novel structured identifiers lose essentially nothing: `ACM-4417-KP` → shape `AAA-9999-AA`, `key_name: employee_id`, entropy 3.1, `detectors_near_miss: []` is enough to synthesise the right detector. The two are complementary rather than overlapping — free-text entities are S2's job and run locally in-budget, while novel structured formats are exactly what NER cannot catch and what A4 exists for. **The constraint bites hardest where the model was needed least.** Say that on stage rather than claiming it is free.
 
 ### 10.3 A2 Adjudicator (C10)
 
-Prompt in `intel/prompts/adjudicator.md`, versioned. Structured output enforced by JSON schema:
+**Input is `EscalationFeatures` (§10.2) — never span text.** Prompt in `intel/prompts/adjudicator.md`, versioned. Structured output enforced by JSON schema:
 
 ```json
 {
@@ -964,7 +1095,7 @@ Prompt in `intel/prompts/adjudicator.md`, versioned. Structured output enforced 
 }
 ```
 
-Tools: `get_tenant_policy`, `get_similar_past_decisions` (vector-free: class + span-path prefix lookup over `findings`), `classify_span`. It writes to `findings.adjudicator_verdict` and, when `generalisable: true`, enqueues A4.
+Tools: `get_tenant_policy`, `get_similar_past_decisions` (vector-free: class + span-path prefix lookup over `findings`), `classify_shape`. **No tool returns span text**; a tool that did would reopen the §10.2 hole through the back door, and tool results are checked by `test_escalation_blindness` for exactly that reason. It writes to `findings.adjudicator_verdict` and, when `generalisable: true`, enqueues A4.
 
 The critical prompt constraint: **A2 describes patterns in words and never writes the regex.** Separating "what is this?" from "how do we match it deterministically?" is what makes A4's output reviewable and what keeps A2 from hallucinating a regex that happens to match its one example.
 
@@ -1314,7 +1445,10 @@ coverage               target 100% on the demo network
 | Property | `denormalise(normalise(x)) == x`; derived tokens pass their class validator; edits apply right-to-left | every commit |
 | Integration | full request through the gateway against a stubbed upstream | every commit |
 | Streaming | chunk-boundary splits at every offset for a 40-char secret | every commit |
-| Latency | `pytest-benchmark` asserts each stage's budget from `.env` | pre-gate |
+| Latency | `pytest-benchmark` asserts each stage's budget from `.env`, **on a real long-transcript payload**; green path p95 < 10ms | pre-gate |
+| Watchdog | checker ceiling fires at 50ms → declared amber stance, degrade header, ledger record | pre-gate |
+| Cache | 10-turn seeded conversation → >90% hit ratio from turn 2; a pack-version bump invalidates and a newly promoted detector fires on cached history | every commit |
+| Blindness | `test_escalation_blindness` — no sensitive literal in any serialised escalation payload or tool result | every commit |
 | Continuity | mint a token → kill the process → resume on a different channel → same token derives | G4, G6 |
 | Chaos | Redis down, Postgres down, Hive timing out → correct degrade headers, no crash, no silent pass | pre-freeze |
 
@@ -1323,8 +1457,10 @@ coverage               target 100% on the demo network
 After a full corpus run:
 
 1. Dump every row of every table.
-2. Concatenate every log line written during the run.
-3. Read the evidence pack.
+2. **Dump every Redis key and value** — the span cache and the escalation queue both hold span-derived data.
+3. Concatenate every log line written during the run.
+4. **Serialise every escalation payload and every agent tool result.**
+5. Read the evidence pack.
 4. Assert that **no** `sensitive_literals` value from any case appears in any of them.
 
 This test is the mechanical proof of PROD-01 §7 and of the pitch line about a database seizure. If it is red, the product claim is false, and nothing else matters that hour.
@@ -1372,6 +1508,10 @@ The chart deploys nothing that phones home by default. `telemetry.endpoint` empt
 
 ```
 zt_stage_duration_seconds{stage}          histogram, per stage, both legs
+zt_checker_tier_duration_seconds{tier}    histogram, tiers 0-3
+zt_checker_verdict_total{verdict}         counter          → amber band width over time
+zt_checker_timeout_total                  counter          → 50ms watchdog fires
+zt_span_cache_hit_ratio                   gauge            → the latency story
 zt_request_duration_seconds{leg}          histogram
 zt_findings_total{class,action,leg}       counter
 zt_escalations_total{reason}              counter          → EV-NOV-03

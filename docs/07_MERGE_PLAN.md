@@ -23,10 +23,13 @@ The merge is blocked, not attempted, if any of these is false:
 
 - [ ] **A1–A2 green.** Track A resolves an actor, decides against a versioned policy, enforces
       the action lattice, and appends `policy.updated` to a verifiable chain
-- [ ] **B1–B2 green.** Track B round-trips payloads byte-for-byte, detects the credential and
-      PII classes, redacts, passes `verify_dispatch`, and appends `request.decided`
+- [ ] **B1–B3 green.** Track B round-trips payloads byte-for-byte **by splicing, not
+      re-serialising** (SKEL-01 §E.6), detects the credential and PII classes, redacts, passes
+      `verify_dispatch`, holds the cold/warm latency numbers, and appends `request.decided`
 - [ ] **`contracts/` unchanged since it was locked.** `git log --oneline contracts/` shows only
       the initial commit. A commit here means the merge starts with a conversation, not code
+- [ ] **VOCAB-01 honoured by both sides** — Track B emits no class outside it, Track A
+      references none outside it, and both hard-error rather than warn
 - [ ] **Both `make verify` targets pass** — each chain independently intact
 - [ ] **`test_privacy_invariant` green on Track B alone**
 - [ ] **Track B's real captured Claude Code payloads are committed** as fixtures. Merging
@@ -56,7 +59,7 @@ Exit: one request traverses gateway → real policy service → upstream and bac
 
 The integration test from SKEL-01 M2, which cannot pass under either stub:
 
-> Two actors, one in `clinical_staff` and one not. Same request. Two different responses.
+> Two actors, one in `security` and one not. Same request. Two different responses.
 > Both decisions in the ledger with rule index and policy version.
 
 It needs **real findings** from Track B and **real group resolution** from Track A. If it
@@ -74,7 +77,7 @@ Then re-run Step 2's test **unchanged**. It must pass identically. If swapping t
 changes behaviour, the interface was leaking transport semantics — most likely error handling
 — and that is a bug to fix now, not to route around.
 
-Exit: S4 measured under the 2ms budget (CODE-01 §6.5), Step 2's test still green.
+Exit: S4 measured under the 0.5ms budget (CODE-01 §6.5, re-allocated), Step 2's test still green.
 
 ### Step 4 — Decide the schema question
 
@@ -101,13 +104,24 @@ hygiene, not function.
 
 ### Step 6 — Reconcile the ledgers
 
-**Recommendation: keep two chains.** An administrative-acts chain in `ctl` and a decisions
-chain in `dp`, each independently hash-verified, is a defensible end state and arguably better
-separation than one chain carrying both.
+**Recommendation: keep two chains — but only with cross-anchoring, which is not optional.**
+
+Separate chains each prove their own entries were not altered, and **neither proves anything
+about the other.** A `dp` decision says *"I applied policy version 7"*; what version 7 actually
+contained lives in `ctl`. Change v7 in `ctl` and the citing decision in `dp` consistently, and
+both chains still verify perfectly. The link between what the rule said and what we did is
+exactly the link an auditor cares about, and it is the one thing two chains do not cover.
+
+So Step 6 has two mandatory parts before the recommendation holds:
+
+- **Bind decisions to policy content.** `request.decided` records the *hash of the policy
+  version row*, not just `policy_version: 7`.
+- **Cross-anchor.** Every N records, and always before an evidence export, write `ctl`'s head
+  hash into `dp` and `dp`'s into `ctl`.
 
 What must be true either way:
 
-- `make verify` checks **both** chains and fails if either is broken
+- `make verify` checks **both** chains, **the cross-anchors**, and the policy-hash bindings
 - `scripts/verify_ledger.py` takes a `--chain {ctl,dp}` argument
 - The evidence pack contains both
 - The console's decision view can display an event from either
@@ -161,7 +175,9 @@ discovered.
       streams, Redis included
 - [ ] S0–S5 all within their `.env` budgets, measured on a real long-transcript payload
 - [ ] A planted `sk-ant-*` key in a real `claude` CLI prompt is blocked, with the ledger id in
-      the error body
+      the attributed ZeroTrace message (SKEL-01 §E.7) — the CLI keeps working
+- [ ] Prompt-cache test green: the same conversation twice reports an upstream cache hit on
+      run 2 (SKEL-01 §E.2)
 - [ ] `make dev` brings up the merged system in one command from a clean clone
 - [ ] `contracts/` is either still unchanged, or every change is recorded here with its reason
 - [ ] Schema decision (Step 4) and ledger decision (Step 6) both written down above

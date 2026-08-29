@@ -36,7 +36,11 @@ Claude Code / Claude sidebar
    → ZeroTrace gateway
        → identity.resolve()      → Actor (with groups)
        → normalise()             → SpanTree
-       → S0 deterministic scan   → Findings
+       → LOOP 1 — the checker, <10ms p95, 50ms hard ceiling (Part D)
+            tier 0  span cache lookup          ─┐
+            tier 1  S0 deterministic            ├─ green / red  → exit ≈ 4ms
+            tier 2  S1 context                 ─┘
+            tier 3  S2 NER + S3 composite       ── amber only   → exit ≈ 36ms
        → policy.decide()         → Decision  (group-aware, both legs)
        → S5 redact               → sanitised body
        → verify_dispatch()       → proof the original bytes are gone
@@ -44,7 +48,14 @@ Claude Code / Claude sidebar
    → inbound scan against the actor's clearance groups
    → response + X-ZeroTrace-* headers
    → ledger.append()
+   → LOOP 2 — blind agent, async, post-response, NEVER sees the prompt (Part D)
+        EscalationFeatures → LLM → candidate detector → A5 gates → promotion
+        └─ shrinks the amber band, so the next request exits Loop 1 in ≈4ms
 ```
+
+**The checker is synchronous and never calls a model. The agent calls a model and never
+runs synchronously.** That separation is what makes both the 10ms budget and the blind-LLM
+requirement satisfiable at the same time — see §D.1.
 
 Everything in that diagram is required for the skeleton to count as done. Nothing else is.
 
@@ -54,9 +65,11 @@ Everything in that diagram is required for the skeleton to count as done. Nothin
 |---|---|---|---|
 | Hive/ApplyBee is the only model provider (Rule 01) | Upstream is the **real** `api.anthropic.com` / `api.openai.com` | We are intercepting the user's actual tools; they talk to real providers | Never for the data plane; Rule 01 binds the *agents*, which the skeleton has none of |
 | `google-re2` mandatory | `re2` still mandatory | A4 doesn't exist yet, but switching regex engines later is a rewrite of every detector | — |
-| spaCy NER at S2 | S2 is a no-op stub returning `[]` | 25ms budget and a model download buy nothing until S0/S1 are proven | M7 |
+| spaCy NER at S2 | S2 is a no-op stub returning `[]` | 25ms budget and a model download buy nothing until S0/S1 are proven | **M9** — and this means **the skeleton has two tiers, not four** (§D.1) |
 | OIDC + SCIM | Seeded static users + groups, one dev login | Group *semantics* are what Part A proves; the sync source is interchangeable | M8 |
-| Streaming sliding window (§9.2) | Non-streaming only; streamed requests pass through **unscanned with `X-ZeroTrace-Degraded: stream_unscanned`** | Honest degradation beats a half-correct window. Claude Code streams by default, so this is loud on day one and must not stay | M6 — highest-priority follow-on |
+| `ZT_BUDGET_*` — S0=3, S1=8, S2=25, S3=10 (§3.2) | **Re-allocated** — green path ≈3.7ms, amber ≈36ms | The originals bust both the 10ms target and the 50ms ceiling (§D.2) | Never — CODE-01 §3.2 must be edited to match |
+| Escalation enqueues **span text** (§10.2) | **Feature vector only** — no free-text field exists in the schema | The LLM must never see the prompt. This closes CODE-01's one declared privacy exception (§D.5) | Never — CODE-01 §10.2 must be edited to match |
+| Streaming sliding window (§9.2) | **Outbound is always fully scanned** — the request body is complete whether or not the response streams. Only the **inbound leg** degrades, with `X-ZeroTrace-Degraded: inbound_stream_unscanned` | The earlier wording conflated the two legs and implied outbound scanning was off for streamed calls. It never needed to be — **and this means the M5 demo does not need a non-streaming call** | M6 |
 
 That last row is the skeleton's single biggest honesty risk. It is declared in a header,
 in the ledger, and in the README. It is not quietly ignored.
@@ -97,11 +110,28 @@ It contains exactly three types and one call:
 
 ```
 Actor    { id, tenant_id, role, groups[] }
-Finding  { span_path, entity_class, confidence, stage, leg }     # never span text
+Finding  { span_path, entity_class: EntityClass, family: Family,   # never span text
+           confidence, stage, leg }
 Decision { action, rule_index, policy_version, exception_applied }
 
 POST /decide  { actor, findings[], risk, leg, destination } -> Decision
 ```
+
+**`entity_class` is a closed enum, not a string — this is the fourth frozen artifact and it
+matters more than the three types.** Track B emits class names from detectors; Track A writes
+rules against them. If Track B emits `ANTHROPIC_KEY` and Track A's rule says `API_KEY`,
+nothing matches and the request sails through clean — no error, no log line, no failing test.
+That is a silent hole exactly where the guarantee is meant to be, and three frozen dataclasses
+do not prevent it while the coupling field is free text.
+
+The vocabulary lives in **VOCAB-01 (`docs/08_ENTITY_CLASSES.md`)** and
+`contracts/entity_classes.py`. An unknown class is a **hard error on both sides** — detector
+registration fails, policy publish fails.
+
+`family` is what makes this survivable: **Track A writes rules against families, not classes.**
+Track B adds `ANTHROPIC_KEY` to family `CREDENTIAL`, Track A's existing
+`family: CREDENTIAL → block` rule covers it immediately, and the two tracks never need to
+speak. Adding a class stays cheap; only renaming one is a two-track stop.
 
 **Track B calls Track A over HTTP during development.** That is what makes the tracks
 genuinely exclusive rather than nominally so — the seam is a JSON payload, not a Python
@@ -131,9 +161,25 @@ Track A appends `policy.updated`, `exception.approved`, `licence.changed` to a c
 `ctl`. Track B appends `request.decided`, `detector.promoted` to a chain in `dp`. Each is
 independently hash-verified; `make verify` checks both.
 
-This is not a compromise made for the split. An administrative-acts chain and a
-decisions chain, separately verifiable, is a defensible end state — MERGE-01 records the
-decision to keep them separate rather than treating unification as inevitable.
+**Two chains prove less than one unless they are cross-anchored.** Each chain proves its
+own entries were not altered. Neither proves anything about the other — and a decision in `dp`
+says *"I applied policy version 7"* while the record of what version 7 contained lives in
+`ctl`. Change v7 in `ctl` and the matching decision in `dp` consistently, and **both chains
+still verify perfectly.** The link between what the rule said and what we did is precisely the
+link an auditor cares about, and it is the one thing separate chains do not cover.
+
+Two fixes, both cheap, both required before this counts as a defensible end state:
+
+1. **Bind the decision to the policy content, not its number.** `request.decided` records the
+   *hash of the policy version row* it applied, not just `policy_version: 7`. Tampering with
+   v7 now breaks every decision that cites it.
+2. **Cross-anchor the chains.** Every N records (and at minimum once per evidence export),
+   write `ctl`'s current head hash into `dp`'s chain and `dp`'s into `ctl`'s. A few lines, and
+   the two chains become one tamper-evident story.
+
+`make verify` checks both chains **and** the cross-anchors. MERGE-01 §Step 6 records the
+decision to keep the chains separate; that decision is only defensible with these two
+properties in place.
 
 #### Transport at merge
 
@@ -164,7 +210,9 @@ Four concepts, no more:
 
 - **Tenant** — the company, or a business unit under it (`parent_id`).
 - **Actor** — a human or a workload. Carries `role` and `groups[]`.
-- **Group** — a named control group (`clinical_staff`, `finance`, `eng_platform`, `contractors`).
+- **Group** — a named control group (`security`, `eng_platform`, `eng_core`, `support`, `hr`,
+  `finance`, `legal`, `contractors`). The worked example is a **tech company** throughout —
+  see VOCAB-01 §3.6.
   Groups are *data*, not enum values in code.
 - **Entitlement** — the join between a group and what it may see. Expressed as **policy
   rules**, not as a fifth table.
@@ -209,7 +257,12 @@ One YAML per tenant, three rules, enough to demonstrate the whole idea:
 
 - outbound: `class: [API_KEY, PRIVATE_KEY, JWT, DB_URI]` → `block`
 - outbound: `class: [PAN, AADHAAR, EMAIL, PHONE, CREDIT_CARD]` → `tokenize`
-- inbound: `class: [MEDICAL, HR_RECORD]` → `mask`, `unless: {actor_group: [clinical_staff]}`
+- inbound: `class: [SECURITY_FINDING, INCIDENT_REPORT]` → `mask`,
+  `unless: {actor_group: [security, eng_platform]}`
+
+Class names and families come from **VOCAB-01** and are validated at publish. Rules match on
+`family` wherever the action is uniform; inbound clearance matches on `class` because each
+class clears to a different group (VOCAB-01 §4).
 
 The action lattice (`allow < warn < tokenize < mask < block`) and the **BU-may-only-raise**
 rule ship in the skeleton. It is eight lines of code (CODE-01 §8.2) and it is most of what
@@ -217,7 +270,7 @@ rule ship in the skeleton. It is eight lines of code (CODE-01 §8.2) and it is m
 
 ### A.5 Part A is done when
 
-A single test seeds two actors — one in `clinical_staff`, one not — sends the *same*
+A single test seeds two actors — one in `security`, one not — sends the *same*
 request, and gets two different responses, with the decision, the rule index and the policy
 version recorded in the ledger for both.
 
@@ -503,6 +556,469 @@ config of neither tool containing anything a normal user would call a modificati
 
 ---
 
+## PART D — The checker and the blind agent
+
+**Requirement (T-review 2):** *the check must be <10ms typical, 50ms at maximum. An agent
+green-lights the prompt based on confidence; if confidence is average the LLM suggests more
+tasks to run — and the LLM never sees the original prompt.*
+
+Three requirements, and they interact. Taken literally and together they are unsatisfiable,
+so §D.1 resolves them before anything else is specified.
+
+### D.1 The contradiction, and how it resolves
+
+**An LLM call cannot live inside a 50ms budget.** A Hive/Anthropic round trip is 300–2000ms.
+There is no prompt, no model and no cache that changes that by an order of magnitude. CODE-01
+§6.0 already states the consequence: "the moment somebody awaits an LLM call in this
+function, p95 becomes 800ms and the product's central argument is gone."
+
+So the green-light decision is made **without the LLM, always**. The resolution is two loops
+running at different timescales:
+
+| | **Loop 1 — the checker** | **Loop 2 — the blind agent** |
+|---|---|---|
+| Runs | synchronously, in-request | asynchronously, after the response is already sent |
+| Budget | **<10ms typical, 50ms hard ceiling** | seconds — irrelevant to the user |
+| Decides | green / amber / red for **this** request | what to check on **future** requests |
+| Uses an LLM | never | yes |
+| Sees the prompt | yes — it is the gateway | **never** — features only (§D.5) |
+
+"If confidence is average, do more tasks" therefore means **two different things** depending
+on which loop is asking, and both are real:
+
+- **In Loop 1 (this request):** amber escalates through *deterministic* tiers — NER, then
+  compositional scoring. More work, still no LLM, still inside 50ms. This is what the 50ms
+  ceiling is *for*; the 10ms figure is the green path, not the worst case.
+- **In Loop 2 (future requests):** amber ships a feature vector to the LLM, which proposes
+  additional deterministic checks. Those get validated and promoted, so the next occurrence
+  of that shape resolves in Loop 1 — green or red, in-budget, no LLM.
+
+The product payoff is that **the amber band shrinks over time.** Every promotion converts a
+class of 35ms amber decisions into 4ms green-or-red ones. That is the same falling-escalation
+curve as `EV-NOV-03`, now expressed as a latency improvement the user can feel rather than a
+cost metric on a chart.
+
+### D.2 The budgets in CODE-01 do not meet this requirement
+
+Stated plainly, because it is a real finding and not a rounding argument:
+
+| Path | CODE-01 §3.2 budgets | Requirement | Verdict |
+|---|---|---|---|
+| Green path (S0+S1 only) | 3 + 8 = **11ms** | <10ms | **busts it before policy or redaction even runs** |
+| Full outbound (S0→S5) | 3+8+25+10+2+5 = **53ms** | ≤50ms | **busts the ceiling** |
+| Both legs (S0→S6) | **61ms** | ≤50ms | **busts it badly** |
+
+The existing numbers were allocated against a ~25ms informal target and were never reconciled
+with a hard ceiling. **`ZT_BUDGET_*` in CODE-01 §3.2 must be re-allocated.** Proposed:
+
+| Stage | Old | New | Runs on |
+|---|---|---|---|
+| Cache lookup | — | **0.2** | every span |
+| S0 deterministic | 3 | **1.5** | cache-miss spans only |
+| S1 context | 8 | **1.5** | S0-unresolved spans only |
+| S4 policy | 2 | **0.5** | resolved set (Redis-cached rules) |
+| S5 redact | 5 | **2.0** | only when action ≠ allow |
+| `verify_dispatch` | — | **0.5** | only when a redaction was planned |
+| **Green-path total** | **11+** | **≈ 3.7ms** | ✅ |
+| **Red-path total** | | **≈ 6.2ms** | ✅ |
+| S2 NER *(tier 3)* | 25 | **25** | amber spans only |
+| S3 composite *(tier 3)* | 10 | **5** | amber finding sets only |
+| **Amber-path total** | **53** | **≈ 36ms** | ✅ under the 50ms ceiling |
+
+**Two things make this achievable, and neither is optional any more.** The span cache (§B.5)
+and the Aho-Corasick prefilter (§B.4) were written up as performance improvements. Under a
+10ms budget they become load-bearing: a 200KB agentic payload cannot be scanned in 1.5ms
+from cold, and does not have to be, because on turn 30 of a conversation ~95% of spans are
+cache hits and S0 runs only on the delta. **Without the cache this requirement is not
+reachable** — that is the strongest argument yet for building it in the skeleton rather than
+deferring it.
+
+### D.2.1 Cold start — the number a blended figure hides
+
+**The 10ms figure is a warm-cache number and must never be quoted alone.** It holds from turn
+three, when almost every span has been seen before. It does not hold on turn one.
+
+Turn one of a Claude Code session is the worst case in the entire product: a large system
+prompt, `CLAUDE.md`, and file context — all of it uncached, all of it scanned cold. 1.5ms of
+S0 over 200KB is not achievable from cold and was never meant to be; that budget assumes the
+cache is already doing its job. **So the number we would quote is measured on the easy case,
+while every user's very first request — their first impression — misses it.**
+
+**Publish two numbers, both measured:**
+
+| Path | What it is | Target |
+|---|---|---|
+| **Cold** (turn 1) | full transcript, 0% cache hit | **≤ 50ms**, bounded by `ZT_SCAN_MAX_BYTES` |
+| **Warm** (turn 3+) | append-only delta, >90% hit | **p95 < 10ms** |
+
+*"About 30ms on the first message, under 5ms from the third onward"* is honest, still an
+excellent number, and cannot be taken apart. One blended figure can.
+
+The risk register previously recorded that 10ms was unreachable without the cache and offered,
+in effect, "admit it" as the mitigation. Admitting something is not a mitigation. **Two
+measured numbers is.** And because the cold path is bounded by `ZT_SCAN_MAX_BYTES` (§D.3) it is
+a real ceiling rather than a hope.
+
+### D.3 How the budget is measured and enforced
+
+Ambiguity here makes the number meaningless, so it is pinned:
+
+- **Added latency** = gateway receives the request → upstream dispatch begins, **plus** the
+  inbound scan. Upstream time is excluded; it is not ours.
+- **Two numbers, always published together: cold and warm** (§D.2.1). A single blended
+  figure is the one a reviewer takes apart.
+- **50ms is a hard p100 ceiling**, not a percentile.
+
+**How the ceiling is actually enforced — and why the obvious design does not work.**
+
+The scan is CPU-bound Python. **An asyncio timer cannot interrupt it.** `asyncio.wait_for`
+only cancels at an `await`, and a scan loop never awaits — so if the entropy pass hits a 200KB
+base64 blob, the watchdog does not fire at 50ms, it fires whenever the scan finishes, possibly
+at 300ms. The guard does not run until the thing it guards has already completed. Worse, while
+that scan runs on the event loop, **every other request in the process is frozen behind it** —
+and nothing in this plan mentioned an executor, a thread or any concurrency primitive.
+
+Three mechanisms, in order of importance:
+
+1. **Run the tiers in a worker thread** (`loop.run_in_executor`). This is what makes the other
+   two possible: the event loop stays free, so the timer fires on time and one large payload
+   stops blocking every other user. `pyahocorasick` and `re2` are C extensions that release
+   the GIL, so this also buys real parallelism for the scanning itself.
+2. **Bound the work up front, so the timeout is a backstop rather than the control.** Cap
+   bytes scanned per request and per span (`ZT_SCAN_MAX_BYTES`); a span above the cap is
+   chunked, and a request above it degrades explicitly. **A deterministic bound is worth more
+   than a timeout** — it fails the same way every time.
+3. **Cooperative checkpoints.** A Python thread cannot be killed either, so cancellation is a
+   flag checked between tiers *and* at chunk boundaries inside the entropy pass. On timeout the
+   awaiting coroutine stops waiting and applies the declared amber stance; the orphaned thread
+   observes the flag at its next checkpoint and exits.
+
+Without (1) the ceiling in §D.3 is a comment, not a control.
+
+- On watchdog fire: `X-ZeroTrace-Degraded: checker_timeout`, a ledger record, and
+  `zt_checker_timeout_total` incremented. Silence about degradation is the same sin as a
+  canned response.
+
+### D.4 The checker's output, and what amber means
+
+```
+CheckResult { verdict: green | amber | red
+              confidence: float
+              tier_reached: 0..3
+              latency_ms: float
+              findings: [Finding] }        # class + span_path only, never a value
+```
+
+- **green** → dispatch unmodified.
+- **red** → the policy action applies: block, mask or tokenize.
+- **amber** → escalate to the next deterministic tier. **At the top tier, amber must resolve
+  deterministically — it may never mean "wait for the LLM."**
+
+The amber stance is declared per tenant, not implicit:
+
+| `ZT_FAIL` | Top-tier amber resolves to |
+|---|---|
+| `closed` (prod, demo) | the finding's policy action, as though red |
+| `open` (dev) | the tenant `default` action, with a degrade header |
+
+Both paths append to the ledger, and both enqueue to Loop 2 regardless — the request is
+resolved either way, and the escalation is about improving the *next* one.
+
+### D.4.1 The skeleton has two tiers, not four
+
+Tier 3 is S2 NER plus S3 composite, and **both are cut from the skeleton** (§1.1, milestone
+M9). So in the version actually being built, amber has nowhere to escalate to. It falls
+straight to the §D.4 stance, and under `ZT_FAIL=closed` — the declared demo setting — that
+means **treated as red**.
+
+**Until M9, amber is a slower way of saying red.** Say it in those words rather than presenting
+a four-tier design in which one tier is a stub returning `[]`.
+
+Two things to hold on to:
+
+- **The checker still returns amber and still enqueues to Loop 2.** The escalation path is real
+  from day one even though the deterministic escalation is not — which is what makes M9 a
+  configuration change rather than a rewrite.
+- **The cheap tier 3 to pull forward is a gazetteer, not spaCy.** VOCAB-01 §3.6 already runs
+  keyword gazetteers at tier 2; extending the same mechanism to a name list gives `PERSON` a
+  deterministic, in-budget home with no model download. If tier 3 is wanted in the skeleton,
+  that is the version to build.
+
+In practice the fallback rarely fires, because `HIGH_ENTROPY_STRING` is the only class that
+routinely lands amber and VOCAB-01 §3.7 pins it to `warn`. Without that pin, every git SHA in a
+coding payload would take the red path.
+
+### D.5 The blind escalation contract — the LLM never sees the prompt
+
+**This directly contradicts CODE-01 §10.2**, which currently reads: *"what is enqueued is the
+span text plus its class hypothesis — this is the one place sensitive text is handled outside
+the request."* That sentence must be deleted and the exception with it.
+
+What gets enqueued instead is a typed feature vector:
+
+```
+EscalationFeatures {
+  span_path_safe       # path with unsafe segments generalised (§D.6)
+  key_name             # last path segment, allowlist-checked
+  shape                # char-class skeleton: "ABCPZ1234C" -> "AAAAA9999A"
+  length, charset_class, shannon_entropy
+  detectors_fired      # [{id, class, confidence}]
+  detectors_near_miss  # prefilter hit, confirm failed  <- the highest-signal field
+  checksum_results     # {luhn: false, verhoeff: null}
+  neighbour_classes    # classes found in sibling spans
+  origin, leg
+}
+```
+
+**The enforcement is structural, not procedural: the schema has no free-text field.** There is
+no `text: str` for anyone to populate under deadline pressure. Backed by a test that
+serialises the escalation payload for every corpus case and asserts no `sensitive_literals`
+value appears in it — the same mechanism as `test_privacy_invariant`, pointed at the queue.
+
+**What comes back** is a proposal, never a decision:
+
+```
+{ verdict_hint: sensitive | not_sensitive | unknown,
+  additional_checks: [{kind, target_span_path, rationale}],
+  candidate_detector: <DSL document> | null,
+  confidence: float }
+```
+
+Nothing here takes effect directly. `candidate_detector` runs the full A5 promotion gates
+(CODE-01 §10.5) before it can fire on live traffic, and `additional_checks` are cheap
+deterministic probes queued for the next request, not instructions.
+
+**Why this is a strengthening, not a compromise.** CODE-01 could not claim the privacy
+invariant held at the LLM boundary — §10.2 carved out an explicit exception and told us to
+note it in the threat model. Removing raw text closes that hole.
+
+**State the claim precisely, because the loose version does not survive a careful question.**
+`shape` is a positional transform of the value: `ABCPZ1234C` → `AAAAA9999A`. Combined with
+`key_name`, `length`, `charset_class` and `entropy` it is a **format-level fingerprint**, not
+an abstraction. For structured data it is many-to-one and carries essentially no individual
+information — every PAN produces the identical feature vector — but that is a property of the
+class, not a guarantee, and for long free-text spans length alone is mildly distinguishing.
+
+So the claim is **"no verbatim value ever leaves the boundary"**, which is exactly true and
+provable by `test_escalation_blindness`. It is *not* "our AI never saw it" — that is the
+version a judge takes apart, and it is not worth the extra half-sentence of swagger.
+
+### D.6 The span_path leak vector
+
+`span_path` is described in CODE-01 §5.2 as "safe to log." **It is not always.** A real path
+can read:
+
+```
+messages[2].tool_result.patients.rajesh_kumar.diagnosis
+```
+
+The path itself carries a name. This matters more once paths go to an external model, but it
+is already a bug in the ledger and in the logs today.
+
+**Mitigation:** numeric indices and segments in a known-safe schema vocabulary (`messages`,
+`content`, `tool_result`, `customer`, `input`…) pass through. Any other identifier segment
+becomes a stable per-tenant HMAC stub — `services.⟨seg_7f2⟩.owner_email` — which keeps the path
+groupable and diffable without carrying the identifier.
+
+**Generalise at write-out only — never inside the span tree.** Redaction needs the *real* path
+to locate the span it is replacing; a generalised path in the tree means `tree.replace()`
+cannot find its target, and the failure mode is a payload that looks almost right. `pathsafe()`
+is applied at exactly four boundaries — writing a `Finding`, writing the ledger, emitting a log
+line, and enqueuing to the escalation queue — and nowhere else. The tree keeps the truth.
+
+This applies everywhere paths are written: findings, ledger, logs, console, and the escalation
+queue. Raise it against CODE-01 §5.2, which currently states the unqualified claim.
+
+### D.7 What blindness costs, honestly
+
+It is not free, and the cost is uneven:
+
+- **Free-text PII — real recall loss.** "Is `Aaaaa Aaaaaa` a person's name?" is barely
+  answerable from shape. The LLM gets meaningfully worse at adjudicating free-text entities.
+- **Novel structured identifiers — essentially no loss.** `ACM-4417-KP` → shape `AAA-9999-AA`,
+  `key_name: employee_id`, `entropy: 3.1`, `detectors_near_miss: []` is enough to synthesise
+  the correct detector. Shape *is* the signal for this class.
+
+The two halves are complementary rather than overlapping: free-text entities are S2 NER's job
+and are handled deterministically in-budget, while novel structured identifiers are precisely
+what NER cannot catch and what A4 exists for. **The constraint bites hardest where we needed
+the LLM least.**
+
+The honest statement for the demo: *the adjudicator is strong at learning new formats and weak
+at judging names — which is why names are handled by a model that runs locally and never leaves
+the boundary. No verbatim value is sent to any model, ours or anyone's.*
+
+### D.8 Part D is done when
+
+- The green path measures **p95 < 10ms** on a real long-transcript payload, not a synthetic one
+- The watchdog fires at 50ms and the declared amber stance applies, with a degrade header
+- A seeded amber case escalates to tier 3, resolves deterministically, and is enqueued
+- `test_escalation_blindness` — no `sensitive_literals` value appears in any serialised
+  escalation payload across the full corpus
+- `EscalationFeatures` has no free-text field, and a test asserts the schema shape
+- Unsafe `span_path` segments are HMAC-generalised in findings, ledger, logs and queue
+
+---
+
+## PART E — Carried-over corrections
+
+Ten findings raised against earlier drafts and not yet reflected in the plan. Several are
+one-line edits; three change the architecture. Grouped by what they threaten.
+
+### E.1 Tokenised values get written into the user's source files
+
+**The single most likely way this product ruins someone's day.** Claude Code applies model
+output to disk. Tokenise a PII span on the way out, and the model reasons about
+`⟨PERSON_a41⟩` and writes that literal string into a source file. Redaction is one-way by
+design, so nothing puts the real value back. We would be silently corrupting a repository.
+
+**Fix: `tokenize` is not an available action on channels whose output lands in a durable
+artifact.** For `cli` and `mcp` the substitute is `block` — refuse, and say why. Specified in
+**VOCAB-01 §6**, which is the authority; the generalisation is that a substituted value is
+only safe where the output is read by a human and discarded.
+
+A refusal the user sees and acts on beats a corruption they find in code review three days
+later.
+
+### E.2 Anthropic's prompt cache breaks — a ~10× cost increase with an invisible cause
+
+Claude Code relies on prompt caching, marking `cache_control` breakpoints so the stable prefix
+of a long conversation is not re-billed each turn. **A gateway that rewrites the prefix
+invalidates the cache on every turn**, and the user sees their bill multiply with no visible
+cause and nothing to attribute it to. Neither CODE-01 nor this plan mentioned `cache_control`
+anywhere.
+
+The good news is that the property we need is one we already have:
+
+1. **Redaction is deterministic.** The same value under the same scope derives the same token
+   (CODE-01 §7.1). So turn *n*'s redaction of the shared history is byte-identical to turn
+   *n−1*'s, and the redacted prefix is as stable as the original was. **The cache survives —
+   but only if the derivation is stable, which makes `scope_key` (§E.3) a billing correctness
+   issue, not just a privacy one.**
+2. **`cache_control` markers must survive normalise → denormalise untouched**, at their
+   original positions. Byte-splicing (§E.6) gives this for free; full re-serialisation does
+   not.
+3. **Do not insert or remove message blocks.** Redaction changes bytes *within* a span; it
+   must never change the block structure a breakpoint refers to.
+
+**Test:** send the same conversation twice through the gateway and assert the upstream
+response reports a cache hit on the second. Without that test this regresses silently, which
+is exactly how it would reach a user.
+
+### E.3 `scope_key` is undefined for clients that send no session id
+
+`scope_key` defaults to the session id (CODE-01 §7.1). **Claude Code does not send one.** The
+two obvious fallbacks are both wrong:
+
+- **Per-request** → the same person gets a different codename every turn. The model loses
+  referential stability, the answers degrade, *and* the prompt cache breaks (§E.2).
+- **Per-actor, forever** → the codename becomes a permanent cross-conversation tracking tag
+  for a real person. That is the opposite of the product.
+
+**Fix, in order of preference:**
+
+1. **The interception layer mints it.** The CLI wrapper generates a session id at launch and
+   injects `X-ZeroTrace-Session`; the browser extension uses a per-tab id. Correct scope,
+   trivially implemented, and it is our own code on both paths.
+2. **Fallback — conversation-prefix hash.** `HMAC(k_tenant, canonical(system_prompt + first
+   user message))`. Stable across the turns of one conversation, different across
+   conversations, derivable with no client cooperation.
+
+`ZT_TOKEN_SCOPE=tenant` remains available for cross-session agent fleets, and remains a
+deliberate, declared widening rather than a default.
+
+### E.4 The ledger write serialises every request for a tenant
+
+CODE-01 §14.1 takes `SELECT … FOR UPDATE` on the tenant's last ledger row, inside the
+request's transaction, to stop concurrent requests forking the chain. It does stop that. It
+also means **one in-flight request per tenant at a time** — adding servers does not help, and
+the throughput ceiling is a database round trip on the hot path.
+
+**Fix — two-phase append.** On the request path, insert the record *durably but unchained*
+(no lock, no ordering requirement). A single per-tenant writer then chains the pending records
+asynchronously and fills in `prev_hash`/`record_hash`.
+
+- Durability is preserved: the record is committed before the response is returned.
+- The chain is still strictly ordered and still verifiable — it is built by one writer.
+- `make verify` gains one check: **zero unchained records older than N seconds**, so a stalled
+  writer is a loud failure rather than a silent gap.
+
+### E.5 Setting `.value` does not change what a React app submits
+
+The sidebar extension plan (§C.2) replaces the textarea's value before submit. **React tracks
+its own internal value state; assigning `.value` directly does not update it**, so the
+original text is what gets sent. The control would appear to work and do nothing — the worst
+possible failure for a security product.
+
+**Fix: intercept the network call, not the DOM.** Patch `window.fetch` (and `XMLHttpRequest`)
+in the page's MAIN world, inspect the outgoing request body, and substitute there. This is
+strictly better than the DOM approach on every axis: it is immune to React internals, immune
+to UI redesigns, and it sees exactly the bytes that would leave — which is the same guarantee
+`verify_dispatch` gives on the server side.
+
+If a DOM path is ever needed as a fallback, it must use the native setter plus a dispatched
+`input` event, never bare assignment. But the fetch patch is the design.
+
+### E.6 Byte-for-byte round-trip is unachievable by re-serialisation
+
+`denormalise(normalise(x)) == x` byte-for-byte (CODE-01 §5.4) **cannot hold if the body is
+parsed and re-serialised.** Key order, whitespace, number formatting and unicode escaping are
+all lost. The test as specified would fail on real payloads, or worse, be quietly relaxed.
+
+**Fix: splice edits into the original byte buffer at recorded offsets.** Never re-serialise a
+body we are not changing.
+
+This is not a workaround, it is the better design, and it pays for itself three times:
+
+- Round-trip identity becomes **trivially** true — no edits means the buffer is untouched.
+- `cache_control` markers keep their exact positions (§E.2).
+- Bytes we did not deliberately change cannot be accidentally changed.
+
+**On the apparent contradiction with M6** ("SSE frames must be re-serialised, never
+byte-patched"): both are right, in different places. The **request body** is spliced. An
+**SSE response frame** carries a JSON object whose text field changes length, so that object
+must be re-serialised — what M6 forbids is patching the frame *envelope*, which would corrupt
+the stream framing. Different layers; the plan should say so rather than state two absolutes
+that read as opposites.
+
+### E.7 A 403 teaches exactly the bypass §A.3 warns about
+
+§A.3 argues, correctly, that rejecting unregistered workloads pushes teams to route around
+the product. §B.2 then blocks credentials with a 403. **For Claude Code a 403 is a broken
+tool, and the bypass is one environment variable.** The user unsets `ANTHROPIC_BASE_URL` and
+we have taught them to, on their first bad experience.
+
+**Fix: for interactive channels, return a well-formed provider response carrying a clearly
+attributed ZeroTrace message** — *"ZeroTrace blocked this request: an Anthropic API key was
+detected in the prompt. Ledger id led_01J…"* The tool keeps working, the user learns what
+happened and why, and nothing is silently dropped.
+
+**This is not the canned response SSOT §6 A1 forbids.** A1 is about fabricating a *model
+answer* when the upstream is unavailable. This is an enforcement notice, attributed to
+ZeroTrace by name, returned on a path where we deliberately did not call the model. Flag it in
+`SUBMISSION.md` for the SSOT owner rather than assuming the reading is agreed.
+
+The 403 stays available for non-interactive API callers via `ZT_BLOCK_STYLE=http_error`, where
+a broken call is the correct signal. And the real anti-bypass control is not the error shape
+at all — it is the coverage monitor (C21) noticing the workload went direct.
+
+### E.8 Two fixes that landed in VOCAB-01
+
+Both were raised here and are resolved in **VOCAB-01 (`docs/08_ENTITY_CLASSES.md`)**:
+
+- **`SENSITIVE_CATEGORY` classes had no detector.** Part A's only inbound rule referenced
+  classes Part B never emitted, so the inbound beat could not fire. VOCAB-01 §3.6 gives them
+  tier-2 keyword gazetteers, rewritten around a tech company — `SECURITY_FINDING`,
+  `INCIDENT_REPORT`, `INFRA_SECRET`, `SOURCE_CODE_RESTRICTED` — which suits a demo running on
+  coding tools far better than clinical notes did.
+- **No `default:` in the policy, with entropy findings routed to it.** VOCAB-01 §4.1 sets
+  `default: allow` explicitly and §3.7 pins `HIGH_ENTROPY_STRING` to `warn`, never
+  block or mask. Under `fail: closed` an undefined default would have sent every git SHA,
+  lockfile digest and base64 blob in a coding payload to the strictest action — the product
+  would have been unusable on precisely the traffic it is demoed against.
+
+---
+
 ## 2. Milestones
 
 Each milestone ends with a `make` target that exits non-zero on failure. Within a track,
@@ -533,6 +1049,7 @@ Track A never sees span text. It is tested entirely against committed `Finding` 
 |---|---|---|
 | **B1** | Spans + detect | Round-trip `denormalise(normalise(x)) == x` byte-for-byte on **real captured payloads**; AC prefilter + re2 confirm; S0 credential + PII classes pass unit tests; 15-case corpus committed; S0 benchmarked on a long transcript |
 | **B1b** | Span cache | 10-turn seeded conversation shows >90% cache hit from turn 2; pack-version bump invalidates; Redis covered by the privacy invariant |
+| **B3** | Checker + budget | Green path **p95 <10ms** on a real long transcript; 50ms watchdog fires and applies the declared amber stance; tier-3 amber escalation resolves deterministically |
 | **B2** | Vault + redact | `verify_dispatch` green; `test_privacy_invariant` green; `request.decided` on the `dp` chain; `make verify --chain dp` green |
 
 Track B develops against a 30-line stub returning fixed decisions. It reaches a full green
@@ -555,7 +1072,7 @@ C1 is the unblocker for B1's round-trip test, so it runs first if there are only
 | **M6** | Streaming | Sliding-window scan (CODE-01 §9.2); the degrade header disappears; chunk-boundary tests at every offset |
 | **M7** | Claude sidebar | Extension blocks a planted key on claude.ai; fail-closed verified with the gateway stopped |
 | **M8** | Codex + VS Code | Same proof on `OPENAI_BASE_URL`; VS Code route decided and documented |
-| **M9** | Rejoin CODE-01 | S2 NER, S3 composite, A2 adjudicator, **detector confidence posteriors + decay quarantine (§B.6)** |
+| **M9** | Rejoin CODE-01 | S2 NER, S3 composite, A2 adjudicator, **detector confidence posteriors + decay quarantine (§B.6)**, **blind agent — `EscalationFeatures`, no free text (§D.5)** |
 
 **M0 → (A ∥ B ∥ C) → M-MERGE → M5 is the skeleton.** M6 is the honesty debt and is not
 optional. M7–M8 is coverage.
@@ -575,6 +1092,10 @@ optional. M7–M8 is coverage.
 | **Conversation resend makes session cost O(n²)** — per-request budgets stay green while the 30th turn re-scans 29 turns of unchanged text | M3, and worse as sessions lengthen | Span-level memoisation (§B.5). This is the failure mode that per-request benchmarks are structurally blind to — measure per *session*, not per request |
 | Span cache serves a stale finding set after a detector promotion, silently breaking the G4 novelty beat | M3b + M9 | Detector pack version in the cache key; explicit test that a promoted detector fires on cached history |
 | Span cache becomes a confirmation oracle for guessed values | M3b | HMAC under the tenant key, and Redis added to `test_privacy_invariant`'s scan |
+| **10ms budget is unreachable without the span cache** — a cold 200KB payload cannot be scanned in 1.5ms | B1b, B3 | The cache stops being an optimisation and becomes a requirement. If B1b slips, the latency claim slips with it — say so rather than quoting the number anyway |
+| Someone adds a `text` field to `EscalationFeatures` under deadline pressure, silently reopening CODE-01 §10.2's privacy hole | M9 | No free-text field in the schema at all, plus `test_escalation_blindness` over the full corpus. Structural, not procedural |
+| `span_path` carries a name (`patients.rajesh_kumar.diagnosis`) and is treated as safe-to-log | B1, and already latent in the ledger | HMAC-generalise non-vocabulary path segments everywhere paths are written (§D.6) |
+| Amber quietly comes to mean “wait for the adjudicator”, putting an LLM on the hot path | B3, M9 | Top-tier amber resolves deterministically per the declared `ZT_FAIL` stance. A code path that awaits the queue in-request is a review rejection |
 | Entropy sub-pass blows the S0 budget on base64-heavy tool output | M3 | It runs last, only on unresolved spans; benchmarked against a real transcript, not a synthetic fixture |
 
 ---
@@ -602,7 +1123,7 @@ optional. M7–M8 is coverage.
 - [ ] `groups` table added to CODE-01 §4.1 in the same commit
 - [ ] `actor_has_identity` CHECK constraint present
 - [ ] `scripts/seed_demo.py`: tenant `acme`, BUs `payments`/`support`, groups
-      `clinical_staff`/`finance`/`contractors`, 3 actors
+      `security`/`eng_platform`/`contractors`, 3 actors
 - [ ] `identity/resolve.py` — mTLS → cookie → interception header → unregistered
 - [ ] Unregistered actors are **served**, flagged, and policy-masked — never rejected
 - [ ] No `virtual_key_hash` column anywhere. Developer-held keys do not exist in this product
@@ -662,6 +1183,46 @@ optional. M7–M8 is coverage.
 - [ ] `scripts/verify_ledger.py` runs standalone; `make verify` green
 - [ ] **`test_privacy_invariant` green** — tables, logs, and evidence pack all clean
 - [ ] `X-ZeroTrace-*` response headers on every call
+
+### B3 — Checker, budget and watchdog  *(Track B)*
+- [ ] Tiered checker returns `CheckResult {verdict, confidence, tier_reached, latency_ms, findings}`
+- [ ] Tier 3 (S2/S3) runs **only** on amber spans, never on the green path
+- [ ] **Green path p95 <10ms**, measured on a real long-transcript payload
+- [ ] **50ms watchdog is a runtime guard, not a test assertion** — it stops the checker mid-tier
+- [ ] Watchdog fire → declared amber stance + `X-ZeroTrace-Degraded: checker_timeout` +
+      ledger record + `zt_checker_timeout_total`
+- [ ] Top-tier amber resolves **deterministically** per `ZT_FAIL`. It may never mean
+      “wait for the LLM”
+- [ ] `ZT_BUDGET_*` re-allocated per §D.2 in `.env.example`, and CODE-01 §3.2 raised for edit
+- [ ] `span_path` segments outside the safe vocabulary are HMAC-generalised in findings,
+      ledger, logs and queue
+- [ ] Per-tier latency histogram emitted: `zt_checker_tier_duration_seconds{tier}`
+
+### M9 — Blind agent  *(post-skeleton, but designed now)*
+- [ ] `EscalationFeatures` schema has **no free-text field**. A test asserts the field set
+- [ ] `test_escalation_blindness`: no `sensitive_literals` value appears in any serialised
+      escalation payload across the full corpus
+- [ ] Agent returns a **proposal**, never a decision — `candidate_detector` passes the full
+      A5 gates before it can fire
+- [ ] CODE-01 §10.2's “span text plus its class hypothesis” sentence deleted, and the
+      threat-model exception removed with it
+- [ ] Amber-band width tracked over runs — it must shrink, and that is the latency story
+
+### E — Carried-over corrections  *(Track B unless noted)*
+- [ ] `tokenize` unavailable on `cli`/`mcp` channels; substitutes `block` (VOCAB-01 §6)
+- [ ] `cache_control` markers preserved byte-exactly through normalise→denormalise
+- [ ] **Prompt-cache test:** same conversation twice → upstream reports a cache hit on run 2
+- [ ] `X-ZeroTrace-Session` minted by the CLI wrapper and the extension; prefix-hash fallback
+- [ ] Ledger append is two-phase — durable unchained insert on the request path, async chaining
+- [ ] `make verify` fails on unchained records older than N seconds
+- [ ] Extension patches `window.fetch` in the MAIN world. **Not** `.value` assignment
+- [ ] Request bodies are **spliced into the original buffer**, never re-serialised
+- [ ] Round-trip test passes byte-for-byte *because* nothing was re-serialised
+- [ ] Interactive block returns an attributed ZeroTrace message, not a 403;
+      `ZT_BLOCK_STYLE=http_error` retains the 403 for API callers
+- [ ] SSOT A1 reading flagged in `SUBMISSION.md` for the SSOT owner
+- [ ] **(Track A)** policy publish hard-errors on a class outside VOCAB-01
+- [ ] **(Track A)** publish-time *warning* naming any class no registered detector can emit
 
 ### M-MERGE — Integration
 
