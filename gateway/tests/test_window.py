@@ -175,3 +175,96 @@ def test_unrelated_consecutive_commands_still_pass(tmp_path):
                 "cat src/api-client.ts"):
         r = run_hook(cmd, "ok", tmp_path)
         assert r.returncode == 0, f"false positive on: {cmd}\n{r.stdout}"
+
+
+# ------------------------------------------------- reassembly by destination --
+
+from gateway.base.window import SinkAssembly, payload_of, sink_of   # noqa: E402
+
+
+def test_a_six_way_split_is_reassembled(tmp_path):
+    """What the consecutive window cannot reach. A split has to be reassembled
+    *somewhere* to be useful, and successive appends to one file are observable."""
+    a = SinkAssembly(tmp_path)
+    parts = [KEY[i:i + 8] for i in range(0, len(KEY), 8)]
+    final = None
+    for p in parts:
+        args = {"command": f"printf '%s' '{p}' >> /tmp/k"}
+        final = a.add("s", sink_of("Bash", args), payload_of("Bash", args))
+    assert final and KEY in final
+
+
+def test_different_destinations_are_not_joined(tmp_path):
+    """The property that keeps this from being a false-positive machine: pieces going to
+    different files are not one credential."""
+    a = SinkAssembly(tmp_path)
+    for i, p in enumerate([KEY[:16], KEY[16:]]):
+        args = {"command": f"printf '%s' '{p}' >> /tmp/file{i}"}
+        result = a.add("s", sink_of("Bash", args), payload_of("Bash", args))
+        assert result is None or KEY not in result
+
+
+def test_accumulation_needs_a_trigger(tmp_path):
+    """Without one, every append in every session is stored -- a far larger at-rest
+    surface than this is worth. The first piece has to look like part of a credential."""
+    a = SinkAssembly(tmp_path)
+    for line in ("hello world", "second line", "third line"):
+        args = {"command": f"echo '{line}' >> /tmp/notes"}
+        assert a.add("s", sink_of("Bash", args), payload_of("Bash", args)) is None
+    assert not list(tmp_path.glob("*.sink"))
+
+
+def test_ordinary_file_writing_does_not_accumulate(tmp_path):
+    a = SinkAssembly(tmp_path)
+    for chunk in ("# Project\n", "\nSetup steps.\n", "\nRun `npm test`.\n"):
+        args = {"file_path": "README.md", "content": chunk}
+        assert a.add("s", sink_of("Write", args), payload_of("Write", args)) is None
+
+
+def test_assembly_is_bounded(tmp_path):
+    """One session appending all day must not grow without limit."""
+    from gateway.base.window import MAX_ASSEMBLY
+    a = SinkAssembly(tmp_path)
+    args0 = {"command": "printf '%s' 'sk-ant-ap' >> /tmp/k"}
+    a.add("s", sink_of("Bash", args0), payload_of("Bash", args0))
+    for i in range(60):
+        args = {"command": f"printf '%s' 'chunk{i:04d}data' >> /tmp/k"}
+        out = a.add("s", sink_of("Bash", args), payload_of("Bash", args))
+    assert out is not None and len(out) <= MAX_ASSEMBLY
+
+
+def test_payload_is_the_content_not_the_syntax():
+    """Concatenating whole commands reassembles `printf...printf...` and finds nothing.
+    The quoted argument is what actually lands at the destination."""
+    args = {"command": "printf '%s' 'sk-ant-ap' >> /tmp/k"}
+    assert payload_of("Bash", args) == "sk-ant-ap"      # not the printf, not the %s
+    assert sink_of("Bash", args) == "/tmp/k"
+
+
+def test_sinks_are_hashed_per_session(tmp_path):
+    """Two sessions appending to the same path must not share an assembly."""
+    a = SinkAssembly(tmp_path)
+    args = {"command": "printf '%s' 'sk-ant-ap' >> /tmp/k"}
+    a.add("alice", sink_of("Bash", args), payload_of("Bash", args))
+    args2 = {"command": "printf '%s' 'i03-AbC9dEf2GhI4' >> /tmp/k"}
+    out = a.add("bob", sink_of("Bash", args2), payload_of("Bash", args2))
+    assert out is None
+
+
+def test_six_way_split_blocked_end_to_end(tmp_path):
+    """Through the real hook."""
+    parts = [KEY[i:i + 8] for i in range(0, len(KEY), 8)]
+    codes = [run_hook(f"printf '%s' '{p}' >> /tmp/k", "six", tmp_path).returncode
+             for p in parts]
+    assert codes[0] == 0, "the first piece alone is not a credential"
+    assert 2 in codes[1:], f"the split was never caught: {codes}"
+
+
+def test_chunked_file_writing_is_not_blocked(tmp_path):
+    """The false positive that would matter most -- an agent writing a long file in
+    pieces is completely ordinary."""
+    for chunk in ("# Setup\n\nInstall deps.\n",
+                  "\n## Config\n\nSet API_KEY in your env.\n",
+                  "\n## Running\n\n`npm start`\n"):
+        r = run_hook(f"printf '%s' '{chunk}' >> docs/setup.md", "doc", tmp_path)
+        assert r.returncode == 0, f"blocked ordinary writing: {r.stdout}"

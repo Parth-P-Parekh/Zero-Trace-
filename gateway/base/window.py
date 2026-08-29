@@ -214,3 +214,136 @@ class CallWindow:
             self._path(session_id).unlink(missing_ok=True)
         except OSError:
             pass
+
+
+# ---------------------------------------------------------- sink assembly --
+
+#: Pieces kept per sink. A credential split into more than this is being assembled by
+#: someone who knows the number, and at that point the coverage monitor is the control.
+MAX_PIECES = 12
+
+#: Total characters kept per sink. Bounds the at-rest cost of the whole mechanism.
+MAX_ASSEMBLY = 512
+
+
+class SinkAssembly:
+    """Reassemble a credential written to one destination across many calls.
+
+    The fragment window bridges *consecutive* calls, which a three-way split defeats. But
+    a split has to be reassembled somewhere to be useful, and that somewhere is
+    observable: successive appends to one file, successive edits to one path. Grouping by
+    destination turns an unbounded join problem into an ordered concatenation.
+
+        printf '%s' 'sk-ant-ap'  >> /tmp/k
+        printf '%s' 'i03-AbC'    >> /tmp/k
+        printf '%s' '9dEf2GhI4'  >> /tmp/k     <- concatenating the three reassembles it
+
+    Grouping is also what keeps false positives down: only payloads heading for the same
+    destination are joined, so two unrelated commands are never spliced together.
+
+    **Accumulation only starts once one piece looks like part of a credential.** Without
+    that trigger every append in every session would be stored, which is a much larger
+    at-rest surface than this is worth.
+    """
+
+    __slots__ = ("_dir", "_ttl")
+
+    def __init__(self, directory: str | Path | None = None, ttl_s: int = DEFAULT_TTL_S) -> None:
+        self._dir = Path(directory or (Path(tempfile.gettempdir()) / "zerotrace-window"))
+        self._ttl = ttl_s
+
+    def _path(self, session_id: str, sink: str) -> Path:
+        digest = hashlib.sha256(f"{session_id}|{sink}".encode()).hexdigest()[:16]
+        return self._dir / f"{digest}.sink"
+
+    def _load(self, session_id: str, sink: str) -> list[str]:
+        p = self._path(session_id, sink)
+        try:
+            if not p.exists():
+                return []
+            if time.time() - p.stat().st_mtime > self._ttl:
+                p.unlink(missing_ok=True)
+                return []
+            data = json.loads(p.read_text(encoding="utf-8"))
+            return [str(x) for x in data] if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def add(self, session_id: str, sink: str, payload: str) -> str | None:
+        """Record a payload heading for ``sink`` and return the assembly to scan.
+
+        Returns None when there is nothing worth scanning -- no accumulation started, or
+        only one piece so far, in which case the call's own scan already covered it.
+        """
+        if not sink or not payload.strip():
+            return None
+
+        pieces = self._load(session_id, sink)
+        # The trigger: start accumulating only once something looks like part of a
+        # credential. After that, keep collecting -- the later pieces are innocuous on
+        # their own and are exactly what is needed to reassemble.
+        if not pieces and not fragments_of(payload):
+            return None
+
+        pieces.append(payload[:MAX_ASSEMBLY])
+        pieces = pieces[-MAX_PIECES:]
+        while sum(len(p) for p in pieces) > MAX_ASSEMBLY and len(pieces) > 1:
+            pieces.pop(0)
+
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            p = self._path(session_id, sink)
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(pieces, fh)
+        except OSError:
+            pass
+
+        if len(pieces) < 2:
+            return None
+        return "".join(pieces)
+
+    def clear(self, session_id: str, sink: str) -> None:
+        try:
+            self._path(session_id, sink).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+#: Where a payload is heading. An append target, or a file being written.
+_SINK = re.compile(r">>\s*(\S+)")
+
+
+def sink_of(tool: str, args: dict) -> str:
+    """The destination a tool call writes to, or "" if it does not write anywhere.
+
+    Only destinations are grouped, because a destination is what makes reassembly
+    meaningful -- pieces going to different files are not one credential.
+    """
+    if tool in ("Write", "Edit", "NotebookEdit"):
+        path = args.get("file_path") or args.get("notebook_path") or ""
+        return str(path)
+    if tool == "Bash":
+        m = _SINK.search(str(args.get("command", "")))
+        return m.group(1) if m else ""
+    return ""
+
+
+def payload_of(tool: str, args: dict) -> str:
+    """The part of a call that is *content* rather than syntax.
+
+    For a shell command this is the quoted argument, not the whole line -- concatenating
+    `printf '%s' 'A' >> f` with `printf '%s' 'B' >> f` reassembles `printf...printf...`
+    and finds nothing. The quoted payload is what actually lands at the destination.
+    """
+    if tool in ("Write", "NotebookEdit"):
+        return str(args.get("content") or args.get("new_source") or "")
+    if tool == "Edit":
+        return str(args.get("new_string") or "")
+    if tool == "Bash":
+        cmd = str(args.get("command", ""))
+        quoted = re.findall(r"'([^']*)'|\"([^\"]*)\"", cmd)
+        parts = [a or b for a, b in quoted]
+        # Drop format strings like '%s' -- they are syntax, not payload.
+        return "".join(p for p in parts if p and not re.fullmatch(r"%[a-z]", p))
+    return ""

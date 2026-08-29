@@ -19,3 +19,4 @@ httpx==0.27.2
 
 # --- S1 rules config ---
 PyYAML==6.0.2
+anthropic==0.75.0

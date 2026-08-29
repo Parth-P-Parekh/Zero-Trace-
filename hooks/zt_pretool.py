@@ -111,9 +111,9 @@ def _session_tools():
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     from gateway.base.risk import SessionRisk
-    from gateway.base.window import CallWindow
+    from gateway.base.window import CallWindow, SinkAssembly
 
-    return CallWindow(), SessionRisk()
+    return CallWindow(), SessionRisk(), SinkAssembly()
 
 
 def check(text: str, session_id: str) -> dict:
@@ -199,13 +199,27 @@ def main() -> None:
         # _session_tools() puts the repo root on sys.path, so it has to come first --
         # importing from `gateway` before it raises ModuleNotFoundError, which the
         # except below then swallows into "no window today" with no sign anything broke.
-        window, risk = _session_tools()
-        from gateway.base.window import fragments_of  # noqa: PLC0415
+        window, risk, assembly = _session_tools()
+        from gateway.base.window import (  # noqa: PLC0415
+            fragments_of, payload_of, sink_of,
+        )
 
         assessment = risk.observe(
             session_id, text, had_fragment=bool(fragments_of(text))
         )
         joins = window.bridge(session_id, text, limit=assessment.fragments).joins
+
+        # Reassembly by destination. The fragment window bridges consecutive calls; a
+        # three-way split defeats it. But a split has to be reassembled *somewhere* to be
+        # useful, and successive appends to one file are observable -- so group by sink
+        # and concatenate in order. Only payloads heading for the same destination are
+        # joined, which is what keeps unrelated commands from being spliced together.
+        assembled = assembly.add(
+            session_id, sink_of(tool, args if isinstance(args, dict) else {}),
+            payload_of(tool, args if isinstance(args, dict) else {}),
+        )
+        if assembled:
+            joins = joins + (assembled,)
     except Exception:  # noqa: BLE001
         # The window and the score are enhancements. Losing them costs one missed
         # bridge, never a blocked tool call.
