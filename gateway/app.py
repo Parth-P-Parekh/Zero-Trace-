@@ -52,6 +52,8 @@ from .detect.s0_credentials import scan_span_credentials
 from .detect.s1_context import ContextScanner
 from .detectors.example import EXAMPLE_DETECTORS
 from .intel.agent import IntelPlane
+from .ledger import JsonlLedgerStore, Ledger
+from .ledger import records as ledger_records
 from .intel.features import features_of
 from .redact import (
     DispatchVerificationError, apply_redaction, plan_redaction, verify_dispatch,
@@ -100,6 +102,8 @@ async def lifespan(app: FastAPI):
     )
     app.state.policy = StubPolicyClient()
     app.state.intel = IntelPlane()
+    # File-backed until persistence lands; the chain semantics are the Postgres ones.
+    app.state.ledger = Ledger(JsonlLedgerStore(os.getenv("ZT_LEDGER_DIR", "evidence/ledger")))
     log.info("gateway up: %d detectors, pack v%d",
              len(app.state.pack), app.state.pack.version)
     yield
@@ -186,6 +190,13 @@ async def prompt_check(request: Request) -> Response:
             )
 
     verdict: CheckVerdict = to_verdict(check, actor)
+    await request.app.state.ledger.append(
+        actor.tenant_id, "prompt.checked",
+        ledger_records.prompt_checked(
+            actor=actor, check=check, allowed=verdict.allow,
+            reason_classes=list(verdict.classes),
+            tenant_key=request.app.state.checker._tenant_key),
+    )
     return JSONResponse(
         {
             "allow": verdict.allow,
@@ -260,13 +271,18 @@ async def _proxy(request: Request, *, provider: str, path: str) -> Response:
     check, decision, plan, dispatched = outcome
 
     if dispatched is None:
+        await _record(request, actor, check, decision, plan,
+                      destination=provider, dispatched=False)
         return _blocked(check, decision, provider)
 
     # Headers go in via `extra` rather than being set afterwards: a StreamingResponse
     # has already begun once it is returned, so mutating .headers then is too late.
-    return await _dispatch(
+    resp = await _dispatch(
         provider, path, dispatched, request.headers, _headers(check, decision, plan)
     )
+    await _record(request, actor, check, decision, plan,
+                  destination=provider, dispatched=True)
+    return resp
 
 
 async def _run(request: Request, tree: SpanTree, actor: Actor):
@@ -311,7 +327,13 @@ async def _run(request: Request, tree: SpanTree, actor: Actor):
         verify_dispatch(dispatched, plan)
     except DispatchVerificationError as exc:
         # We could not prove the redaction, so we do not send.
+        # A failure to *prove* a redaction is the one event that must never be silent.
         log.error("dispatch verification failed: %s", exc)
+        await app.state.ledger.append(
+            actor.tenant_id, "dispatch.verification_failed",
+            ledger_records.dispatch_verification_failed(
+                request_id=_request_id(request), reason=str(exc), plan=plan),
+        )
         return _error(500, "zt.dispatch_verification_failed", str(exc))
 
     return check, decision, plan, dispatched
@@ -424,6 +446,31 @@ def _resolve_actor(request: Request, *, default_channel: str) -> Actor:
         channel=request.headers.get("x-zerotrace-channel", default_channel),  # type: ignore[arg-type]
         session_id=request.headers.get("x-zerotrace-session"),
     )
+
+
+def _request_id(request: Request) -> str:
+    return request.headers.get("x-zerotrace-request-id") or f"req_{id(request):x}"
+
+
+async def _record(request, actor, check, decision, plan, *, destination, dispatched):
+    """One record per request, whatever the outcome.
+
+    Written for allowed requests too: a ledger that only records blocks answers "what
+    did you stop?" but not "what did you let through?", and the second is the question
+    an auditor actually asks. Never fails the request -- a ledger write that raises is
+    logged and the response still goes out.
+    """
+    try:
+        await request.app.state.ledger.append(
+            actor.tenant_id, "request.decided",
+            ledger_records.request_decided(
+                request_id=_request_id(request), actor=actor, check=check,
+                decision=decision, plan=plan,
+                tenant_key=request.app.state.checker._tenant_key,
+                channel=actor.channel, destination=destination, dispatched=dispatched),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("ledger append failed; request already served")
 
 
 def _headers(check, decision, plan) -> dict[str, str]:

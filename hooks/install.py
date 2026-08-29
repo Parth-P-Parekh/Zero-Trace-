@@ -14,22 +14,37 @@ import json
 import sys
 from pathlib import Path
 
-MARKER = "zt_check.py"
-EVENT = "UserPromptSubmit"
+#: Both hooks, and what each actually covers.
+#:
+#: UserPromptSubmit sees what the user types. PreToolUse sees the arguments a tool is
+#: about to be given -- a credential reaches those without ever being typed, when the
+#: agent reads it from a file on one turn and puts it in a command on the next.
+#:
+#: Neither covers a file's *contents* entering the transcript: PreToolUse fires before
+#: the tool runs, so on a Read it sees the path only. That needs the proxy.
+HOOKS = (
+    ("UserPromptSubmit", "zt_check.py", None, "ZeroTrace checking prompt..."),
+    ("PreToolUse", "zt_pretool.py", "Bash|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*",
+     "ZeroTrace checking tool call..."),
+)
+MARKERS = tuple(h[1] for h in HOOKS)
 
 
-def entry(project_dir: str) -> dict:
-    return {
+def entry(project_dir: str, script: str, matcher: str | None, status: str) -> dict:
+    block: dict = {
         "hooks": [
             {
                 "type": "command",
                 "command": "python",
-                "args": [f"{project_dir}/hooks/{MARKER}"],
+                "args": [f"{project_dir}/hooks/{script}"],
                 "timeout": 10,
-                "statusMessage": "ZeroTrace checking prompt...",
+                "statusMessage": status,
             }
         ]
     }
+    if matcher:
+        block["matcher"] = matcher
+    return block
 
 
 def load(path: Path) -> dict:

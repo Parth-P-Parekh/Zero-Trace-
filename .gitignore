@@ -20,3 +20,6 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+
+# Ledger (file-backed until persistence lands)
+evidence/ledger/
