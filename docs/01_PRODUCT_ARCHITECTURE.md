@@ -117,6 +117,7 @@ Four planes. Keeping them separate is what makes the evidence claims (SSOT §5) 
 | **C18** | Metering & billing | Counts tokens scanned + leaks prevented per tenant; Razorpay plan/subscription + checkout; quota enforcement. | Razorpay APIs | ✅ MUST (Revenue track) |
 | **C19** | Canary injector | Injects unique canary strings into low-risk payloads; a later scan for canary reappearance detects upstream retention/regurgitation. | Python | ⚠️ NICE-TO-HAVE — only if T+16 gate is green |
 | **C20** | MCP / tool-result hook | Intercepts tool results before they enter agent context. | Python middleware | ⚠️ NICE-TO-HAVE — high novelty value, medium cost |
+| **C23** | Bypass monitor | Detects workloads making direct LLM calls that did not transit the ZeroTrace gateway, using network flow-log or DNS telemetry. Depends on the same cloud flow-log connectors as SSO/SCIM (out of 24h scope). **Demo runs on a pre-scripted synthetic log feed** — one workload seeded in advance that "forgot" to route through the gateway — rather than live network monitoring. Same stub honesty applied to SSO/SCIM. Real connectors are a post-hackathon infrastructure item. | Python + synthetic feed | ⚠️ STUB — synthetic feed only; live connectors require post-hackathon infra |
 
 ---
 
@@ -411,6 +412,7 @@ Roles: **BE** backend/proxy · **AG** agents/detection · **FE** dashboard · **
 | False positive fires during the judge run | Med | **High** — Delight L1 | Thresholds tuned conservatively; `must_not_flag` cases in every suite; the FP-override flow turns a failure into a *feature demo* |
 | Streaming re-hydration breaks on chunk boundaries | High | JTBD | Buffer a 64-char sliding window across chunks; if it fails, disable streaming for the demo and say why |
 | Hive API rate limits mid-demo | Med | Fatal on stage | Pre-warm, cache the demo path, keep the recorded backup demo (§9 of SSOT) |
+| C23 bypass-monitor demo depends on live network infra | High | Demo beat 0:00 | C23 runs on a pre-scripted synthetic log feed (one seeded workload that bypassed the gateway); live DNS/flow-log connectors are explicitly deferred. Declare this in the demo preamble using the same language applied to SSO/SCIM stubs. |
 | Judge asks "isn't this just Presidio + a proxy?" | **High** | Novelty | Rehearsed 20-second answer: entity matching is stage 2 of 7; the differentiators are compositional risk, the synthesis loop, and cross-hop referential integrity — *and then show the registry entry the system wrote itself.* |
 | Scope creep into prompt-injection defence | Med | Focus | §13 non-goals are binding |
 
@@ -422,7 +424,7 @@ Roles: **BE** backend/proxy · **AG** agents/detection · **FE** dashboard · **
 |---|---|---|
 | 0:00 | **The one-line change** | Swap `base_url` in a live app. Nothing else changes. |
 | 0:40 | **The catch** | Send a support transcript containing a Razorpay-format key, a PAN, and a customer name. Response headers show 3 findings, 21ms. The upstream payload is displayed — tokenized. |
-| 1:30 | **The round trip** | The model's answer comes back *correct and complete*, with the real name restored. "The model reasoned over `⟨PERSON_a41⟩`. Your user never sees the difference. The provider never saw the name." |
+| 1:30 | **The referential-integrity beat** | Send a three-turn exchange where the same customer appears in the user turn, a tool result, and a follow-up question. Show that all three mentions are consistently tokenized to `⟨PERSON_a41⟩` — the same token, every time. "The model reasoned coherently across all three hops because the token was stable. The provider saw a consistent pseudonym, not a real name, and not three different placeholders that would break coreference." Note: ZeroTrace does not hold a recoverable original; if the downstream app needs to resolve the token to a name, it does so from its own CRM using the token as a lookup key — ZeroTrace's job is referential integrity, not restoration. |
 | 2:20 | **The invisible leak (N2)** | Send a record with **no** name, email, or ID — just pincode, DOB, gender, employer. Every entity filter passes it. ZeroTrace flags composite risk 0.78 and explains which combination re-identifies. |
 | 3:20 | **The system teaches itself (N1)** | Send a payload with a leak class not in the rule pack. Adjudicator catches it → Synthesizer writes a detector → Validator runs the corpus → promotion. **Send the same class again: caught deterministically in 3ms, no LLM call.** Show the registry entry with provenance and the falling escalation curve. |
 | 4:40 | **The hard moment (Delight)** | Trigger a false positive deliberately. One click → Explainer drafts a scoped exception → re-send → clean, and the exception is in the ledger with who approved it. |
