@@ -1,0 +1,100 @@
+# S1 contextual rules -- configuration, not code. CODE-01 §6.2.
+#
+# S0 asks "does this VALUE look like a secret?". S1 asks "does the surrounding TEXT say
+# this is one?". They catch different things, and S1 is what finds a credential with no
+# recognisable shape -- an internal token, a database password, a rotated key format we
+# have never seen.
+#
+# This matters most on RAG payloads. A retrieved config file, runbook or wiki page is
+# mostly key/value structure, and the key name is often the only signal there is:
+#
+#     DB_PASSWORD=hunter2                  <- "hunter2" has no shape at all
+#     api_key: 7f3a9c                      <- too short for entropy to fire
+#     | service | token      |             <- markdown table column
+#     | billing | abc123xyz  |
+#
+# These are data rows, not Python branches, so A4 can emit the same shape at runtime and
+# so a tenant can extend them without a deploy (CODE-01 §6.2).
+#
+# Tuning note: `confidence` here is what decides enforcement. Anything at or above the
+# escalation band's top (0.75) enforces; below it escalates instead. Prefer to under-call
+# a new rule and let the adjudicator raise it than to block someone's work on a guess.
+
+version: 1
+
+# ---------------------------------------------------------------- key names --
+# The key name alone types the value, whatever the value looks like.
+key_names:
+  - name: password_key
+    entity_class: GENERIC_SECRET
+    pattern: '(?i)\b(pass(word|wd|phrase)?|pwd)\b'
+    confidence: 0.90
+
+  - name: secret_key
+    entity_class: GENERIC_SECRET
+    pattern: '(?i)\b(secret|client[ _-]?secret|private[ _-]?token)\b'
+    confidence: 0.90
+
+  - name: api_key_key
+    entity_class: GENERIC_SECRET
+    pattern: '(?i)\b(api[ _-]?key|apikey|access[ _-]?key|auth[ _-]?token|bearer)\b'
+    confidence: 0.88
+
+  - name: credential_key
+    entity_class: GENERIC_SECRET
+    pattern: '(?i)\b(credential|cred|authorization)\b'
+    confidence: 0.85
+
+  # Deliberately lower: "token" alone appears constantly in ordinary engineering prose
+  # ("token limit", "token count", "tokenizer"), so it escalates rather than enforcing.
+  - name: bare_token_key
+    entity_class: GENERIC_SECRET
+    pattern: '(?i)\b(token|session[ _-]?id)\b'
+    confidence: 0.55
+
+# --------------------------------------------------------- value guardrails --
+# Applied to whatever the key names above point at. Without these, `password: <redacted>`
+# and `api_key: ${API_KEY}` in documentation both become findings, and a runbook full of
+# placeholders becomes unusable.
+value_guards:
+  min_length: 4
+  max_length: 512
+
+  # A value that is obviously a placeholder is not a secret. This is the single biggest
+  # source of false positives on RAG documents -- config templates are nothing but these.
+  ignore_values:
+    - '(?i)^(x{3,}|\*{3,}|\.{3,}|-+)$'
+    - '(?i)^<[^>]*>$'                      # <your-key-here>
+    - '(?i)^\$\{[^}]*\}$'                  # ${API_KEY}
+    - '(?i)^\$[A-Z_][A-Z0-9_]*$'           # $API_KEY
+    - '(?i)^%[A-Z_]+%$'                    # %API_KEY%
+    - '(?i)^(none|null|nil|todo|tbd|changeme|example|placeholder|redacted|omitted)$'
+    - '(?i)^(true|false|yes|no|enabled|disabled)$'
+    - '(?i)^\{\{[^}]*\}\}$'                # {{ template }}
+    - '^[0-9]+$'                           # a bare number is a port or a timeout
+
+# --------------------------------------------------------------- structures --
+# Where in a document a key/value pair can be expressed. Each is a capture with the key
+# in group `k` and the value in group `v`.
+structures:
+  - name: env_assignment          # DB_PASSWORD=hunter2
+    pattern: '(?m)^[ \t]*(?:export[ \t]+)?(?P<k>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(?P<v>[^\r\n#]+)'
+
+  - name: yaml_or_json            # api_key: abc123   /   "api_key": "abc123"
+    pattern: '(?m)^[ \t]*["\x27]?(?P<k>[A-Za-z_][A-Za-z0-9_.\-]*)["\x27]?[ \t]*:[ \t]*["\x27]?(?P<v>[^\r\n,"\x27]+)'
+
+  - name: cli_flag                # --api-key abc123   /   --token=abc123
+    pattern: '--(?P<k>[a-zA-Z][a-zA-Z0-9\-]*)[= ](?P<v>[^\s]+)'
+
+  - name: http_header             # Authorization: Bearer abc123
+    pattern: '(?im)^[ \t]*(?P<k>authorization|x-api-key|x-auth-token)[ \t]*:[ \t]*(?:bearer[ \t]+)?(?P<v>[^\r\n]+)'
+
+# ------------------------------------------------------------ table columns --
+# A header on the sensitive list types the whole column. One header check replaces a
+# per-cell pass, which is the single biggest saving on retrieved documents (CODE-01 §6.2).
+tables:
+  enabled: true
+  sensitive_headers: '(?i)^\s*(pass(word)?|secret|token|api[ _-]?key|credential|key)\s*$'
+  confidence: 0.85
+  # Bounded so one enormous retrieved CSV cannot dominate the scan budget.
+  max_rows: 500

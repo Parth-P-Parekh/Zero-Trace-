@@ -16,3 +16,6 @@ pytest-benchmark==4.0.0
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 httpx==0.27.2
+
+# --- S1 rules config ---
+PyYAML==6.0.2

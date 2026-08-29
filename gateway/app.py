@@ -46,7 +46,9 @@ from .base.checker import Checker, CheckerConfig
 from .base.policy import StubPolicyClient
 from .base.scanner import DetectorPack, assert_production_engines
 from .contracts.types import Action, Actor
+from .detect.obfuscation import ObfuscationScanner
 from .detect.s0_credentials import scan_span_credentials
+from .detect.s1_context import ContextScanner
 from .detectors.example import EXAMPLE_DETECTORS
 from .intel.agent import IntelPlane
 from .intel.features import features_of
@@ -68,12 +70,22 @@ UPSTREAM = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     assert_production_engines()
+    detectors = list(EXAMPLE_DETECTORS)
     app.state.pack = DetectorPack.build(
-        list(EXAMPLE_DETECTORS),
+        detectors,
         version=1,
-        # The S0 credential pack. This is the zero-tolerance class and the reason the
-        # product exists; the example detectors above are reference shapes only.
-        scanners=[scan_span_credentials],
+        scanners=[
+            # S0: the zero-tolerance credential pack -- the reason the product exists.
+            scan_span_credentials,
+            # Second chance at S0 for keys that were wrapped, spaced or zero-width
+            # padded. Runs the same confirm(), so it widens what we look at without
+            # lowering the bar for what counts.
+            ObfuscationScanner(detectors),
+            # S1: key-name and structure context. The only thing that finds a secret
+            # with no shape -- `DB_PASSWORD=hunter2` -- which is most of what a
+            # retrieved config file or runbook contains.
+            ContextScanner(),
+        ],
     )
     app.state.cache = InMemorySpanCache()
     app.state.checker = Checker(
