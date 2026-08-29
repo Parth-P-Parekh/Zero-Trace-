@@ -1,0 +1,204 @@
+/**
+ * App-level styling only. Every value resolves to a design-system token — this
+ * file introduces no new colours, sizes or easings.
+ *
+ * Most of what lives here is the browser's own surfaces: selection, caret,
+ * scrollbars, focus, tabular numerals. They ship with defaults that belong to no
+ * design system, so they are themed from the ramp like everything else.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--surface-page);
+  color: var(--text-strong);
+  font: var(--type-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* --- Browser surfaces, themed from the ramp --------------------------- */
+
+::selection {
+  background: rgba(17, 17, 17, 0.11);
+  color: var(--ink);
+}
+
+[data-theme='dark'] ::selection,
+.zt-on-dark ::selection {
+  background: rgba(242, 242, 240, 0.22);
+  color: var(--ink-inverse);
+}
+
+html {
+  caret-color: var(--ink);
+  scrollbar-color: rgba(17, 17, 17, 0.22) transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(17, 17, 17, 0.22);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--r-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 17, 17, 0.36);
+  background-clip: content-box;
+}
+
+.zt-rail ::-webkit-scrollbar-thumb {
+  background: rgba(242, 242, 240, 0.22);
+  background-clip: content-box;
+}
+
+/* Focus is the token ring, never removed and never coloured. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--sh-focus);
+  border-radius: var(--r-4);
+}
+
+.zt-rail :focus-visible,
+.zt-on-dark :focus-visible {
+  box-shadow: var(--sh-focus-dark);
+}
+
+/* Without this every latency column is visually ragged. */
+.zt-nums,
+table,
+.zt-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Small shared primitives ------------------------------------------ */
+
+.zt-eyebrow {
+  font: var(--type-eyebrow);
+  letter-spacing: var(--tr-caps);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.zt-mono {
+  font: var(--type-mono);
+  letter-spacing: var(--tr-mono);
+}
+
+.zt-mono-sm {
+  font: var(--type-mono-sm);
+  letter-spacing: var(--tr-mono);
+}
+
+/* --- Dense tables ------------------------------------------------------
+   Operator tables have a floor width below which the columns stop being
+   readable. Below it they scroll inside their own card rather than squashing,
+   so the page body never scrolls sideways. */
+
+.zt-table {
+  overflow-x: auto;
+}
+
+.zt-table > * {
+  min-width: 780px;
+}
+
+/* --- The console at narrow widths --------------------------------------
+   The rail is a rail when there is room for one. Below that it becomes a
+   scrollable strip of destinations at the top, and the secondary blocks
+   (environments, gateway status) drop rather than compete for the space. */
+
+@media (max-width: 900px) {
+  .zt-shell {
+    flex-direction: column;
+  }
+
+  .zt-rail {
+    position: static !important;
+    height: auto !important;
+    width: 100% !important;
+    flex: 0 0 auto !important;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 10px 12px !important;
+  }
+
+  .zt-rail-label,
+  .zt-rail-secondary {
+    display: none !important;
+  }
+
+  .zt-rail-group {
+    margin-top: 0 !important;
+  }
+
+  .zt-rail-items {
+    flex-direction: row !important;
+  }
+
+  .zt-content {
+    padding: 16px 16px 48px !important;
+  }
+}
+
+/* Table rows: a wash on hover, never a translation and never a colour. */
+.zt-row {
+  cursor: pointer;
+}
+
+.zt-row:hover {
+  background: rgba(17, 17, 17, 0.035);
+}
+
+.zt-row:last-of-type {
+  box-shadow: none !important;
+}
+
+a {
+  color: inherit;
+  text-decoration-color: rgba(17, 17, 17, 0.36);
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--d-fast) var(--ease-out);
+}
+
+a:hover {
+  text-decoration-color: var(--ink);
+}
+
+/* One authored moment, fired once per surface. */
+.zt-enter {
+  animation: zt-fade-up var(--d-base) var(--ease-out) both;
+}
+
+.zt-drain-in {
+  animation: zt-sweep var(--d-drain) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zt-enter,
+  .zt-drain-in {
+    animation: none;
+  }
+}

@@ -1,0 +1,31 @@
+<!-- @dsCard group="Components" viewport="700x400" name="Product" subtitle="Payload view, sweep rows, rule rows" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>body{padding:20px;background:var(--paper)}.lbl{font:var(--type-eyebrow);letter-spacing:var(--tr-caps);text-transform:uppercase;color:var(--muted);margin:0 0 9px}.rows{background:var(--white);border-radius:var(--r-12);box-shadow:inset 0 0 0 1px var(--border-hairline),var(--sh-2);overflow:hidden}</style>
+</head><body><div id="root"></div>
+<script type="text/babel">
+const { PayloadView, SweepRow, RuleRow } = window.ZeroTraceDesignSystem_7f4295;
+function Demo(){return (<div style={{display:'flex',flexDirection:'column',gap:20}}>
+  <div><div className="lbl">Payload view</div>
+    <PayloadView id="pl_8f3a21c9e04b" model="gpt-4o" latency="240 ms" status="redacted" scanning onCopy={()=>{}}
+      lines={['{','  "messages": [{ "role": "user", "content":',['    "support log — ssn ',{mask:'123-45-6789',type:'us_ssn'},', key ',{mask:'sk-live-9fj2kd01',type:'api_key'},'"'],'  }]','}']}/>
+  </div>
+  <div><div className="lbl">Sweep log rows</div>
+    <div className="rows">
+      <SweepRow time="14:02:11" path="/v1/chat/completions" model="gpt-4o" findings={['us_ssn','api_key']} status="redacted" latency="240 ms" active onClick={()=>{}}/>
+      <SweepRow time="14:02:09" path="/v1/embeddings" model="text-embedding-3" status="clean" latency="88 ms" onClick={()=>{}}/>
+      <SweepRow time="14:01:58" path="/v1/messages" model="claude-sonnet" findings={['pan','email','phone']} status="blocked" latency="—" onClick={()=>{}}/>
+    </div>
+  </div>
+  <div><div className="lbl">Policy rules</div>
+    <div className="rows">
+      <RuleRow name="us social security numbers" pattern="\\d{3}-\\d{2}-\\d{4}" action="Redact" hits="(27)"/>
+      <RuleRow name="no raw card numbers" pattern="luhn:16" action="Block" hits="(2)" active={false}/>
+    </div>
+  </div>
+</div>)}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script></body></html>

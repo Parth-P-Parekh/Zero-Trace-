@@ -1,0 +1,13 @@
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{margin:0;background:var(--surface-page);color:var(--text-strong);font:var(--type-body);letter-spacing:var(--tr-body);text-wrap:pretty}
+h1,h2,h3,h4,p,figure,blockquote{margin:0}
+h1{font:var(--type-h1);letter-spacing:var(--tr-display)}
+h2{font:var(--type-h2);letter-spacing:var(--tr-heading)}
+h3{font:var(--type-h3);letter-spacing:var(--tr-heading)}
+code,kbd,pre,samp{font:var(--type-mono);letter-spacing:var(--tr-mono)}
+a{color:var(--text-strong);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:0.18em;text-decoration-color:var(--border-strong);transition:var(--t-hover)}
+a:hover{text-decoration-color:var(--text-strong)}
+::selection{background:rgba(17,17,17,0.14)}
+:focus-visible{outline:none;box-shadow:var(--sh-focus)}
+button,input,select,textarea{font:inherit;letter-spacing:inherit;color:inherit}

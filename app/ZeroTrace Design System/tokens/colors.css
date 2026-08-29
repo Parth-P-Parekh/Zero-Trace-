@@ -1,0 +1,105 @@
+:root{
+/* --- SURFACE PALETTE · logo sheet 05, non-negotiable --- */
+--ink:#111111;              /* never #000 */
+--paper:#E8E8E6;            /* never #FFF */
+--ink-inverse:#F2F2F0;
+--surface-dark:#0B0B0B;
+--muted:#6B6B68;            /* descriptor only */
+--white:#FFFFFF;            /* approved background only, never a text colour on paper */
+--black:#000000;            /* approved background only */
+
+/* --- OPACITY RAMP · logo sheet 02, the identity. Six values, fixed. --- */
+--ramp-100:1; /* @kind other */
+--ramp-72:0.72; /* @kind other */
+--ramp-52:0.52; /* @kind other */
+--ramp-36:0.36; /* @kind other */
+--ramp-22:0.22; /* @kind other */
+--ramp-11:0.11; /* @kind other */
+
+/* Ramp resolved against paper (opaque equivalents, for gradients & SVG fills) */
+--ramp-on-paper-100:#111111;
+--ramp-on-paper-72:#3D3D3B;
+--ramp-on-paper-52:#616160;
+--ramp-on-paper-36:#8B8B89;
+--ramp-on-paper-22:#ABABA9;
+--ramp-on-paper-11:#CBCBC9;
+
+/* Ramp resolved against dark surface */
+--ramp-on-dark-100:#F2F2F0;
+--ramp-on-dark-72:#B0B0AF;
+--ramp-on-dark-52:#83837F;
+--ramp-on-dark-36:#5C5C5A;
+--ramp-on-dark-22:#3C3C3A;
+--ramp-on-dark-11:#232322;
+
+/* --- NEUTRAL SCALE · derived tints of paper/ink for UI chrome --- */
+--n-0:#F5F5F3;
+--n-1:#E8E8E6;
+--n-2:#DEDEDB;
+--n-3:#D2D2CF;
+--n-4:#BDBDBA;
+--n-5:#9A9A97;
+--n-6:#6B6B68;
+--n-7:#4A4A48;
+--n-8:#2A2A28;
+--n-9:#1A1A19;
+--n-10:#111111;
+--n-11:#0B0B0B;
+
+/* --- FUNCTIONAL SIGNAL COLOURS · UI ONLY, NEVER IDENTITY ---
+   The brand has no accent by design. These exist solely because a security
+   console must distinguish clean / redacted / blocked at a glance. They are
+   process-ink desaturated, never used on or behind the wordmark, never in
+   marketing chrome larger than a 10px dot or a 1px rule. */
+--signal-clean:#3F6B3A;
+--signal-clean-soft:#E4EBE1;
+--signal-redacted:#8A6A1F;
+--signal-redacted-soft:#F0EADA;
+--signal-blocked:#A8342A;
+--signal-blocked-soft:#F2E2DF;
+--signal-info:#3A5A6B;
+--signal-info-soft:#E1E8EB;
+
+/* --- SEMANTIC ALIASES --- */
+--text-strong:var(--ink);
+--text-body:rgba(17,17,17,0.72);
+--text-quiet:rgba(17,17,17,0.52);
+--text-faint:rgba(17,17,17,0.36);
+--text-descriptor:var(--muted);
+--text-on-dark:var(--ink-inverse);
+--text-on-dark-body:rgba(242,242,240,0.72);
+--text-on-dark-quiet:rgba(242,242,240,0.52);
+
+--surface-page:var(--paper);
+--surface-card:var(--white);
+--surface-sunken:var(--n-0);
+--surface-raised:var(--white);
+--surface-panel-dark:var(--surface-dark);
+--surface-card-dark:#161615;
+--surface-code:#0F0F0E;
+
+--border-hairline:rgba(17,17,17,0.11);
+--border-line:rgba(17,17,17,0.22);
+--border-strong:rgba(17,17,17,0.36);
+--border-on-dark:rgba(242,242,240,0.11);
+--border-on-dark-strong:rgba(242,242,240,0.22);
+
+--redact-fill:rgba(17,17,17,0.11);
+--redact-rule:rgba(17,17,17,0.36);
+}
+[data-theme="dark"]{
+--text-strong:var(--ink-inverse);
+--text-body:rgba(242,242,240,0.72);
+--text-quiet:rgba(242,242,240,0.52);
+--text-faint:rgba(242,242,240,0.36);
+--text-descriptor:#83837F;
+--surface-page:var(--surface-dark);
+--surface-card:#161615;
+--surface-sunken:#0F0F0E;
+--surface-raised:#1D1D1C;
+--border-hairline:rgba(242,242,240,0.11);
+--border-line:rgba(242,242,240,0.22);
+--border-strong:rgba(242,242,240,0.36);
+--redact-fill:rgba(242,242,240,0.11);
+--redact-rule:rgba(242,242,240,0.36);
+}

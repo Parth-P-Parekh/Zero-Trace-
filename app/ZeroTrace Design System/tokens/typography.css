@@ -1,0 +1,48 @@
+:root{
+--font-core:"Inter","Helvetica Neue",system-ui,sans-serif;
+--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+
+/* Weights — the identity is 400. 500 for UI labels, 600 only for numerals/metrics. */
+--w-regular:400; /* @kind font */
+--w-medium:500; /* @kind font */
+--w-semibold:600; /* @kind font */
+
+/* Size ladder — 1.25 ratio, hard-set values (no clamping in tokens) */
+--t-12:12px;
+--t-13:13px;
+--t-14:14px;
+--t-16:16px;
+--t-18:18px;
+--t-21:21px;
+--t-26:26px;
+--t-33:33px;
+--t-42:42px;
+--t-54:54px;
+--t-72:72px;
+
+--lh-tight:1.06; /* @kind other */
+--lh-snug:1.22; /* @kind other */
+--lh-normal:1.45; /* @kind other */
+--lh-loose:1.62; /* @kind other */
+
+/* Tracking — the wordmark's +0.04em is the brand's tracking signature.
+   Display sizes track negative; caps/eyebrows track wide. */
+--tr-wordmark:0.04em; /* @kind other */
+--tr-display:-0.022em; /* @kind other */
+--tr-heading:-0.012em; /* @kind other */
+--tr-body:0em; /* @kind other */
+--tr-caps:0.12em; /* @kind other */
+--tr-mono:-0.01em; /* @kind other */
+
+/* Roles */
+--type-display:var(--w-regular) var(--t-72)/var(--lh-tight) var(--font-core); /* @kind font */
+--type-h1:var(--w-regular) var(--t-42)/var(--lh-snug) var(--font-core); /* @kind font */
+--type-h2:var(--w-regular) var(--t-26)/var(--lh-snug) var(--font-core); /* @kind font */
+--type-h3:var(--w-medium) var(--t-18)/var(--lh-snug) var(--font-core); /* @kind font */
+--type-body:var(--w-regular) var(--t-16)/var(--lh-normal) var(--font-core); /* @kind font */
+--type-body-sm:var(--w-regular) var(--t-14)/var(--lh-normal) var(--font-core); /* @kind font */
+--type-label:var(--w-medium) var(--t-13)/var(--lh-snug) var(--font-core); /* @kind font */
+--type-eyebrow:var(--w-medium) var(--t-12)/var(--lh-snug) var(--font-core); /* @kind font */
+--type-mono:var(--w-regular) var(--t-13)/var(--lh-normal) var(--font-mono); /* @kind font */
+--type-mono-sm:var(--w-regular) var(--t-12)/var(--lh-normal) var(--font-mono); /* @kind font */
+}

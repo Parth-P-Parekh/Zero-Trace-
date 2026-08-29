@@ -1,0 +1,18 @@
+:root{
+/* Radii — the app icon is 512 with 112 radius (0.219). UI radii stay small
+   except pills, which come straight from the reference chrome. */
+--r-0:0px;
+--r-2:2px;
+--r-4:4px;
+--r-6:6px;
+--r-8:8px;
+--r-12:12px;
+--r-16:16px;
+--r-20:20px;
+--r-appicon:0.219; /* @kind other */
+--r-pill:999px;
+
+--bw-hair:1px; /* @kind spacing */
+--bw-line:1px; /* @kind spacing */
+--bw-heavy:2px; /* @kind spacing */
+}

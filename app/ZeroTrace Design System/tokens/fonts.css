@@ -1,0 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+/* ZeroTrace ships no font binaries. The logo sheet specifies Inter — SIL OFL, 400 Regular.
+   Inter is loaded from Google Fonts here; drop real woff2 files into assets/fonts/ and
+   replace this @import with @font-face rules if self-hosting is required.
+   IBM Plex Mono is an intentional addition (payload / code surfaces). See readme.md. */
