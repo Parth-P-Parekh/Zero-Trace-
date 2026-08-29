@@ -1,0 +1,31 @@
+:root{
+/* 4px base. 6 and 10 exist because the console runs dense. */
+--s-1:2px;
+--s-2:4px;
+--s-3:6px;
+--s-4:8px;
+--s-5:10px;
+--s-6:12px;
+--s-8:16px;
+--s-10:20px;
+--s-12:24px;
+--s-16:32px;
+--s-20:40px;
+--s-24:48px;
+--s-32:64px;
+--s-40:80px;
+--s-48:96px;
+--s-64:128px;
+
+/* Layout */
+--gutter:24px;
+--page-max:1200px;
+--prose-max:60ch;
+--rail-w:232px;
+--topbar-h:56px;
+--row-h:40px;
+--field-h:36px;
+
+/* Clear space around the wordmark — logo sheet 03, 0.6 x cap height */
+--wordmark-clearspace:0.6em; /* @kind spacing */
+}

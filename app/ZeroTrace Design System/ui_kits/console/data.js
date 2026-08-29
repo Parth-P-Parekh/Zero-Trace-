@@ -1,0 +1,33 @@
+window.ZT_ROWS = [
+  { id: 'pl_8f3a21c9e04b', time: '14:02:11', path: '/v1/chat/completions', model: 'gpt-4o', status: 'redacted', latency: '240 ms',
+    findings: [{ type: 'us_ssn', length: 11, action: 'Redacted' }, { type: 'api_key', length: 16, action: 'Redacted' }],
+    payload: ['{', '  "messages": [{ "role": "user", "content":',
+      ['    "support log — customer ssn ', { mask: '123-45-6789', type: 'us_ssn' }, ','],
+      ['     internal key ', { mask: 'sk-live-9fj2kd01', type: 'api_key' }, '"'],
+      '  }],', '  "model": "gpt-4o"', '}'] },
+  { id: 'pl_7c1d80aa5512', time: '14:02:09', path: '/v1/embeddings', model: 'text-embedding-3', status: 'clean', latency: '88 ms',
+    findings: [], payload: ['{', '  "input": "quarterly roadmap summary",', '  "model": "text-embedding-3-large"', '}'] },
+  { id: 'pl_5b90f4e21aa7', time: '14:01:58', path: '/v1/messages', model: 'claude-sonnet', status: 'blocked', latency: '—',
+    findings: [{ type: 'pan', length: 16, action: 'Blocked' }, { type: 'email', length: 14, action: 'Redacted' }, { type: 'phone', length: 12, action: 'Redacted' }],
+    payload: ['{', '  "messages": [{ "role": "user", "content":',
+      ['    "refund card ', { mask: '4111111111111111', type: 'pan' }, ' for ', { mask: 'ana@acme.io', type: 'email' }, '"'],
+      '  }]', '}'] },
+  { id: 'pl_2ae4419bd0c3', time: '14:01:44', path: '/v1/chat/completions', model: 'gpt-4o-mini', status: 'redacted', latency: '132 ms',
+    findings: [{ type: 'jwt', length: 24, action: 'Redacted' }],
+    payload: ['{', '  "messages": [{ "role": "system", "content":',
+      ['    "auth header ', { mask: 'eyJhbGciOiJIUzI1NiIs', type: 'jwt' }, '"'],
+      '  }]', '}'] },
+  { id: 'pl_9d02bb7c31fe', time: '14:01:30', path: '/v1/chat/completions', model: 'gpt-4o', status: 'clean', latency: '196 ms',
+    findings: [], payload: ['{', '  "messages": [{ "role": "user", "content": "summarise ticket 8812" }]', '}'] },
+  { id: 'pl_411c7e9a6b20', time: '14:01:12', path: '/v1/responses', model: 'gpt-4.1', status: 'redacted', latency: '311 ms',
+    findings: [{ type: 'iban', length: 22, action: 'Redacted' }, { type: 'address', length: 28, action: 'Redacted' }],
+    payload: ['{', ['  "input": "payout to ', { mask: 'GB29NWBK60161331926819', type: 'iban' }, '"'], '}'] },
+];
+
+window.ZT_RULES = [
+  { name: 'us social security numbers', pattern: '\\d{3}-\\d{2}-\\d{4}', action: 'Redact', hits: '(27)', active: true },
+  { name: 'provider api keys', pattern: 'sk-(live|test)-\\w+', action: 'Redact', hits: '(311)', active: true },
+  { name: 'bearer tokens and jwts', pattern: 'eyJ[\\w-]+\\.', action: 'Redact', hits: '(74)', active: true },
+  { name: 'no raw card numbers', pattern: 'luhn:16', action: 'Block', hits: '(12)', active: true },
+  { name: 'customer email addresses', pattern: 'detector:email', action: 'Redact', hits: '(1.2K)', active: false },
+];
