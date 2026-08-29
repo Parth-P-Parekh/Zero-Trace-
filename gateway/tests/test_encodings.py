@@ -145,3 +145,55 @@ def test_percent_encoding_of_a_key_is_a_no_op():
     alone, so a percent-encoded API key is byte-identical to the plain one and is caught
     by S0 directly. The percent codec earns its place on form-encoded bodies, not here."""
     assert urllib.parse.quote(KEY, safe="") == KEY
+
+
+# ------------------------------------------- lowered detection thresholds --
+
+def _creds(text: str):
+    from gateway.detect.s0_credentials import scan_span_credentials
+    from gateway.spans.model import Span
+    return scan_span_credentials(
+        Span(path="p", text=text, origin="user", leg="outbound")
+    )
+
+
+@pytest.mark.parametrize("truncated", [
+    "ghp_Xk9mQ2wE7rT4",              # 12 after the prefix; spec is 36
+    "sk_live_AbC9dEf2",              # 8; spec is 20
+    "rzp_live_AbC9dEf2",             # 8; spec is 14
+    "xoxb-1234567890AbCdEf",         # 16; spec is 24
+])
+def test_truncated_tokens_are_caught(truncated):
+    """A clipped copy is the most common accidental form of a pasted credential. The
+    anchor carries the precision -- nothing in English or code begins `ghp_` -- so
+    requiring the full spec length was missing exactly what it most needed to catch."""
+    assert _creds(truncated), f"missed truncated token: {truncated}"
+
+
+@pytest.mark.parametrize("placeholder", [
+    "ghp_xxxxxxxxxxxxxxxx",
+    "ghp_YOUR_TOKEN_HERE",
+    "sk_live_aaaaaaaaaaaa",
+    "rzp_live_XXXXXXXXXXXX",
+    "xoxb-000000000000",
+    "xoxb-aaaaaaaaaaaaaaaa",
+])
+def test_redacted_placeholders_do_not_fire(placeholder):
+    """The cost of a lower floor. Documentation is full of `ghp_xxxx...`, so entropy
+    does the work length used to -- but only below the spec length, where the doubt is."""
+    assert _creds(placeholder) == [], f"false positive: {placeholder}"
+
+
+def test_full_length_bodies_are_accepted_on_length_alone():
+    """Above the spec length the length is itself the evidence, and second-guessing it
+    would reject legitimate tokens -- including every synthetic one in a test suite."""
+    assert _creds("ghp_" + "A" * 36)
+    assert _creds("sk_live_" + "A" * 24)
+
+
+def test_weak_anchors_keep_their_floor():
+    """`sk-` is not provider-unique -- it matches CSS classes and slugs like
+    `sk-fade-in`. Its floor stays at 20 with the entropy post-check, because there the
+    anchor is not doing the discriminating."""
+    assert _creds("sk-AbC9dEf2GhI4") == []
+    assert _creds("class=\"sk-fade-in-slow-transition\"") == []

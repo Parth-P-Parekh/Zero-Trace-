@@ -62,8 +62,10 @@ _DETECTORS: list[CredentialDetector] = [
     CredentialDetector(
         entity_class=EntityClass.ANTHROPIC_KEY,
         anchors=["sk-ant-"],
-        pattern=r"sk-ant-[A-Za-z0-9_\-]{20,}",
-        post_check=None,
+        # 12, not 20. `sk-ant-` is provider-unique, so the anchor is the precision and
+        # the length floor only decides how much of a truncated paste we tolerate.
+        pattern=r"sk-ant-[A-Za-z0-9_\-]{12,}",
+        post_check="token_body_check",
     ),
     CredentialDetector(
         entity_class=EntityClass.OPENAI_KEY,
@@ -74,8 +76,12 @@ _DETECTORS: list[CredentialDetector] = [
     CredentialDetector(
         entity_class=EntityClass.GITHUB_TOKEN,
         anchors=["ghp_", "gho_", "ghu_", "ghs_", "ghr_"],
-        pattern=r"gh[pousr]_[A-Za-z0-9]{36,}",
-        post_check=None,
+        # 12, not 36. A classic PAT is 36 characters, but the most common accidental
+        # form is a clipped copy -- and `ghp_` followed by 12 alphanumerics is still
+        # unmistakably a GitHub token. Requiring the full length missed exactly the
+        # partial paste it most needed to catch.
+        pattern=r"gh[pousr]_[A-Za-z0-9]{12,}",
+        post_check="token_body_check",
     ),
     CredentialDetector(
         entity_class=EntityClass.AWS_ACCESS_KEY,
@@ -87,14 +93,14 @@ _DETECTORS: list[CredentialDetector] = [
     CredentialDetector(
         entity_class=EntityClass.RAZORPAY_KEY,
         anchors=["rzp_live_", "rzp_test_"],
-        pattern=r"rzp_(?:live|test)_[A-Za-z0-9]{14,}",
-        post_check=None,
+        pattern=r"rzp_(?:live|test)_[A-Za-z0-9]{8,}",
+        post_check="token_body_check",
     ),
     CredentialDetector(
         entity_class=EntityClass.SLACK_TOKEN,
         anchors=["xox"],
-        pattern=r"xox[baprs]-[A-Za-z0-9\-]{10,}",
-        post_check=None,
+        pattern=r"xox[baprs]-[A-Za-z0-9\-]{8,}",
+        post_check="token_body_check",
     ),
     CredentialDetector(
         entity_class=EntityClass.GOOGLE_API_KEY,
@@ -106,8 +112,8 @@ _DETECTORS: list[CredentialDetector] = [
     CredentialDetector(
         entity_class=EntityClass.STRIPE_KEY,
         anchors=["sk_live_", "sk_test_", "rk_live_", "rk_test_"],
-        pattern=r"[sr]k_(?:live|test)_[A-Za-z0-9]{20,}",
-        post_check=None,
+        pattern=r"[sr]k_(?:live|test)_[A-Za-z0-9]{8,}",
+        post_check="token_body_check",
     ),
     CredentialDetector(
         entity_class=EntityClass.JWT,
@@ -208,6 +214,60 @@ def entropy_check(text: str, match_start: int, match_end: int,
     if len(random_part) < 20:
         return False
     return _shannon_entropy(random_part) >= 3.5
+
+
+#: Original spec length of each provider's token body, keyed by anchor.
+#:
+#: The length floors below these were lowered because the *anchor* carries the precision
+#: -- nothing in English or code begins `ghp_` or `rzp_live_`. But a shorter floor lets a
+#: redacted placeholder through: `ghp_xxxxxxxxxxxx` is twelve alphanumerics after a real
+#: prefix.
+#:
+#: So the entropy guard applies **only inside the range the floor was lowered into.** At
+#: or above the spec length, the length is itself the evidence and the body is accepted
+#: whatever it looks like -- which is both correct and what keeps `ghp_` + 36 characters
+#: matching regardless of what those characters are.
+_SPEC_BODY_LENGTH: dict[str, int] = {
+    "ghp_": 36, "gho_": 36, "ghu_": 36, "ghs_": 36, "ghr_": 36,
+    "sk-ant-": 20,
+    "rzp_live_": 14, "rzp_test_": 14,
+    "sk_live_": 20, "sk_test_": 20, "rk_live_": 20, "rk_test_": 20,
+    # Real Slack tokens run to ~50 characters. The old pattern floor of 10 was a loose
+    # minimum, not the spec -- using it here let `xoxb-000000000000` past the entropy
+    # guard on length alone.
+    "xoxb-": 24, "xoxa-": 24, "xoxp-": 24, "xoxr-": 24, "xoxs-": 24,
+}
+
+#: Entropy floor for a *short* token body. A real token of 12 random characters clears
+#: this comfortably; a run of one repeated character measures 0.
+_MIN_TOKEN_ENTROPY = 2.5
+
+
+def token_body_check(text: str, match_start: int, match_end: int,
+                     full_text: str) -> bool:
+    """Reject placeholder bodies on provider-anchored classes with a lowered floor.
+
+    Only bodies shorter than the provider's spec length are judged. Above it the length
+    already decided, and second-guessing that would reject legitimate tokens -- including
+    every synthetic one in a test suite.
+    """
+    matched = full_text[match_start:match_end]
+
+    prefix = next(
+        (p for p in sorted(_SPEC_BODY_LENGTH, key=len, reverse=True)
+         if matched.startswith(p)),
+        None,
+    )
+    if prefix is None:
+        return True
+
+    body = matched[len(prefix):]
+    if len(body) >= _SPEC_BODY_LENGTH[prefix]:
+        return True                      # full-length: the length is the evidence
+
+    if len(body) < 6:
+        return False
+    return _shannon_entropy(body) >= _MIN_TOKEN_ENTROPY
 
 
 def jwt_structure_check(text: str, match_start: int, match_end: int,
@@ -356,6 +416,7 @@ _POST_CHECKS: dict[str, object] = {
     "jwt_structure_check": jwt_structure_check,
     "pem_block_check": pem_block_check,
     "db_uri_check": db_uri_check,
+    "token_body_check": token_body_check,
 }
 
 
@@ -496,6 +557,9 @@ def scan_span_credentials(span: Span) -> list[Finding]:
                     if not check_fn(text, match_start, match_end, text):  # type: ignore[operator]
                         continue
                     confidence = 0.98
+                elif det.post_check == "token_body_check":
+                    if not check_fn(text, match_start, match_end, text):  # type: ignore[operator]
+                        continue
 
             # Record the finding
             covered_ranges.append((match_start, actual_end))
