@@ -92,7 +92,11 @@ def check_embedded(text: str, session_id: str) -> dict:
     from gateway.check import text_tree, to_verdict
     from gateway.detectors.example import EXAMPLE_DETECTORS
 
-    pack = DetectorPack.build(list(EXAMPLE_DETECTORS), version=1)
+    from gateway.detect.s0_credentials import scan_span_credentials
+
+    pack = DetectorPack.build(
+        list(EXAMPLE_DETECTORS), version=1, scanners=[scan_span_credentials]
+    )
     checker = Checker(
         pack,
         # No cache: this process sees one prompt and exits, so there is nothing to reuse.

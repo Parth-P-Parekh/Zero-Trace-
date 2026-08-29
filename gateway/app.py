@@ -45,6 +45,7 @@ from .base.checker import Checker, CheckerConfig
 from .base.policy import StubPolicyClient
 from .base.scanner import DetectorPack, assert_production_engines
 from .contracts.types import Action, Actor
+from .detect.s0_credentials import scan_span_credentials
 from .detectors.example import EXAMPLE_DETECTORS
 from .intel.agent import IntelPlane
 from .intel.features import features_of
@@ -66,7 +67,13 @@ UPSTREAM = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     assert_production_engines()
-    app.state.pack = DetectorPack.build(list(EXAMPLE_DETECTORS), version=1)
+    app.state.pack = DetectorPack.build(
+        list(EXAMPLE_DETECTORS),
+        version=1,
+        # The S0 credential pack. This is the zero-tolerance class and the reason the
+        # product exists; the example detectors above are reference shapes only.
+        scanners=[scan_span_credentials],
+    )
     app.state.cache = InMemorySpanCache()
     app.state.checker = Checker(
         app.state.pack, app.state.cache,

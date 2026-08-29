@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..contracts.types import Finding, Tier
@@ -140,13 +141,26 @@ class DetectorPack:
 
     version: int
     detectors: tuple[Detector, ...]
+    #: Whole-span scan functions, ``Span -> list[Finding]``.
+    #:
+    #: Some detection work does not decompose into anchor + confirm -- it runs its own
+    #: automaton and its own multi-pattern pass, and forcing it through the `Detector`
+    #: shape would mean rewriting it to be slower. `s0_credentials.scan_span_credentials`
+    #: is the case in point. They run after T1-T3 and their findings are deduped
+    #: together with everything else.
+    scanners: tuple[Callable[[Span], list[Finding]], ...] = ()
     _automaton: object = field(repr=False, default=None)
     _shape_re: object = field(repr=False, default=None)
     _by_anchor: dict[str, list[Detector]] = field(repr=False, default_factory=dict)
     _by_group: dict[str, Detector] = field(repr=False, default_factory=dict)
 
     @classmethod
-    def build(cls, detectors: list[Detector], version: int = 1) -> "DetectorPack":
+    def build(
+        cls,
+        detectors: list[Detector],
+        version: int = 1,
+        scanners: list[Callable[[Span], list[Finding]]] | None = None,
+    ) -> "DetectorPack":
         """Validate every detector, then compile T1 and T2.
 
         A detector that fails validation is **excluded with a logged reason**, not
@@ -191,6 +205,7 @@ class DetectorPack:
         return cls(
             version=version,
             detectors=tuple(good),
+            scanners=tuple(scanners or ()),
             _automaton=automaton,
             _shape_re=shape_re,
             _by_anchor=by_anchor,
@@ -244,8 +259,19 @@ def scan_span(
             if d is not None and d.tier <= max_tier:
                 candidates.append((d, m.start(), m.end()))
 
+    # Whole-span scanners run regardless of whether T1/T2 produced candidates -- they
+    # do their own matching and would be skipped entirely by an early return here.
+    extra: list[Finding] = []
+    for fn in pack.scanners:
+        deadline.check(f"scanner:{span.path}")
+        try:
+            extra.extend(fn(span))
+        except Exception:
+            log.exception("span scanner %r raised on %s; skipping",
+                          getattr(fn, "__name__", fn), span.path)
+
     if not candidates:
-        return []
+        return _dedupe(extra)
 
     # -- T3: confirm only where T1/T2 pointed. Usually zero iterations. --
     deadline.check(f"confirm:{span.path}")
@@ -263,7 +289,7 @@ def scan_span(
             continue
         findings.append(_to_finding(detector, match, span))
 
-    return _dedupe(findings)
+    return _dedupe(findings + extra)
 
 
 def _scan_chunked(

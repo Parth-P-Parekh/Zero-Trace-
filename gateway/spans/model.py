@@ -33,6 +33,10 @@ from typing import Iterator
 from ..contracts.types import Leg, Origin
 
 
+#: Sentinel for a span with no position in any buffer -- detection-only.
+NO_BYTE_RANGE = -1
+
+
 @dataclass(frozen=True, slots=True)
 class Span:
     """One addressable leaf of a request or response body."""
@@ -43,8 +47,14 @@ class Span:
     leg: Leg
     #: Byte range of the *raw value content* in the original buffer, excluding the
     #: surrounding quotes. Written by the normaliser; the redactor splices here.
-    byte_start: int
-    byte_end: int
+    #:
+    #: ``NO_BYTE_RANGE`` means detection-only: the span was built from bare text (a
+    #: prompt, a test fixture) and has no position in any buffer. Detectors never need
+    #: these; only redaction does. Defaulting them to ``0`` instead would let
+    #: `serialise()` splice over the first bytes of the payload and quietly corrupt it,
+    #: so the sentinel is checked and raises there instead.
+    byte_start: int = NO_BYTE_RANGE
+    byte_end: int = NO_BYTE_RANGE
     lang_hint: str | None = None
 
     #: Set for spans extracted from a JSON document embedded in a string field
@@ -57,6 +67,11 @@ class Span:
     @property
     def is_nested(self) -> bool:
         return self.parent_path is not None
+
+    @property
+    def has_byte_range(self) -> bool:
+        """False for detection-only spans. Redaction requires True."""
+        return self.byte_start != NO_BYTE_RANGE and self.byte_end != NO_BYTE_RANGE
 
     def __len__(self) -> int:
         return len(self.text)
@@ -192,6 +207,14 @@ class SpanTree:
         patches: list[tuple[int, int, bytes]] = []
         for path, edits in by_span.items():
             span = self._by_path[path]
+            if not span.has_byte_range:
+                # Detection-only span. Splicing at the sentinel would corrupt the
+                # buffer, and a corrupted payload that looks almost right is the worst
+                # failure mode there is -- so refuse rather than guess.
+                raise SpanOffsetError(
+                    f"cannot redact {path!r}: span has no byte range (detection-only). "
+                    f"Build it from a real payload via extract_spans() to redact it."
+                )
             text = _apply_char_edits(span.text, edits)
             encoded = json.dumps(text, ensure_ascii=False)[1:-1].encode("utf-8")
             patches.append((span.byte_start, span.byte_end, encoded))

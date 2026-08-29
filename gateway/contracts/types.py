@@ -100,6 +100,16 @@ class Tier(IntEnum):
     SEMANTIC = 3        # S2 NER + S3 composite — M9
 
 
+_STAGE_OF: dict["Tier", str] = {
+    Tier.CACHE: "S0", Tier.DETERMINISTIC: "S0",
+    Tier.CONTEXT: "S1", Tier.SEMANTIC: "S2",
+}
+_TIER_OF: dict[str, "Tier"] = {
+    "S0": Tier.DETERMINISTIC, "S1": Tier.CONTEXT,
+    "S2": Tier.SEMANTIC, "S3": Tier.SEMANTIC,
+}
+
+
 class Verdict(StrEnum):
     GREEN = "green"     # dispatch unmodified
     AMBER = "amber"     # escalate a tier; at the top tier, resolve per the fail stance
@@ -138,9 +148,18 @@ class Finding:
     end: int
     entity_class: EntityClass
     confidence: float
-    tier: Tier
     leg: Leg
-    detector_name: str
+    #: FK to `detectors(id)` once the detector is persisted (CODE-01 §4.1, §5.1).
+    #: None for a seed detector that has no row yet.
+    detector_id: int | None = None
+    #: Human-readable detector identity, useful before persistence and in logs. Carries
+    #: no authority -- `detector_id` is the one the ledger and the console join on.
+    detector_name: str = ""
+    #: Pipeline stage, "S0".."S3" (CODE-01 §5.1). `tier` is the same fact as an ordered
+    #: enum; both exist because the schema names the string and the checker compares the
+    #: ordering. `stage` is derived when only `tier` is given, and vice versa.
+    stage: str = ""
+    tier: Tier = Tier.DETERMINISTIC
     #: True when this finding may not drive enforcement on its own (VOCAB-01 §3.7).
     advisory_only: bool = False
 
@@ -153,6 +172,17 @@ class Finding:
             raise ValueError(f"confidence out of range: {self.confidence}")
         if self.start < 0 or self.end < self.start:
             raise ValueError(f"bad offsets: [{self.start}, {self.end})")
+        # Keep `stage` and `tier` consistent whichever one the caller supplied, so a
+        # detector written against either spelling produces the same Finding.
+        if self.stage and self.stage != _STAGE_OF[self.tier]:
+            object.__setattr__(self, "tier", _TIER_OF.get(self.stage, self.tier))
+        elif not self.stage:
+            object.__setattr__(self, "stage", _STAGE_OF[self.tier])
+        # entity_class arrives as a str from detectors that hold the value rather than
+        # the enum member. Coerce, so an unknown class still raises here rather than
+        # travelling on as a string nothing will ever match (VOCAB-01 §1).
+        if not isinstance(self.entity_class, EntityClass):
+            object.__setattr__(self, "entity_class", EntityClass(self.entity_class))
 
 
 @dataclass(frozen=True, slots=True)

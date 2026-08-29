@@ -3,7 +3,7 @@
 A change to this package stops both tracks. It is a conversation, not a commit.
 """
 from .entity_classes import (
-    FAMILY_OF, NEVER_ENFORCE_ALONE, NEVER_TOKENIZE, NOT_IN_SKELETON,
+    CLASS_TO_FAMILY, FAMILY_OF, NEVER_ENFORCE_ALONE, NEVER_TOKENIZE, NOT_IN_SKELETON,
     EntityClass, Family, UnknownEntityClass, family_of, parse_class,
 )
 from .types import (
@@ -12,7 +12,7 @@ from .types import (
 )
 
 __all__ = [
-    "FAMILY_OF", "NEVER_ENFORCE_ALONE", "NEVER_TOKENIZE", "NOT_IN_SKELETON",
+    "CLASS_TO_FAMILY", "FAMILY_OF", "NEVER_ENFORCE_ALONE", "NEVER_TOKENIZE", "NOT_IN_SKELETON",
     "EntityClass", "Family", "UnknownEntityClass", "family_of", "parse_class",
     "Action", "Actor", "Channel", "CheckResult", "Decision", "Finding", "Leg",
     "Origin", "PolicyClient", "Tier", "Verdict",

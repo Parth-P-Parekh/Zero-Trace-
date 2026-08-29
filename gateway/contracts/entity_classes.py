@@ -155,6 +155,11 @@ NOT_IN_SKELETON: frozenset[EntityClass] = frozenset({
 })
 
 
+#: Alias. The S0 credential detector was written against this name before the two
+#: trees were reconciled; both refer to the same mapping and neither is a copy.
+CLASS_TO_FAMILY = FAMILY_OF
+
+
 def family_of(cls: EntityClass) -> Family:
     """Family for a class. Raises KeyError if the map is incomplete — which is a bug
     here, not in the caller, and is asserted by ``test_vocabulary_is_total``."""
