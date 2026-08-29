@@ -2,6 +2,28 @@
 **Doc ID:** CODE-01 · **Governed by:** SSOT-01 (binding) → PROD-01 (architecture) · **Track:** Novelty (primary)
 **Audience:** the four people building this. This is the file you keep open while typing.
 
+### Document map — CODE-01 governs these, and they update it back
+
+| Doc | ID | What it holds |
+|---|---|---|
+| `06_SKELETON_PLAN.md` | **SKEL-01** | The walking skeleton: Part A control groups, Part B egress, Part C interception (Claude Code / sidebar / Codex), Part D the checker + blind agent, Part E carried-over corrections |
+| `07_MERGE_PLAN.md` | **MERGE-01** | How the two mutually exclusive dev tracks become one system |
+| `08_ENTITY_CLASSES.md` | **VOCAB-01** | **The closed `entity_class` vocabulary.** Frozen at M0, shared by both tracks |
+
+**Precedence is unchanged — SSOT-01 > PROD-01 > CODE-01 > SKEL-01 > MERGE-01.** VOCAB-01 sits
+outside the chain: it is a contract, and both tracks hard-error against it rather than
+interpreting it.
+
+### Revision log
+
+| When | Change | Driver |
+|---|---|---|
+| Round 1 | Aho-Corasick prefilter added ahead of re2 (§1, §6.1); span cache added (§6.1c); `ANTHROPIC_KEY` added; detector precision becomes a measured posterior | Review: sequential regex scanning; conversation resend is O(n²) |
+| Round 2 | `ZT_BUDGET_*` re-allocated (§3.2); §6.0.1 latency envelope; §6.1d green/amber/red checker; **§10.2 no longer enqueues span text** | Requirement: <10ms typical / 50ms max, and the LLM must never see the prompt |
+| Round 3 | §5.2 `span_path` no longer claimed unconditionally safe; §5.4 round-trip by splicing; §7.1 `scope_key` defined for session-less clients; §14.1 ledger append made two-phase; `cache_control` preservation | Review: watchdog cannot preempt Python; cold-start latency; ledger lock serialises requests; prompt cache breakage |
+
+**Open — needs a decision, not an edit** (see the sync note at the end of §24).
+
 ---
 
 ## 0. How to read this
@@ -588,13 +610,22 @@ One function per provider, all returning `SpanTree`:
 | Bedrock / Vertex | provider envelope around one of the above | unwrap, then delegate |
 | Embeddings | `input` string or array | each element |
 
-**JSON-in-string handling.** A tool result is very often a JSON string inside a string field. `normalise.py` attempts a parse on any span longer than 40 chars that starts with `{` or `[`; on success it recurses and emits leaf spans with paths like `messages[3].tool_result$json.customer.pan`. The `$json` marker tells `denormalise()` to re-serialise that subtree. This is where agentic egress actually lives (PROD-01 §1.1 failure mode 3) and skipping it makes the whole agent story theatre.
+**JSON-in-string handling.** A tool result is very often a JSON string inside a string field. `normalise.py` attempts a parse on any span of **8 chars or more** that starts with `{` or `[`; (an earlier draft said 40, which silently skipped `{"customer":{"pan":"ABCPZ1234C"}}` at 36 chars — a failed parse on a short string is free, a missed credential is not) on success it recurses and emits leaf spans with paths like `messages[3].tool_result$json.customer.pan`. The `$json` marker tells `denormalise()` to re-serialise that subtree. This is where agentic egress actually lives (PROD-01 §1.1 failure mode 3) and skipping it makes the whole agent story theatre.
 
 ### 5.4 Tests that must exist before S0 is written
 
 - Round-trip identity: `denormalise(normalise(body)) == body` byte-for-byte with no edits, for every fixture in `tests/fixtures/payloads/`.
 - Edit ordering: two overlapping edits in one span produce the correct string.
 - Deep JSON: a PAN nested three levels inside a stringified tool result produces one span with the right path.
+- **`cache_control` preservation:** a body carrying Anthropic prompt-cache breakpoints survives the round trip with every marker at its original position.
+
+**Round-trip identity is achieved by splicing, not by re-serialising.** Parsing a body and re-emitting it loses key order, whitespace, number formatting and unicode escaping — so the byte-for-byte test above would fail on real payloads, or be quietly relaxed until it meant nothing. `denormalise()` therefore **writes edits into the original byte buffer at recorded offsets** and never re-serialises a body it is not changing.
+
+This is the better design, not a workaround, and it pays three times: round-trip identity becomes trivially true, `cache_control` markers keep their exact byte positions, and bytes we did not deliberately change cannot be accidentally changed.
+
+**Why the markers matter (SKEL-01 §E.2).** Claude Code relies on prompt caching; a gateway that rewrites the stable prefix invalidates the cache every turn and multiplies the user's bill with no visible cause. Two properties keep it intact: redaction is deterministic (§7.1), so turn *n*'s redaction of shared history is byte-identical to turn *n−1*'s; and redaction never inserts or removes message blocks, only edits within a span. **`test_prompt_cache_survives` sends the same conversation twice and asserts the upstream reports a cache hit on the second.** Without it this regresses silently, which is exactly how it would reach a user.
+
+**Note on streaming.** §9.2's rule that SSE frames are "re-serialised, never byte-patched" is not in tension with this. A response frame carries a JSON object whose text field changes length, so that object must be re-serialised; what is forbidden is patching the frame *envelope*, which corrupts the stream framing. Request bodies are spliced; response frame payloads are re-serialised. Different layers.
 
 ---
 
@@ -690,7 +721,7 @@ The automaton is built once per detector pack, at load, and rebuilt on hot-swap 
 
 | Class | Shape | Check |
 |---|---|---|
-| `AADHAAR_FORMAT` | `[2-9][0-9]{3}\s?[0-9]{4}\s?[0-9]{4}` | Verhoeff |
+| `AADHAAR` | `[2-9][0-9]{3}\s?[0-9]{4}\s?[0-9]{4}` | Verhoeff · **class is `AADHAAR`** per VOCAB-01 §3.2; `aadhaar_format` is the detector name |
 | `PAN` | `[A-Z]{5}[0-9]{4}[A-Z]` | 4th char in `ABCFGHLJPTK` (holder type) |
 | `CREDIT_CARD` | `(?:[0-9][ -]?){13,19}` | Luhn + IIN range |
 | `IFSC` | `[A-Z]{4}0[A-Z0-9]{6}` | bank-prefix table |
@@ -872,6 +903,13 @@ def derive_token(tenant_key: bytes, scope_key: str, entity_class: str, value: st
 - **One-way** → HMAC is not invertible, and the key never leaves the KMS interface. There is no `undo_token()` in this codebase, and a code review that finds one rejects it.
 - **Scoped** → `scope_key` is the session id (default) or the tenant id (`ZT_TOKEN_SCOPE=tenant`, for cross-session agent fleets). The scope is in the MAC input, so the same value under two scopes derives two different tokens by construction.
 
+**What `scope_key` is when the client sends no session id.** Claude Code does not send one, and both obvious fallbacks are wrong: per-request means the same person gets a new codename every turn — the model loses referential stability *and* the prompt cache breaks (§5.4); per-actor-forever turns the codename into a permanent cross-conversation tracking tag for a real person, which is the opposite of the product.
+
+1. **The interception layer mints it.** The CLI wrapper generates a session id at launch and injects `X-ZeroTrace-Session`; the browser extension uses a per-tab id. Our own code on both paths.
+2. **Fallback — conversation-prefix hash.** `HMAC(k_tenant, canonical(system_prompt + first user message))`. Stable across the turns of one conversation, different across conversations, needs no client cooperation.
+
+This makes `scope_key` a **billing-correctness** concern as well as a privacy one, because token stability is what keeps the upstream prompt cache warm.
+
 ### 7.2 Token formats
 
 `vault/formats.py`, one entry per class. Two families:
@@ -890,7 +928,7 @@ EMAIL    → ⟨EMAIL_9df⟩@example.invalid     (kept parseable as an email)
 ```
 PAN            → AAAPZ1234C     letters from mac bytes, digits from mac bytes,
                                 4th char forced to a valid holder-type letter
-AADHAAR_FORMAT → 4 + 11 digits derived from mac, then the Verhoeff digit recomputed
+AADHAAR        → 4 + 11 digits derived from mac, then the Verhoeff digit recomputed
 CREDIT_CARD    → same IIN prefix + derived middle + recomputed Luhn digit
 PHONE          → same country/operator prefix, derived subscriber digits
 DATE_OF_BIRTH  → same year, derived month/day (age-band preserving)
@@ -1027,7 +1065,9 @@ decision = policy.decide(tenant, actor, findings, risk,
                          leg="inbound", clearance=actor.groups)
 ```
 
-The demo case (PROD-01 §16, 1:30): a clinical note surfaced from the connected knowledge base, requested by an actor not in `clinical_staff`. The rule fires, the note is masked, and the response header says `X-ZeroTrace-Inbound-Findings: 1` with the class. Retrieval is not access control, and this is where we say so in code.
+The demo case (PROD-01 §16, 1:30): a contractor asks about a service, and the connected knowledge base surfaces an **open incident postmortem containing an unpatched CVE**. The actor is not in `security`, the rule fires, the finding is masked, and the response header says `X-ZeroTrace-Inbound-Findings: 1` with the class. Retrieval is not access control, and this is where we say so in code.
+
+**The worked example is a tech company throughout** (VOCAB-01 §3.6) — the product is demoed on Claude Code and Codex, so an engineering org is the setting a judge finds coherent, and every judge in the room has a wiki with exactly this problem. PROD-01 §9 and §16 still use the clinical example and need the same edit — see §24.1.
 
 ---
 
@@ -1251,7 +1291,11 @@ def append(tenant_id, event_type, payload: dict) -> int:
 ```
 
 - `canonical_json` = sorted keys, no whitespace, UTF-8, `Decimal` as string. Any drift in serialisation breaks verification later, which is why it is one function used everywhere.
-- Appends happen inside the request's transaction with `SELECT ... FOR UPDATE` on the tenant's last row, so concurrent requests cannot fork the chain.
+- **Appends are two-phase, so the chain never holds a lock on the request path.** The naive design — `SELECT ... FOR UPDATE` on the tenant's last row inside the request transaction — does prevent a forked chain, and also serialises every request for that tenant: one in flight at a time, and adding servers does not help.
+
+  Phase 1, on the request path: insert the record **durably but unchained** — no lock, no ordering requirement, committed before the response returns. Phase 2, off the path: a single per-tenant writer chains pending records in order and fills `prev_hash`/`record_hash`.
+
+  Durability is preserved, the chain is still strictly ordered and still verifiable, and `make verify` gains one check — **zero unchained records older than N seconds** — so a stalled writer is a loud failure rather than a silent gap.
 - **Never** put span text in `payload_json`. The record schema per event type is in `ledger/records.py` and every one is validated on write.
 
 ### 14.2 Verification
@@ -1296,7 +1340,7 @@ X-ZeroTrace-Action: masked
 X-ZeroTrace-Findings: 3
 X-ZeroTrace-Classes: API_KEY,PERSON,PAN
 X-ZeroTrace-Inbound-Findings: 1
-X-ZeroTrace-Inbound-Classes: MEDICAL
+X-ZeroTrace-Inbound-Classes: SECURITY_FINDING
 X-ZeroTrace-Composite-Risk: 0.71
 X-ZeroTrace-Latency-Ms: 21
 X-ZeroTrace-Ledger-Id: led_01J...
@@ -1623,3 +1667,22 @@ A work item is Done only when all four hold (SSOT §5.2):
 - [ ] tag `v1.0-freeze` pushed
 
 The last two hours stay empty. They exist to absorb the failure nobody has met yet.
+
+---
+
+## 24.1 Open cross-document items — decisions, not edits
+
+Found by a sync pass across CODE-01, SKEL-01, MERGE-01 and VOCAB-01. Each needs somebody to
+decide, and none should be closed by quietly editing one side.
+
+| # | Drift | Recommendation |
+|---|---|---|
+| 1 | **PROD-01 §9 and §16 still use the clinical/`MEDICAL` example**; CODE-01 §9.3, §15.1 and VOCAB-01 now use a tech company (`SECURITY_FINDING`, `INCIDENT_REPORT`). PROD-01 governs CODE-01, so the contradiction currently sits in the higher doc | Edit PROD-01 to match. This follows the §22.3 precedent — implement current semantics here, flag the governing doc explicitly. **Assign it, or a judge reading both finds it** |
+| 2 | **PROD-01 §9 writes `AADHAAR_FORMAT` as a policy class.** VOCAB-01 §3.2 makes `AADHAAR` the class and `aadhaar_format` the detector | Edit PROD-01. Rules match classes; detector names are internal |
+| 3 | **§2's repo layout is one tree.** SKEL-01 §1.2 splits development into two mutually exclusive services (`policy_service/` schema `ctl`, `gateway/` schema `dp`) plus a frozen `contracts/`, merged per MERGE-01 | Layout here is the **post-merge** end state and that is fine — but §2 should say so and point at SKEL-01 §1.2 for the dev-time tree, or someone builds the wrong shape at T+1 |
+| 4 | **§11 covers only the transparent gateway.** The actual first interception targets are Claude Code (`ANTHROPIC_BASE_URL`), the Claude sidebar (MV3 extension patching `window.fetch`), then Codex — SKEL-01 Part C | Add SKEL-01 Part C's ladder to §11 as rungs 1–3, with the transparent gateway as rung 4. The gateway is still the enterprise answer; it is not the first one built |
+| 5 | **§22's T+ schedule predates the track split** and still reads as one team on one tree | Re-cut against SKEL-01 §2's M0 → (A ∥ B ∥ C) → M-MERGE milestones before anyone plans against it |
+| 6 | **SSOT-01 re-hydration drift** — G2, `EV-MEM-01`, §8 rung 4 | Unchanged from §22.3. Still unassigned, still ten minutes |
+
+**Items 1 and 2 are the ones that show.** They are in the governing document, they are visible
+to anyone reading two files, and they cost one edit each.
