@@ -35,11 +35,12 @@ LIVE_KEY = "sk-ant-api03-" + "x" * 40
 @pytest.fixture
 def client(monkeypatch):
     """App with upstream stubbed — nothing leaves the test process."""
-    async def fake_dispatch(provider, path, body, headers):
+    async def fake_dispatch(provider, path, body, headers, extra=None):
         from fastapi.responses import JSONResponse
         # Assert here too: whatever reaches "upstream" must be clean.
         assert LIVE_KEY not in body.decode()
-        return JSONResponse({"ok": True, "echo": json.loads(body)})
+        return JSONResponse({"ok": True, "echo": json.loads(body)},
+                            headers=extra or {})
 
     monkeypatch.setattr("gateway.app._dispatch", fake_dispatch)
     app = create_app()

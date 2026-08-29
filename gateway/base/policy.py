@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..contracts.entity_classes import NEVER_TOKENIZE, EntityClass, Family, family_of
-from ..contracts.types import Action, Actor, Decision, Finding, Leg
+from ..contracts.types import Action, Actor, Decision, Finding, Leg, may_enforce
 
 #: Family defaults mirroring the seed policy in VOCAB-01 §4. Track A owns the real
 #: thing; this exists so Track B is not blocked waiting for it.
@@ -77,13 +77,17 @@ class StubPolicyClient:
         risk: float,
         leg: Leg,
         destination: str,
+        origins: dict[str, str] | None = None,
     ) -> Decision:
+        origins = origins or {}
         action = self.default
         fired: int | None = None
 
         for i, f in enumerate(findings):
             if f.advisory_only:
                 continue  # a hypothesis never drives enforcement on its own
+            if not may_enforce(origins.get(f.span_path, "user"), f.family):
+                continue  # tool schemas / developer instructions -- see may_enforce
 
             if leg == "inbound":
                 cleared = _CLEARANCE.get(f.entity_class)

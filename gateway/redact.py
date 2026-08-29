@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass, field
 
 from .contracts.entity_classes import EntityClass
-from .contracts.types import Action, Decision, Finding
+from .contracts.types import REDACTABLE_ORIGINS, Action, Decision, Finding
 from .spans.model import SpanTree
 from .vault.derive import derive_token, shape_preserving_pending
 
@@ -53,6 +53,9 @@ class RedactionPlan:
     #: Classes that should have had a shape-preserving token but got a labelled one.
     #: Surfaced, never hidden (see vault.derive.shape_preserving_pending).
     degraded_formats: set[EntityClass] = field(default_factory=set)
+    #: Findings we detected but deliberately did not rewrite, because they sit in tool
+    #: schemas or developer instructions. Reported in a header, never silently dropped.
+    skipped_read_only: list[str] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -87,6 +90,15 @@ def plan_redaction(
     not a reason to edit somebody's prompt.
     """
     plan = RedactionPlan(action=decision.action)
+
+    # Read-only accounting runs whatever the action is. Doing it only on the redacting
+    # path meant an allowed request reported zero read-only findings while the console
+    # showed the classes -- the numbers disagreed and the header was the wrong one.
+    for f in findings:
+        span = tree.by_path(f.span_path)
+        if span is not None and span.origin not in REDACTABLE_ORIGINS:
+            plan.skipped_read_only.append(f"{f.span_path}:{f.entity_class.value}")
+
     if decision.action in (Action.ALLOW, Action.WARN, Action.BLOCK):
         return plan
 
@@ -94,6 +106,11 @@ def plan_redaction(
         if f.advisory_only:
             continue
         span = tree.by_path(f.span_path)
+        if span is not None and span.origin not in REDACTABLE_ORIGINS:
+            # Tool/skill schemas and developer instructions are read-only to us.
+            # Rewriting them would change how the agent behaves and invalidate the
+            # upstream prompt cache. Already counted above; just do not edit.
+            continue
         if span is None:
             # A finding whose span vanished means the tree and the findings disagree.
             # Fail loudly: a redaction we cannot place is a redaction we cannot claim.

@@ -144,7 +144,7 @@ class _Scanner:
                 self.skip_ws()
                 self._expect(ord(":"))
                 child = f"{path}.{key}" if path else key
-                self.value(child, out, leg, _origin_for(key, origin), depth)
+                self.value(child, out, leg, _origin_for(child, key, origin), depth)
                 self.skip_ws()
                 if self.pos < len(self.buf) and self.buf[self.pos] == 0x2C:
                     self.pos += 1
@@ -229,17 +229,49 @@ def _nested(
     return out
 
 
-def _origin_for(key: str, inherited: Origin) -> Origin:
-    """Best-effort origin from the key name. Drives source-aware policy (CODE-01 §9) —
-    a secret in a tool result is a different problem from one the user typed."""
+#: Top-level keys whose entire subtree is the agent harness talking, not the user.
+#: These are scanned but never rewritten -- see `contracts.types.REDACTABLE_ORIGINS`.
+#:
+#: `tools` is tool and skill schemas. `system` (Anthropic) and `instructions` (the
+#: OpenAI Responses API) are developer instructions. Claude Code and Codex both ship
+#: skills through exactly these, so rewriting them changes agent behaviour nobody asked
+#: to change -- and invalidates the prompt cache, since these blocks are what
+#: `cache_control` marks.
+_ROOT_ORIGINS: dict[str, Origin] = {
+    "tools": "tool_definition",
+    "tool_choice": "tool_definition",
+    "functions": "tool_definition",
+    "system": "system",
+    "instructions": "system",
+}
+
+#: Keys that are protocol scaffolding. Not scanned at all -- pure cost and pure
+#: false-positive surface (a model id is not a secret, and a JSON-Schema `type` never is).
+_METADATA_KEYS = frozenset({
+    "role", "type", "id", "model", "object", "created", "status", "index",
+    "cache_control", "anthropic_version", "stop_reason", "finish_reason",
+    "usage", "service_tier", "previous_response_id", "schema", "format",
+})
+
+
+def _origin_for(path: str, key: str, inherited: Origin) -> Origin:
+    """Origin from the *path*, not just the key. Drives source-aware policy (CODE-01 §9).
+
+    Keying off the bare name was wrong: `tools[0].description` inherited `user`, so an
+    AWS key used as a documentation example inside a skill's tool schema looked exactly
+    like a credential the user had pasted. That would have blocked every request in any
+    project whose tools mention one.
+    """
+    root = path.split(".", 1)[0].split("[", 1)[0]
+    if root in _ROOT_ORIGINS:
+        return _ROOT_ORIGINS[root]
+
     match key:
-        case "system":
-            return "system"
-        case "tool_result" | "tool_use" | "toolResult":
+        case "tool_result" | "tool_use" | "toolResult" | "output" | "function_call_output":
             return "tool_result"
-        case "tool_calls" | "tool_call":
+        case "tool_calls" | "tool_call" | "function_call" | "arguments":
             return "tool_call"
-        case "role" | "type" | "id" | "model":
+        case k if k in _METADATA_KEYS:
             return "metadata"
         case _:
             return inherited

@@ -51,16 +51,27 @@ SKIP_ORIGINS: frozenset[str] = frozenset({"metadata"})
 def may_enforce(origin: str, family: "Family") -> bool:
     """Whether a finding at this origin may drive block/mask/tokenize.
 
-    A real live key committed into `CLAUDE.md` reaches us as system content and is a
-    genuine leak worth stopping. A *documentation example* in a tool description is not,
-    and blocking on it would make the agent unusable on its first run.
+    Three tiers, and the line between them is **who can fix it**:
 
-    The line that actually holds: in scan-only origins only the CREDENTIAL family may
-    enforce, because those detectors are anchor- and checksum-confirmed and near-zero
-    false positive. Everything softer -- PII, entropy, gazetteers -- is advisory there,
-    since skill docs and JSON schemas are full of plausible-looking noise.
+    * ``user``, ``assistant``, ``tool_call``, ``tool_result`` -- everything enforces.
+      This is the content the request is actually about.
+    * ``system`` / ``instructions`` -- only CREDENTIAL enforces. A live key committed
+      into `CLAUDE.md` or `AGENTS.md` is a real leak and the user can go and remove it,
+      so stopping is useful. Softer classes are advisory here, because developer
+      instructions are prose full of plausible-looking noise.
+    * ``tool_definition`` -- **nothing enforces.** Tool, skill and MCP schemas are
+      shipped by whoever wrote the tool. An AWS key in a `description` is almost always
+      a documentation example, and the user cannot fix it by editing their prompt.
+      Blocking them for text they did not write and cannot change punishes the wrong
+      person, and the way that ends is with the tool disabled.
+
+    Findings in every one of these are still detected, counted and reported -- see
+    ``RedactionPlan.skipped_read_only`` and ``X-ZeroTrace-Read-Only-Findings``. Not
+    enforcing is not the same as not looking.
     """
     if origin in SKIP_ORIGINS:
+        return False
+    if origin == "tool_definition":
         return False
     if origin in SCAN_ONLY_ORIGINS:
         return family is Family.CREDENTIAL

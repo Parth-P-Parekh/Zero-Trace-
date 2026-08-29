@@ -29,6 +29,7 @@ where a broken call is the correct signal.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -37,7 +38,7 @@ from dataclasses import replace
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .check import CheckVerdict, text_tree, to_verdict
 from .base.cache import InMemorySpanCache
@@ -116,6 +117,23 @@ async def anthropic_messages(request: Request) -> Response:
 @router.post("/v1/chat/completions")
 async def openai_chat(request: Request) -> Response:
     return await _proxy(request, provider="openai", path="/v1/chat/completions")
+
+
+@router.post("/v1/responses")
+async def openai_responses(request: Request) -> Response:
+    """The OpenAI Responses API -- what modern Codex actually calls.
+
+    `/v1/chat/completions` alone is not enough for current Codex, which speaks this
+    endpoint and streams by default. Three things this must get right:
+
+    * `instructions` (developer instructions) and `tools` (function and skill schemas)
+      are classified read-only by `spans.jsonspan` and are never rewritten. They are
+      still scanned, so a real credential in one is still caught and reported.
+    * `input` may be a bare string or an array of message objects; the span extractor
+      walks either without special-casing.
+    * SSE responses stream straight through, frame for frame.
+    """
+    return await _proxy(request, provider="openai", path="/v1/responses")
 
 
 @router.post("/v1/prompt/check")
@@ -227,9 +245,11 @@ async def _proxy(request: Request, *, provider: str, path: str) -> Response:
     if dispatched is None:
         return _blocked(check, decision, provider)
 
-    upstream = await _dispatch(provider, path, dispatched, request.headers)
-    upstream.headers.update(_headers(check, decision, plan))
-    return upstream
+    # Headers go in via `extra` rather than being set afterwards: a StreamingResponse
+    # has already begun once it is returned, so mutating .headers then is too late.
+    return await _dispatch(
+        provider, path, dispatched, request.headers, _headers(check, decision, plan)
+    )
 
 
 async def _run(request: Request, tree: SpanTree, actor: Actor):
@@ -245,6 +265,9 @@ async def _run(request: Request, tree: SpanTree, actor: Actor):
     decision = await app.state.policy.decide(
         actor=actor, findings=check.findings, risk=check.risk,
         leg="outbound", destination=tree.provider,
+        # Where each finding sits decides whether it may enforce at all. Track A cannot
+        # know this -- only the span tree does.
+        origins={s.path: s.origin for s in tree},
     )
 
     # Loop 2 — enqueue and move on. Never awaited; see intel/agent.py.
@@ -277,26 +300,91 @@ async def _run(request: Request, tree: SpanTree, actor: Actor):
     return check, decision, plan, dispatched
 
 
-async def _dispatch(provider: str, path: str, body: bytes, headers) -> Response:
-    """Forward upstream. The gateway holds the real key; it is never logged."""
+_FORWARD_HEADERS = {
+    "content-type", "authorization", "x-api-key", "anthropic-version",
+    "anthropic-beta", "openai-organization", "openai-beta", "openai-project",
+}
+
+
+def _wants_stream(body: bytes) -> bool:
+    """Whether the caller asked for SSE. Codex streams by default."""
+    try:
+        return bool(json.loads(body).get("stream"))
+    except (ValueError, AttributeError):
+        return False
+
+
+async def _dispatch(
+    provider: str, path: str, body: bytes, headers, extra: dict[str, str] | None = None
+) -> Response:
+    """Forward upstream. The gateway holds the real key; it is never logged.
+
+    Streaming responses are relayed frame for frame rather than buffered, so
+    time-to-first-token is the upstream's and the client sees a normal SSE stream. The
+    inbound leg is not scanned yet -- that is the sliding-window work (CODE-01 §9.2) --
+    and rather than imply otherwise the response carries
+    ``X-ZeroTrace-Degraded: inbound_stream_unscanned``.
+
+    **The outbound leg is fully scanned either way.** The request body is complete
+    before anything is sent, whether or not the response streams, so streaming costs us
+    nothing on the leg that matters most.
+    """
     import httpx
 
-    fwd = {
-        k: v for k, v in headers.items()
-        if k.lower() in {"content-type", "authorization", "x-api-key",
-                         "anthropic-version", "anthropic-beta"}
-    }
+    fwd = {k: v for k, v in headers.items() if k.lower() in _FORWARD_HEADERS}
     url = UPSTREAM[provider] + path
+
+    if not _wants_stream(body):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(url, content=body, headers=fwd)
+        except httpx.HTTPError as exc:
+            return _error(502, "zt.upstream_unavailable", str(exc))
+        return Response(
+            content=r.content,
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type", "application/json"),
+            headers=extra or {},
+        )
+
+    # -- streaming --------------------------------------------------------------
+    client = httpx.AsyncClient(timeout=None)
+    req = client.build_request("POST", url, content=body, headers=fwd)
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(url, content=body, headers=fwd)
+        upstream = await client.send(req, stream=True)
     except httpx.HTTPError as exc:
+        await client.aclose()
         return _error(502, "zt.upstream_unavailable", str(exc))
 
-    return Response(
-        content=r.content,
-        status_code=r.status_code,
-        media_type=r.headers.get("content-type", "application/json"),
+    if upstream.status_code >= 400:
+        # Surface the upstream error body rather than a stream of nothing.
+        payload = await upstream.aread()
+        await upstream.aclose()
+        await client.aclose()
+        return Response(
+            content=payload, status_code=upstream.status_code,
+            media_type=upstream.headers.get("content-type", "application/json"),
+            headers=extra or {},
+        )
+
+    async def relay():
+        # The client must always be closed, including when the caller disconnects
+        # mid-stream -- otherwise a cancelled request leaks a connection per abort.
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    hdrs = dict(extra or {})
+    hdrs["X-ZeroTrace-Degraded"] = "inbound_stream_unscanned"
+    hdrs["Cache-Control"] = "no-cache"
+    return StreamingResponse(
+        relay(),
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type", "text/event-stream"),
+        headers=hdrs,
     )
 
 
@@ -334,6 +422,10 @@ def _headers(check, decision, plan) -> dict[str, str]:
     }
     if check.degraded:
         h["X-ZeroTrace-Degraded"] = check.degraded
+    if plan is not None and plan.skipped_read_only:
+        # Detected inside tool schemas or developer instructions and deliberately not
+        # rewritten. Reported so it is a visible decision, not a silent omission.
+        h["X-ZeroTrace-Read-Only-Findings"] = str(len(plan.skipped_read_only))
     if plan is not None and plan.degraded_formats:
         # Surfaced, never hidden: these got a labelled token where the product claims a
         # shape-preserving one. Vault formats land at B2.
