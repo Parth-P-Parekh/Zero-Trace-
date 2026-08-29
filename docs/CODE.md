@@ -23,7 +23,7 @@ PROD-01 says *what* ZeroTrace is. This says *what to type, in what order, and ho
 
 **Identifier conventions — used in code, comments, commit messages, and on stage:**
 
-- `C1`–`C23` — components (PROD-01 §4). Every module docstring opens by naming its component.
+- `C1`–`C21` — components (PROD-01 §4). Every module docstring opens by naming its component.
 - `S0`–`S7` — pipeline stages (PROD-01 §5). Every stage function is `stage_s{n}_{name}`.
 - `A1`–`A7` — agents (PROD-01 §6).
 - `G0`–`G8` — build gates (SSOT §7). Every gate has a `make` target that proves it.
@@ -138,13 +138,13 @@ zerotrace/
         synthesizer.md
         explainer.md
 
-    identity/                    C21
+    identity/                    C22
       oidc.py                    OIDC login, session cookies
       scim.py                    SCIM 2.0 Users + Groups
       workload.py                SPIFFE/mTLS identity for service accounts
       resolve.py                 request → Actor (the one function the hot path calls)
 
-    coverage/                    C23
+    coverage/                    C21
       ingest.py                  dnsmasq / flow-log tailer
       join.py                    resolutions vs gateway requests → direct_egress rows
       report.py                  coverage %, exception list
@@ -194,7 +194,7 @@ zerotrace/
     components/
     lib/api.ts
 
-  deploy/                        C22
+  deploy/                        C23
     helm/zerotrace/              Chart.yaml, values.yaml, templates/
     terraform/                   VPC-scoped module
     envoy/                       sidecar bootstrap + ext_proc cluster config
@@ -243,7 +243,7 @@ ZT_VAULT_MASTER_KEY=TODO            # 32 bytes, base64. Dev only; KMS in prod
 ZT_TOKEN_TTL_S=86400
 ZT_TOKEN_SCOPE=session              # session | tenant
 
-# --- identity (C21) ---
+# --- identity (C22) ---
 ZT_OIDC_ISSUER=http://oidc-stub:9000
 ZT_OIDC_CLIENT_ID=zerotrace
 ZT_OIDC_CLIENT_SECRET=TODO
@@ -443,7 +443,7 @@ CREATE TABLE vault_tokens (
 -- value_hmac is one-way: it recognises a repeat value, it cannot produce one.
 -- There is no ciphertext column and no decrypt path anywhere in this codebase.
 
--- ============ coverage (C23) ============
+-- ============ coverage (C21) ============
 CREATE TABLE coverage_events (
   id         BIGSERIAL PRIMARY KEY,
   tenant_id  TEXT NOT NULL REFERENCES tenants(id),
@@ -589,7 +589,7 @@ One function per provider, all returning `SpanTree`:
 # gateway/routes_dataplane.py  (shape, not final code)
 async def handle(req: Request) -> Response:
     t = StageTimer()                                   # per-stage histogram, §21.1
-    actor   = await identity.resolve(req)              # C21 — never a developer key
+    actor   = await identity.resolve(req)              # C22 — never a developer key
     tenant  = actor.tenant
     tree    = normalise(await req.json(), provider_of(req))
 
@@ -911,7 +911,7 @@ Four things this must handle, each with a test:
 
 ### 9.3 Inbound clearance
 
-The inbound decision needs the requester's clearance, which comes from C21:
+The inbound decision needs the requester's clearance, which comes from C22:
 
 ```python
 decision = policy.decide(tenant, actor, findings, risk,
@@ -1063,7 +1063,7 @@ The same routes, reachable directly, for greenfield services and local developme
 
 ---
 
-## 12. Identity (C21)
+## 12. Identity (C22)
 
 ```python
 # identity/resolve.py — the one function the hot path calls
@@ -1081,7 +1081,7 @@ SCIM (`identity/scim.py`) implements `/scim/v2/Users` and `/scim/v2/Groups` with
 
 ---
 
-## 13. Coverage and bypass monitor (C23)
+## 13. Coverage and bypass monitor (C21)
 
 The control that replaces "we asked every team to integrate".
 
@@ -1102,6 +1102,8 @@ A `direct_egress` row appends `coverage.bypass_detected` to the ledger and surfa
 **Demo beat (0:00).** Hardcode a provider key in the demo app and re-send. The `internal` network gives no route, the resolution is logged, the join produces a `direct_egress` row, and the console names the workload — all inside about eight seconds. Rehearse the timing; it is the beat that decides an enterprise sale.
 
 Post-hackathon this reads VPC flow logs and cloud DNS logs. That connector is designed, not built, and the scope note says so.
+
+**The declared fallback, and its one condition.** If the Compose topology does not come together in the T+12–16 window, the beat degrades to a pre-scripted synthetic log feed — one workload seeded in advance that "forgot" to route through the gateway. That is an acceptable rung, on exactly one condition: **it is announced in the demo preamble, in the same words used for the SSO and SCIM stubs.** A synthetic feed presented as live monitoring is SSOT §6 anti-pattern A1 — a canned response on the happy path — and A1 is a zero on Job-to-be-done, not a deduction. Build the real join; it is a DNS log and a request log with a five-second window between them, and it is cheaper than the argument about whether the fake one is honest.
 
 ---
 
@@ -1333,7 +1335,7 @@ Prompt injections aimed at the guardrail itself — `"ignore previous instructio
 
 ---
 
-## 20. Deployment (C22)
+## 20. Deployment (C23)
 
 ### 20.1 Dev and demo
 
@@ -1405,7 +1407,7 @@ Roles: **BE** backend/interception · **AG** agents/detection · **FE** admin co
 | T+1–4 | Normaliser + span tree, gateway passthrough, dnsmasq + mkcert CA → **G1** | S2 NER wiring, thresholds | Traffic feed skeleton (SSE) | Corpus to 30 cases |
 | T+4–8 | Vault derivation, S5 redaction, `verify_dispatch`, **inbound scan + streaming window** → **G2** | S3 compositional scorer + priors table (N2) | Decision diff view | Harness v1, first run |
 | T+8–12 | Policy engine, versioning, action lattice, exceptions | A2 adjudicator + escalation queue | Detector registry view | Corpus to 60, **baseline `EV-IMP-01`** → **G3** |
-| T+12–16 | Ledger + hash chain, restart continuity, **coverage monitor (C23)**, Envoy `ext_proc` *only if green* | A4 synthesizer + DSL, A5 validator, hot-swap → **G4** | Latency/cost curve, coverage page | Runs 1–2, tune thresholds |
+| T+12–16 | Ledger + hash chain, restart continuity, **coverage monitor (C21)**, Envoy `ext_proc` *only if green* | A4 synthesizer + DSL, A5 validator, hot-swap → **G4** | Latency/cost curve, coverage page | Runs 1–2, tune thresholds |
 | T+16–18 | Razorpay plans, payment link, webhook, org-wide licence activation, signed counter | A7 explainer, FP override + approver routing | Licence page, policy editor, role-separated views | **Freeze prep → G5** |
 | T+18–20 | Bug-fix only | Bug-fix only | Bug-fix only | **3 clean runs `EV-JTB-02`, `make judge` on a second machine** → **G6** |
 | T+20–22 | Evidence pack export | Demo rehearsal ×2 → **G7** | Recorded backup demo | Scorecard, impact doc |
@@ -1453,7 +1455,7 @@ Mirrors SSOT §8. Decide at the stated time, not at T+21.
 
 **Never** degrade to a rung where the redaction is not real. Additionally: never cut `verify_dispatch`, the privacy-invariant test, or the ledger. Those three are what make every remaining claim true, and a working L3 product outscores a broken L5 pitch on every parameter.
 
-Enterprise-specific cuts, if the clock demands them — in this order, all with the scope note updated to match: Envoy sidecar → SCIM sync → coverage cloud connectors → HA. **Do not cut the coverage monitor's demo slice.** It is the only thing that demonstrates the enterprise claim, and without it the 0:00 beat is a description rather than a proof.
+Enterprise-specific cuts, if the clock demands them — in this order, all with the scope note updated to match: Envoy sidecar → SCIM sync → coverage cloud connectors → HA. **Do not cut the coverage monitor's demo slice.** It is the only thing that demonstrates the enterprise claim, and without it the 0:00 beat is a description rather than a proof. If it must degrade, degrade it to the *declared* synthetic feed (§13), never to silence.
 
 ---
 

@@ -57,7 +57,7 @@ ZeroTrace is deployed **by the platform or security team, once, into the egress 
 2. **Transparent egress gateway** (default where a mesh does not). Provider domains route to the ZeroTrace gateway; TLS is terminated under the enterprise's own CA, which managed hosts already trust. Applications resolve and connect exactly as they did yesterday.
 3. **Explicit endpoint** for teams that would rather integrate directly — the gateway speaks the provider APIs natively, so pointing a client at it is a config value. This is a convenience for greenfield services and local development, **not the deployment model.** Nothing in the security posture depends on any team choosing it.
 
-What makes the posture defensible in an audit is the pair of controls around it: direct egress to provider domains is **denied at the network boundary**, so the gateway is the only route out; and a coverage monitor (C23) reads flow and DNS logs to name any workload that tried another one. That turns "are we covered?" from an assertion into a number with a list of exceptions attached — which is the artifact a security team is actually buying.
+What makes the posture defensible in an audit is the pair of controls around it: direct egress to provider domains is **denied at the network boundary**, so the gateway is the only route out; and a coverage monitor (C21) reads flow and DNS logs to name any workload that tried another one. That turns "are we covered?" from an assertion into a number with a list of exceptions attached — which is the artifact a security team is actually buying.
 
 ---
 
@@ -117,7 +117,7 @@ Four planes. Keeping them separate is what makes the evidence claims (SSOT §5) 
 
 | ID | Component | Responsibility | Tech | Hackathon scope |
 |---|---|---|---|---|
-| **C1** | Egress interception layer | Sits in the path traffic already takes — mesh sidecar (Envoy `ext_proc` on the egress listener) or transparent gateway terminating TLS under the enterprise's own CA. Speaks the provider APIs natively (`/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/responses`), streaming-aware, so **no application is modified**; an explicit endpoint exists for teams that would rather integrate directly. Actor identity comes from the mesh's workload identity or the IdP (C21), never from a key a developer pastes. | FastAPI + `httpx` async; Envoy `ext_proc` filter | ✅ MUST |
+| **C1** | Egress interception layer | Sits in the path traffic already takes — mesh sidecar (Envoy `ext_proc` on the egress listener) or transparent gateway terminating TLS under the enterprise's own CA. Speaks the provider APIs natively (`/v1/chat/completions`, `/v1/messages`, `/v1/embeddings`, `/v1/responses`), streaming-aware, so **no application is modified**; an explicit endpoint exists for teams that would rather integrate directly. Actor identity comes from the mesh's workload identity or the IdP (C22), never from a key a developer pastes. | FastAPI + `httpx` async; Envoy `ext_proc` filter | ✅ MUST |
 | **C2** | Payload normaliser | Flattens any provider schema into a canonical span tree: message turns, tool calls, tool results, system prompt, structured JSON leaves. One tree for OpenAI, Anthropic, Bedrock and Vertex shapes — no enterprise is on a single provider, and policy has to mean the same thing across all of them. **Everything downstream operates on spans, not strings.** | Python | ✅ MUST |
 | **C3** | S0 Deterministic detectors | Regex + checksum (Luhn, Verhoeff for Aadhaar-format, IBAN mod-97), high-entropy string detection, known key prefixes (`sk-`, `ghp_`, `AKIA`, `rzp_`, JWT, PEM blocks). | Python, compiled once | ✅ MUST |
 | **C4** | S1 Contextual heuristics | Proximity rules — a 10-digit number near "phone"/"मोबाइल", a number near "account", a value under a JSON key matching `/pass|secret|token|key/i`. Cheap, high-precision. | Python | ✅ MUST |
@@ -137,11 +137,11 @@ Four planes. Keeping them separate is what makes the evidence claims (SSOT §5) 
 | **C18** | Metering & billing | Counts tokens scanned + leaks prevented per tenant; Razorpay plan/subscription + checkout; quota enforcement. | Razorpay APIs | ✅ MUST (Revenue track) |
 | **C19** | Canary injector | Injects unique canary strings into low-risk payloads; a later scan for canary reappearance detects upstream retention/regurgitation. | Python | ⚠️ NICE-TO-HAVE — only if T+16 gate is green |
 | **C20** | MCP / tool-result hook | Intercepts tool results before they enter agent context. | Python middleware | ⚠️ NICE-TO-HAVE — high novelty value, medium cost |
-| **C21** | Identity & directory integration | Resolves *who* an actor is from the enterprise IdP: OIDC/SAML SSO for people, SCIM group sync for clearance, workload identity (mTLS/SPIFFE) for services. Every inbound-leg clearance decision and every ledger entry is anchored to this — without it, "this actor may not read that" is a sentence, not a control. | Python + `authlib`, SCIM 2.0 | ✅ MUST — demo runs on a seeded OIDC provider + static group map |
-| **C22** | Deployment & operations bundle | Helm chart, Terraform module, air-gapped image bundle. Runs entirely in the customer's VPC — **no traffic, payload, or telemetry leaves their perimeter to reach us.** HA pair, per-policy fail-open / fail-closed switch, health probes, vault and ledger backup/restore, zero-downtime detector promotion. | Helm, Terraform, Postgres HA | ⚠️ SHOULD — one-command self-host in 24h; HA and air-gap designed, not built |
-| **C23** | Coverage & bypass monitor | Reads flow and DNS logs for connections to known provider domains that did **not** traverse ZeroTrace, and names the workload that made them. Produces the coverage percentage security reports upward and the exception list platform chases down. **This is the control that replaces "we asked every team to integrate."** | Python + flow-log ingest | ✅ MUST (enterprise core) — demo slice tails a local flow log |
+| **C21** | Coverage & bypass monitor | Reads DNS and flow logs for connections to known provider domains that did **not** traverse ZeroTrace, and names the workload that made them. Produces the coverage percentage security reports upward and the exception list platform chases down. **This is the control that replaces "we asked every team to integrate."** | Python + DNS/flow-log ingest | ✅ MUST (enterprise core) — the demo joins the demo network's own DNS query log against the gateway's request log: a real detection on a real, small network. Cloud flow-log connectors are post-hackathon, like SSO/SCIM. A pre-scripted synthetic feed is a **declared fallback only** — an unannounced one is SSOT §6 A1 |
+| **C22** | Identity & directory integration | Resolves *who* an actor is from the enterprise IdP: OIDC/SAML SSO for people, SCIM group sync for clearance, workload identity (mTLS/SPIFFE) for services. Every inbound-leg clearance decision and every ledger entry is anchored to this — without it, "this actor may not read that" is a sentence, not a control. | Python + `authlib`, SCIM 2.0 | ✅ MUST — demo runs on a seeded OIDC provider + static group map |
+| **C23** | Deployment & operations bundle | Helm chart, Terraform module, air-gapped image bundle. Runs entirely in the customer's VPC — **no traffic, payload, or telemetry leaves their perimeter to reach us.** HA pair, per-policy fail-open / fail-closed switch, health probes, vault and ledger backup/restore, zero-downtime detector promotion. | Helm, Terraform, Postgres HA | ⚠️ SHOULD — one-command self-host in 24h; HA and air-gap designed, not built |
 
-**On enterprise surface and the 24-hour clock.** SSO, SCIM, HA, air-gap, and cloud flow-log connectors are *designed here and stubbed in the build*: the demo runs against a seeded OIDC provider, a static group map, a single node, and a local flow-log tail. That is stated here, in the evidence pack, and on stage. Presenting a stubbed enterprise control as a shipped one is the fastest way to lose a security buyer — and, under SSOT §2.2, the submission.
+**On enterprise surface and the 24-hour clock.** SSO, SCIM, HA, air-gap, and cloud flow-log connectors are *designed here and stubbed in the build*: the demo runs against a seeded OIDC provider, a static group map, a single node, and a DNS-plus-gateway-log join on the demo network. That is stated here, in the evidence pack, and on stage. Presenting a stubbed enterprise control as a shipped one is the fastest way to lose a security buyer — and, under SSOT §2.2, the submission.
 
 ---
 
@@ -194,7 +194,7 @@ Self-modifying security systems are dangerous. Ship the safety rails and *say so
 - Runtime cap: any detector exceeding 1.5ms on the corpus is rejected regardless of accuracy.
 - Detectors carry **provenance** — which finding produced them, when, with what corpus results. Displayed in the registry.
 - Promotion is reversible with one click, and a rollback is itself a ledger event.
-- Promotion mode is a **policy setting, not a product opinion**: `auto` (validated detectors go live unattended — the default, and what the demo runs) or `approve` (a named approver from the security group signs off; identity from C21, sign-off written to the ledger). Regulated tenants start on `approve` and relax it once the registry has a track record they can read.
+- Promotion mode is a **policy setting, not a product opinion**: `auto` (validated detectors go live unattended — the default, and what the demo runs) or `approve` (a named approver from the security group signs off; identity from C22, sign-off written to the ledger). Regulated tenants start on `approve` and relax it once the registry has a track record they can read.
 - Hard ceiling on promotions per hour; a burst is a signal of prompt-injection-driven poisoning, not learning.
 
 ---
@@ -206,7 +206,7 @@ tenants(id, name, licence_tier, licensed_tokens, tokens_used, mode)
         -- mode: shadow | enforce
         -- self-hosted: a 'tenant' is a business unit, not a customer
 actors(id, tenant_id, idp_subject, label, role, groups, workload_id)
-       -- idp_subject: OIDC/SAML subject; groups synced from the directory via SCIM (C21)
+       -- idp_subject: OIDC/SAML subject; groups synced from the directory via SCIM (C22)
        -- workload_id: SPIFFE ID for service accounts. No developer-held keys anywhere.
 sessions(id, tenant_id, actor_id, channel, started_at, last_seen_at)
 
@@ -234,7 +234,7 @@ vault_tokens(id, tenant_id, session_id, token, value_hmac, entity_class,
 
 coverage_events(id, tenant_id, ts, workload, dst_domain, bytes, verdict)
                 -- verdict: via_zerotrace | direct_egress | blocked_at_boundary
-                -- 'direct_egress' rows are the exception list C23 reports
+                -- 'direct_egress' rows are the exception list C21 reports
 
 ledger(id, tenant_id, prev_hash, record_hash, event_type, payload_json, ts)
        -- event_type covers decisions AND administrative acts: policy edit,
@@ -280,8 +280,8 @@ GET    /api/impact/counterfactual?window=   → EV-IMP-02
 POST   /api/billing/checkout                → Razorpay order/subscription
 POST   /api/webhooks/razorpay
 GET    /api/evidence/export                 → full evidence pack, zipped
-GET    /api/coverage                        → coverage %, plus the direct-egress exception list (C23)
-POST   /scim/v2/Users  POST /scim/v2/Groups → directory sync from the enterprise IdP (C21)
+GET    /api/coverage                        → coverage %, plus the direct-egress exception list (C21)
+POST   /scim/v2/Users  POST /scim/v2/Groups → directory sync from the enterprise IdP (C22)
 GET    /healthz  GET /readyz                → probes; readiness reflects the fail-open/closed stance
 ```
 
@@ -468,7 +468,7 @@ Roles: **BE** backend/interception · **AG** agents/detection · **FE** admin co
 | T+1–4 | Interception passthrough, sidecar + explicit path → **G1** | S2 NER wiring | Traffic feed skeleton | Corpus to 30 cases |
 | T+4–8 | Vault + redact + **inbound response scan** → **G2** | Compositional scorer (N2) | Decision diff view | Harness v1, first run |
 | T+8–12 | Policy engine, versioning | Adjudicator agent (A2) | Detector registry view | Corpus to 60, **baseline `EV-IMP-01`** → **G3** |
-| T+12–16 | Ledger + hash chain, restart continuity, coverage monitor over a local flow log (C23) | Synthesizer + Validator (A4/A5) → **G4** | Latency/cost curve, coverage panel | Runs 1–2, tune thresholds |
+| T+12–16 | Ledger + hash chain, restart continuity, coverage monitor over a local flow log (C21) | Synthesizer + Validator (A4/A5) → **G4** | Latency/cost curve, coverage panel | Runs 1–2, tune thresholds |
 | T+16–18 | Razorpay plans, payment link, webhook, org-wide licence activation | Explainer (A7), FP override with approver routing | Licence + policy editor, role-separated views | **Freeze prep → G5** |
 | T+18–20 | Bug-fix only | Bug-fix only | Bug-fix only | **3 clean runs `EV-JTB-02`, `make judge`** → **G6** |
 | T+20–22 | Evidence pack | Demo rehearsal ×2 → **G7** | Recorded backup demo | Scorecard, impact doc |
@@ -488,7 +488,8 @@ Roles: **BE** backend/interception · **AG** agents/detection · **FE** admin co
 | A judge asks "where do I get the original back?" | **High** | JTBD, Delight | Answer it before they ask: nowhere, by design. There is no reverse map, and §7 shows the schema that makes it structural. The trade is stated in §13 non-goals, not discovered on stage |
 | Hive API rate limits mid-demo | Med | Fatal on stage | Pre-warm, cache the demo path, keep the recorded backup demo (§9 of SSOT) |
 | Judge asks "isn't this just Presidio + a proxy?" | **High** | Novelty | Rehearsed 20-second answer: entity matching is stage 2 of 7; the differentiators are compositional risk, the synthesis loop, and cross-hop referential integrity — *and then show the registry entry the system wrote itself.* |
-| "What stops a team routing around it?" | **High** | JTBD, Impact | Provider domains are denied at the network boundary, so ZeroTrace is the only route out; C23 names any workload that tries another. **Demonstrate the bypass alert on stage — do not describe it.** This is the question that decides an enterprise sale |
+| "What stops a team routing around it?" | **High** | JTBD, Impact | Provider domains are denied at the network boundary, so ZeroTrace is the only route out; C21 names any workload that tries another. **Demonstrate the bypass alert on stage — do not describe it.** This is the question that decides an enterprise sale |
+| The C21 bypass demo depends on the demo network's topology | High | **Demo beat 0:00** | The Compose `internal` network plus dnsmasq makes the detection real, and it is built at T+12–16 so it has slack. If it slips, fall back to a pre-scripted synthetic feed — **and declare it in the demo preamble in the same words used for the SSO/SCIM stubs.** An undeclared synthetic feed is SSOT §6 A1, which is a zero, not a deduction |
 | Transparent-gateway mode needs enterprise CA trust — a change-management project, not an install | Med | Adoption | Lead with sidecar mode wherever a mesh exists (no CA involved); gateway mode only where the CA is already distributed by MDM; the explicit endpoint carries a POV while either lands |
 | Enterprise surface (SSO, SCIM, HA, air-gap) is stubbed, and someone treats it as shipped | Med | **Fatal if discovered** | The scope note under §4 and the evidence pack both state what is stubbed; the demo says it out loud. Under SSOT §2.2 an overclaim is worse than a gap |
 | Scope creep into prompt-injection defence | Med | Focus | §13 non-goals are binding |
@@ -501,9 +502,10 @@ Roles: **BE** backend/interception · **AG** agents/detection · **FE** admin co
 |---|---|---|
 | 0:00 | **The zero-change deployment** | Open a running app's config: no ZeroTrace URL, no ZeroTrace key, no SDK, nothing. Send a prompt — the sidecar catches it on the way out. Then hardcode a direct provider key in that same app and re-send: the boundary refuses the connection and the coverage panel names the workload that tried. **Nobody opted in, and nobody can opt out.** |
 | 0:40 | **The catch** | Send a support transcript containing a Razorpay-format key, a PAN, and a customer name. Response headers show 3 findings, 21ms. The upstream payload is displayed — tokenized. |
-| 1:30 | **The return leg** | The answer comes back *correct and complete* — and the token is still a token. "The model reasoned over `⟨PERSON_a41⟩` and got the summary right. Nothing put the name back, because nothing can: we don't keep it." Then ask a second question whose answer pulls a clinical note out of the connected knowledge base. The requester isn't cleared for it. ZeroTrace strips it *on the way in* and says which rule fired. |
-| 2:20 | **The invisible leak (N2)** | Send a record with **no** name, email, or ID — just pincode, DOB, gender, employer. Every entity filter passes it. ZeroTrace flags composite risk 0.78 and explains which combination re-identifies. |
-| 3:20 | **The system teaches itself (N1)** | Send a payload with a leak class not in the rule pack. Adjudicator catches it → Synthesizer writes a detector → Validator runs the corpus → promotion. **Send the same class again: caught deterministically in 3ms, no LLM call.** Show the registry entry with provenance and the falling escalation curve. |
+| 1:30 | **Referential integrity (N3)** | A three-turn exchange in which the same customer appears in the user turn, in a tool result, and in a follow-up question. All three mentions tokenize to the *same* `⟨PERSON_a41⟩`. "The model reasoned coherently across three hops because the token was stable — one consistent pseudonym, not three different placeholders that would break coreference, and never the real name." Then answer the question that always follows: ZeroTrace holds no recoverable original, so an application that needs the name resolves the token against its **own** CRM. Referential integrity is our job; restoration is not. |
+| 2:10 | **The return leg** | Ask something whose answer pulls a clinical note out of the connected knowledge base. This requester is not cleared for it. ZeroTrace strips it *on the way in* and names the rule that fired. "Retrieval and agent memory are not access control." |
+| 2:45 | **The invisible leak (N2)** | Send a record with **no** name, email, or ID — just pincode, DOB, gender, employer. Every entity filter passes it. ZeroTrace flags composite risk 0.78 and explains which combination re-identifies. |
+| 3:30 | **The system teaches itself (N1)** | Send a payload with a leak class not in the rule pack. Adjudicator catches it → Synthesizer writes a detector → Validator runs the corpus → promotion. **Send the same class again: caught deterministically in 3ms, no LLM call.** Show the registry entry with provenance and the falling escalation curve. |
 | 4:40 | **The hard moment (Delight)** | Trigger a false positive deliberately. One click → Explainer drafts a scoped exception → re-send → clean, and the exception is in the ledger with who approved it. |
 | 5:20 | **The evidence (Memory + Impact)** | Kill the process. Restart. Send the same value from a different channel and watch it derive the *same* token minted before the restart — continuity without a stored original. Verify the ledger chain. Show the counterfactual: "in this session, N spans across M classes would have left." |
 | 6:10 | **The business** | A test-mode Razorpay payment link, issued to a finance contact, activates the org-wide licence and flips every business unit from shadow to enforce in a single event. Show the unit-economics line and the ₹25.5 Cr / ₹1.79 Cr framing. |
@@ -522,9 +524,9 @@ zerotrace/
   policy/         C7          engine, schema, versioning
   vault/          C8          derive, lookup, keys, ttl   (no reverse path by design)
   ledger/         C13,C14     hash chain, counterfactual reporter
-  identity/       C21         oidc, saml, scim sync, workload identity
-  coverage/       C23         flow-log ingest, bypass detection, coverage report
-  deploy/         C22         helm/, terraform/, airgap/
+  identity/       C22         oidc, saml, scim sync, workload identity
+  coverage/       C21         flow-log ingest, bypass detection, coverage report
+  deploy/         C23         helm/, terraform/, airgap/
   billing/        C18         razorpay client, webhooks, signed usage counter
   bench/          C16         corpus/, harness.py, scorecard.py
   web/            C17         Next.js admin console (SSO, role-separated views)
