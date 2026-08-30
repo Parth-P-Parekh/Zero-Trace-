@@ -1,0 +1,33 @@
+# Part A direct dependencies. Compile with:
+#     pip-compile requirements.in -o requirements.txt
+# Versions are pinned in requirements.txt and never floated (CODE-01 §1).
+
+# --- web (CODE-01 §1: FastAPI + uvicorn) ---
+fastapi
+uvicorn[standard]
+
+# --- validation and settings (CODE-01 §1: pydantic v2) ---
+pydantic
+pydantic-settings
+
+# --- data layer (CODE-01 §1: SQLAlchemy 2.0 + Postgres 16 + Alembic) ---
+sqlalchemy
+alembic
+asyncpg
+aiosqlite          # dev/test dialect only — see SUBMISSION.md "Declared deviations"
+
+# --- cache (CODE-01 §1: Redis 7) ---
+redis
+
+# --- policy files ---
+pyyaml
+
+# --- logging (CODE-01 §21.3) ---
+structlog
+
+# --- upstream dispatch (CODE-01 §1) ---
+httpx
+
+# --- tests (CODE-01 §1: pytest + pytest-asyncio) ---
+pytest
+pytest-asyncio

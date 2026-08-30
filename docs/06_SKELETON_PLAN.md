@@ -1,5 +1,5 @@
 # ZeroTrace — Bare Skeleton Execution Plan
-**Doc ID:** SKEL-01 · **Governed by:** SSOT-01 → PROD-01 → CODE-01 · **Status:** pre-M0, repo has zero code
+**Doc ID:** SKEL-01 · **Governed by:** SSOT-01 → PROD-01 → CODE-01 · **Status:** Part A (M0–M2) built in `Control-DB/`, production-mode E2E gate added (EV-PA-01); Parts B and C pending
 
 ---
 
@@ -208,14 +208,26 @@ LLM data?*
 
 Four concepts, no more:
 
-- **Tenant** — the company, or a business unit under it (`parent_id`).
-- **Actor** — a human or a workload. Carries `role` and `groups[]`.
-- **Group** — a named control group (`security`, `eng_platform`, `eng_core`, `support`, `hr`,
-  `finance`, `legal`, `contractors`). The worked example is a **tech company** throughout —
-  see VOCAB-01 §3.6.
-  Groups are *data*, not enum values in code.
+- **Tenant** — the company, or a business unit under it (`parent_id`). Production and demo
+  requests must name the tenant (`X-ZeroTrace-Tenant`); a missing header is `400
+  zt.tenant_required`, an unknown tenant is `404 zt.tenant_unknown`.
+- **Actor** — a human or a workload. Carries `role`, `groups[]`, and `scope`
+  (`tenant` or `organisation`). A `security_admin` and an `executive` actor are
+  organisation-scoped; everyone else is tenant-scoped.
+- **Group** — a named control group from **VOCAB-01 §3.6**. Groups are *data*, not enum values in
+  code.
 - **Entitlement** — the join between a group and what it may see. Expressed as **policy
   rules**, not as a fifth table.
+- outbound: `family: CREDENTIAL` or `class: [API_KEY, PRIVATE_KEY, JWT, DB_URI, GENERIC_SECRET]`
+  → `block`
+- outbound: `class: [PAN, AADHAAR, EMAIL, PHONE, CREDIT_CARD]` → `tokenize`
+- inbound: `class: [SECURITY_FINDING, INCIDENT_REPORT]` → `mask`,
+  `unless: {actor_group: [security, eng_platform]}`
+
+Class names and families come from **VOCAB-01** and are validated at publish. Rules match on
+`family` wherever the action is uniform; inbound clearance matches on `class` because each
+class clears to a different group (VOCAB-01 §4). Part A may use Acme department tenants,
+but it must use the frozen class vocabulary.
 
 The last point is the design decision worth defending. An `entitlements` table would
 duplicate the policy engine; instead a group's access is a set of `unless: actor_group`
@@ -226,36 +238,54 @@ and auditable for free.
 
 | Table | Skeleton columns | Cut for now |
 |---|---|---|
-| `tenants` | id, name, parent_id, mode | licence_tier, licensed_tokens, tokens_used |
-| `actors` | id, tenant_id, idp_subject, workload_id, label, role, groups[] | — |
+| `tenants` | id, name, parent_id | licence_tier, licensed_tokens, tokens_used; **`mode` removed — effective mode and `fail: closed` come from the active root policy** |
+| `actors` | id, tenant_id, idp_subject, workload_id, label, role, groups[], scope (`tenant`\|`organisation`) | — |
 | `groups` | id, tenant_id, name, description | **new, not in CODE-01** — needed so the console can list groups without scanning actors |
 | `sessions` | id, tenant_id, actor_id, channel | — |
 | `policies` | id, tenant_id, version, yaml, active | created_by |
-| `requests` | id, session_id, tenant_id, upstream_model, action, policy_version | latency_by_stage, composite_risk |
-| `findings` | id, request_id, leg, span_path, entity_class, confidence, action | adjudicated, adjudicator_verdict |
+| `requests` | id, session_id, tenant_id, upstream_model, status, decision_action, applied_action, mode, org_policy_version, bu_policy_version | latency_by_stage, composite_risk |
+| `findings` | id, request_id, leg, span_path, entity_class, confidence, decision_action, applied_action | adjudicated, adjudicator_verdict |
 | `ledger` | full — no cuts, ever | — |
 
 `groups` is an addition to CODE-01 §4.1. Add it to that document in the same commit that
 creates the migration, per CODE-01 §2's rule about paths.
 
+**Migration 003 (`003_part_a_production`)** applies the Part A production shapes above and
+preserves legacy rows: actor scope → `tenant`, request status → `completed`, mode →
+`enforce`, old version copied into `org_policy_version`, and `tokenize` mapped to applied
+`mask`. It is covered by `Control-DB/tests/test_m3_production_schema.py`.
+
 ### A.3 Resolution path
+
+Tenant selection first: `X-ZeroTrace-Tenant` is required when `ZT_ENV` is `demo` or `prod`
+(`400 zt.tenant_required` if missing, `404 zt.tenant_unknown` if unknown). `ZT_DEFAULT_TENANT`
+exists only for `dev`.
 
 `identity/resolve.py` returns an `Actor` in this order, first match wins:
 
-1. Dev session cookie / bearer token → `actors.idp_subject` *(skeleton primary)*
-2. Client identity from the interception layer — for Claude Code, the OS user + machine id
+1. Tenant-scoped workload (`workload_id`), then root organisation-scoped workload
+2. Tenant-scoped bearer token / cookie subject (`actors.idp_subject`), then root
+   organisation-scoped bearer / cookie subject *(skeleton primary)*
+3. Client identity from the interception layer — for Claude Code, the OS user + machine id
    passed as a header the wrapper injects; for the sidebar, the extension's configured
-   identity
-3. Unregistered → synthetic actor, `role="unregistered"`, policy applies
-   `unregistered_workload` (default `mask`). **The request is still served.** Blocking
-   unknown callers teaches people to bypass, which is the failure this product exists to
-   prevent.
+   identity. Tenant-scoped first, then organisation-scoped.
+4. Unregistered → synthetic actor scoped by **both** `tenant_id` and the actor claim or
+   request fingerprint, `role="unregistered"`, policy applies `unregistered_workload`
+   (default `mask`). **The request is still served.** Blocking unknown callers teaches
+   people to bypass, which is the failure this product exists to prevent.
 
-### A.4 Policy shape for the skeleton
+If bearer and cookie credentials are both present they must resolve to the same actor and
+scope, or the request is rejected with `401 zt.identity_conflict` — never silently choosing
+one. A helper walks `tenants.parent_id` to the root and rejects a parent cycle as
+`zt.identity_tenant_hierarchy_invalid`. A request may name a prior session with
+`X-ZeroTrace-Session` (same tenant and actor, else `403 zt.session_actor_mismatch`;
+unknown session `404 zt.session_unknown`); absent, the gateway creates one.
 
-One YAML per tenant, three rules, enough to demonstrate the whole idea:
+One YAML per tenant, five rules for the org (`policies/acme-tech.yaml`) plus one child
+policy (`policies/acme-tech-security.yaml`), enough to demonstrate the whole idea:
 
-- outbound: `class: [API_KEY, PRIVATE_KEY, JWT, DB_URI]` → `block`
+- outbound: `family: CREDENTIAL` or `class: [API_KEY, PRIVATE_KEY, JWT, DB_URI, GENERIC_SECRET]`
+  → `block`
 - outbound: `class: [PAN, AADHAAR, EMAIL, PHONE, CREDIT_CARD]` → `tokenize`
 - inbound: `class: [SECURITY_FINDING, INCIDENT_REPORT]` → `mask`,
   `unless: {actor_group: [security, eng_platform]}`
@@ -264,15 +294,16 @@ Class names and families come from **VOCAB-01** and are validated at publish. Ru
 `family` wherever the action is uniform; inbound clearance matches on `class` because each
 class clears to a different group (VOCAB-01 §4).
 
-The action lattice (`allow < warn < tokenize < mask < block`) and the **BU-may-only-raise**
-rule ship in the skeleton. It is eight lines of code (CODE-01 §8.2) and it is most of what
-"enterprise policy" means.
+A single test seeds two actors — one in `security`, one not — sends the *same* request, and
+gets two different responses, with the decision, the rule index and the policy version
+recorded in the ledger for both.
 
-### A.5 Part A is done when
-
-A single test seeds two actors — one in `security`, one not — sends the *same*
-request, and gets two different responses, with the decision, the rule index and the policy
-version recorded in the ledger for both.
+**And** `make part-a-e2e` runs the production-mode gate: real HTTP through PostgreSQL 16 and
+Redis 7, process restart with persistence, concurrent conditional publishes (one 200, one
+409), a 100-request load at concurrency 20, and the full privacy sweep over PostgreSQL,
+Redis, logs, and the report. It writes `EV-PA-01` to
+`evidence/04_jtbd/EV-PA-01-part-a-e2e.json` and declares exactly three stubs:
+`detection_test_adapter`, `oidc_test_adapter`, `deterministic_upstream`.
 
 ---
 
@@ -1088,6 +1119,7 @@ optional. M7–M8 is coverage.
 | The gateway holds real provider keys | M5 onward | Keys from env only, never logged, redacting log processor from day one — not retrofitted |
 | Extension breaks on a claude.ai UI change | M7 | Pin to the submit event, not to CSS selectors; fail closed on any DOM assumption miss |
 | Spoofable actor header undermines Part A's whole claim | M5 | Stated as a stub in the README, the scope note, and on stage — in the same words every time. It is a real limitation, not a footnote |
+| Missing tenant header in demo/prod or an unknown tenant id | M1 | `X-ZeroTrace-Tenant` required (400 `zt.tenant_required`; unknown tenant 404 `zt.tenant_unknown`); `ZT_DEFAULT_TENANT` is dev-only. An unknown actor is a separate state and is still served |
 | JSON-in-string tool results skipped | M3 | `$json` recursion is in the skeleton's normaliser, not deferred — it is where agentic egress actually lives |
 | **Conversation resend makes session cost O(n²)** — per-request budgets stay green while the 30th turn re-scans 29 turns of unchanged text | M3, and worse as sessions lengthen | Span-level memoisation (§B.5). This is the failure mode that per-request benchmarks are structurally blind to — measure per *session*, not per request |
 | Span cache serves a stale finding set after a detector promotion, silently breaking the G4 novelty beat | M3b + M9 | Detector pack version in the cache key; explicit test that a promoted detector fires on cached history |
@@ -1125,18 +1157,11 @@ optional. M7–M8 is coverage.
 - [ ] `scripts/seed_demo.py`: tenant `acme`, BUs `payments`/`support`, groups
       `security`/`eng_platform`/`contractors`, 3 actors
 - [ ] `identity/resolve.py` — mTLS → cookie → interception header → unregistered
-- [ ] Unregistered actors are **served**, flagged, and policy-masked — never rejected
-- [ ] No `virtual_key_hash` column anywhere. Developer-held keys do not exist in this product
-
-### A2 — Policy engine  *(Track A)*
-- [ ] Alembic migration 002: `policies`, `policy_exceptions` (with `no_self_approval` CHECK)
-- [ ] `policy/schema.py` — pydantic, **unknown keys are a validation error**
-- [ ] Action lattice `allow < warn < tokenize < mask < block`
-- [ ] BU override may only move *up* the lattice; violation = publish-time error quoting the rule
-- [ ] `unless: actor_group` resolves inbound clearance from `actors.groups`
-- [ ] `decide()` returns action + rule index + policy version
-- [ ] Policies immutable; publish writes a new version and appends `policy.updated`
+- [ ] Tenant-wide advisory lock serialises publish and ledger appends (PostgreSQL);
+      Redis/process caches hold immutable policy data by `(tenant_id, version)` only
 - [ ] **Test:** two actors, one request, two responses, both in the ledger
+- [ ] **Test:** two concurrent publishes with the same expected version — one 200, one 409,
+      one new policy row, one new `policy.updated` ledger record
 
 ### B1 — Spans + detection  *(Track B)*
 - [ ] `google-re2` only. A `re` import in `detect/` is a review rejection

@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local settings. .env.example is committed; .env is not.
+.env
+
+# The local SQLite database (dev/test dialect only).
+*.db
+*.db-journal
+*.sqlite3
