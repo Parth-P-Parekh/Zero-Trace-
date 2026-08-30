@@ -69,6 +69,61 @@ zerotrace status        # what is wired, what is carried, what Loop 2 has learne
 
 ---
 
+## Where it runs
+
+### Any IDE, because it is not an IDE plugin
+
+`zerotrace on` writes the hooks into `~/.claude/settings.json` — **user scope, once per
+machine.** Claude Code reads that file wherever it is launched from, so the same install
+covers a plain terminal, the VS Code integrated terminal, JetBrains, Windows Terminal, tmux
+over SSH — anything hosting a Claude Code session. There is no per-IDE extension to keep in
+step with an editor's release cycle, and nothing to reinstall when you switch editors.
+
+```bash
+zerotrace on              # this machine, every Claude Code session
+zerotrace on --project    # this repository only (.claude/settings.json here)
+zerotrace status          # what is wired, and where
+zerotrace off             # remove exactly what was installed, and nothing else
+```
+
+Restart any Claude Code session that was already open — a session keeps the configuration
+it started with.
+
+**Codex** is covered by app-server mediation rather than hooks, because Codex declines
+hooks no human has reviewed and would otherwise look protected while enforcing nothing
+(`docs/14`). `zerotrace on` puts ZeroTrace in front of the `codex` command; the VS Code
+side panel is a separate client and needs `zerotrace on --vscode`.
+
+### Claude Desktop — not covered yet, and here is why
+
+Claude Desktop does not run Claude Code hooks. It talks to **MCP servers**, which is a
+different integration surface, and ZeroTrace does not ship one today. Anyone telling you
+otherwise has not tried it.
+
+The path is short and the pieces already exist. Every decision in this product is made by
+`PartAContext` behind an interface that neither the hooks nor the HTTP gateway know
+anything special about, and the read gate already understands MCP tool shapes — it gates
+`mcp__*` tools by their path arguments and classifies unknown servers by name
+(`gateway/part_a/reading.py`). What is missing is the server itself: a stdio MCP server
+that wraps a downstream server's tools, runs each call through the same checker and policy,
+and returns the same refusal text. That would drop into `claude_desktop_config.json` beside
+whatever servers you already run:
+
+```jsonc
+// what this would look like — not yet implemented
+{
+  "mcpServers": {
+    "filesystem": { "command": "zerotrace-mcp",
+                    "args": ["--wrap", "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"] }
+  }
+}
+```
+
+Until that exists, the honest coverage statement is: **Claude Code on any IDE, Codex via
+mediation, browsers via the extension, and any client you point at the gateway.**
+
+---
+
 ## How detection works
 
 ### The three-tier scan
@@ -411,6 +466,56 @@ sweep; ledger tamper and truncation detection; decision isolation across actors 
 interleaved requests; and cross-tenant cache isolation.
 
 What it found wrong is in the table below.
+
+---
+
+## From MVP to production
+
+This is an MVP, and the shape of it was chosen so that becoming production is a
+**configuration change and a migration, not a rewrite.**
+
+**Today it runs with no server at all.** A laptop demo needs a control plane that survives
+process restarts and nothing more, so the store is a JSON file under `~/.zerotrace`, and
+`ZT_REDIS_URL` switches the same code to Redis. That difference is announced at startup
+rather than inferred — an operator who thinks they are on Redis and is not would otherwise
+lose every record on restart without being told.
+
+**The production schema already exists, and it is Postgres.** `Control-DB` holds SQLAlchemy
+models and four Alembic migrations written against Postgres, not against a lowest common
+denominator: partial indexes with `postgresql_where`, Postgres-specific column types, and
+advisory locks that check `dialect.name` before using them. It was never a SQLite schema
+hoping to grow up.
+
+**Which is why Supabase is the natural target.** Supabase *is* Postgres, so the migration
+is pointing a connection string at it and running the migrations that are already written:
+
+```bash
+export DATABASE_URL="postgresql://...@db.<project>.supabase.co:5432/postgres"
+cd Control-DB && alembic upgrade head
+```
+
+What each Supabase primitive replaces:
+
+| Supabase | replaces | why it fits |
+|---|---|---|
+| Postgres | the file store / Redis | the schema and migrations are already written for it |
+| Row Level Security | the tenant-scoping done in application code | tenant isolation moves *below* the application, where a bug in our code cannot cross it |
+| Auth | the local session file, and `X-ZeroTrace-Actor` | closes the self-asserted-identity gap listed below; actor and groups come from a token the caller cannot forge |
+| Realtime | polling the console | policy and ledger updates push to the operator view |
+| Storage | evidence held on local disk | ledger export and retention |
+
+**The seam this passes through is small on purpose.** Everything that touches durable state
+goes through one `KV` Protocol — fourteen async methods, with `MemoryKV`, `FileKV` and
+`RedisKV` implementing it today. A Postgres-backed implementation is one more class behind
+the same Protocol, and the ledger, the policy store and the actor store do not change at
+all. Similarly, `PartAContext` is the only thing that decides, so swapping where identity
+comes from does not touch detection.
+
+**Be clear about what the migration does *not* fix.** It closes identity — the largest open
+gap — and it makes evidence durable. It does not change the detectors, the policy lattice
+or the two loops, and it does not fix the fail-closed-under-load behaviour in the table
+below. Those are separate pieces of work and calling them "done after Supabase" would be
+wrong.
 
 ---
 
