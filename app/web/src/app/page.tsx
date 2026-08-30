@@ -9,10 +9,17 @@ import { Moat } from '@/components/site/Moat';
 import { Pricing } from '@/components/site/Pricing';
 import { Demo } from '@/components/site/Demo';
 
+/**
+ * The description is what a search result and a shared link show, so it carries
+ * the headline's own words rather than the framing the page used to open with.
+ * It also drops the claim that redacted values come back on the response leg -
+ * they do not. Tokens are one-way and there is no restoration path, and a meta
+ * tag is a bad place to keep a promise the product does not make.
+ */
 export const metadata = {
-  title: 'ZeroTrace - an egress firewall for AI traffic',
+  title: 'ZeroTrace - the simplest firewall for frontier LLMs',
   description:
-    'An egress firewall security agent. Sensitive data comes out of the outbound payload and goes back into the response, a prompt carrying a credential is stopped outright, and every decision lands in a tamper-evident record.',
+    'An egress firewall for AI traffic. It sits between your apps and the model, swaps names, ID numbers and card details for stand-ins on the way out, and stops any message carrying a live key. Every decision lands in a tamper-evident record.',
 };
 
 /**
