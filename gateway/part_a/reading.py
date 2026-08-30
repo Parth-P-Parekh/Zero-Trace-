@@ -161,8 +161,15 @@ def candidate_paths(tool: str, args: dict) -> list[Path]:
 
 
 def _expand(item: str) -> list[Path]:
+    text = item.strip().strip('"').strip("'").strip()
+    # An empty token is not a path. `Path("")` is the *current directory*, so
+    # `grep -c "" some_file` -- an empty pattern, a perfectly ordinary line count --
+    # expanded to every file in the repository, `.git` included, and the read was judged
+    # against all of it. Found when this gate blocked its own author counting lines.
+    if not text:
+        return []
     try:
-        path = Path(item.strip().strip('"').strip("'")).expanduser()
+        path = Path(text).expanduser()
     except (OSError, ValueError):
         return []
     try:

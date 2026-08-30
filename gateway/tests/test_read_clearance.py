@@ -500,3 +500,16 @@ def test_the_floor_covers_credentials_and_leaves_records_to_the_policy(tmp_path)
 
     assert credential_files([path]), "a credential file was not caught"
     assert credential_files([payslip]) == [], "a record was caught by the credential floor"
+
+
+def test_an_empty_argument_is_not_the_current_directory():
+    """`grep -c "" file` counts lines. It is not a read of the whole repository.
+
+    `Path("")` is the current directory, so an empty token expanded to every file under
+    the working tree -- `.git` included -- and the read was judged against all of it.
+    Found when this gate blocked its own author counting the lines in two test files.
+    A false positive of that shape is how a security tool gets switched off.
+    """
+    paths = candidate_paths("Bash", {"command": 'grep -c "" pytest.ini'})
+    assert [p.name for p in paths] == ["pytest.ini"]
+    assert not any(".git" in str(p) for p in paths)
