@@ -123,6 +123,27 @@ table,
   min-width: 780px;
 }
 
+/* --- The screen head ----------------------------------------------------
+   Every measured screen opens with a claim on the left and the dark card
+   carrying its number on the right. Two columns need roughly 900px before the
+   claim's measure drops below reading width and the card's figures start to
+   wrap mid-number, so below that they stack - claim first, because the card is
+   the evidence for a sentence you should have read already. */
+
+.zt-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+@media (max-width: 1040px) {
+  .zt-split {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}
+
 /* --- The console at narrow widths --------------------------------------
    The rail is a rail when there is room for one. Below that it becomes a
    scrollable strip of destinations at the top, and the secondary blocks

@@ -5,9 +5,10 @@
  * dark 232px rail, sticky; 56px topbar at 82% paper with the panel blur and an
  * inset bottom hairline.
  *
- * The one extension: the rail is grouped. Seven destinations is past the point
- * where a flat list scans, so they sit under three labelled groups following the
- * kit's own "Environments" precedent - Traffic, Control, Assurance.
+ * The one extension: the rail is grouped, and the groups are named as questions
+ * rather than as subsystems. "Control" and "Assurance" are what the parts are
+ * called internally; "How it decides" and "Proof" are what someone opening the
+ * console is trying to find out.
  */
 import { useState } from 'react';
 import Link from 'next/link';
@@ -29,39 +30,51 @@ export interface ConsoleShellProps {
 }
 
 const ROUTE_TITLES: Array<[string, string]> = [
-  ['/traffic', 'Traffic'],
-  ['/detectors', 'Detectors'],
-  ['/policy', 'Policy'],
+  ['/traffic', 'Requests'],
+  ['/findings', 'What we found'],
+  ['/detectors', 'Detection'],
+  ['/policy', 'Rules'],
   ['/coverage', 'Coverage'],
-  ['/licence', 'Licence'],
+  ['/environments', 'Environments'],
+  ['/licence', 'Usage'],
+  ['/method', 'How it works'],
 ];
 
 function titleFor(pathname: string): string {
-  if (/^\/traffic\/[^/]+$/.test(pathname)) return 'Traffic · Inspector';
+  if (/^\/traffic\/[^/]+$/.test(pathname)) return 'Requests · One request';
   const hit = ROUTE_TITLES.find(([base]) => pathname.startsWith(base));
   return hit ? hit[1] : 'Console';
 }
 
+/**
+ * Eight destinations under three headings, ordered by the question each answers:
+ * what happened, how it decided, and whether any of it can be proved.
+ *
+ * "What we found" is its own route rather than a tab on Requests, because one
+ * request can carry six findings - they are different counts and belong on
+ * different screens.
+ */
 const GROUPS = (counts: Record<string, number | string>): NavGroup[] => [
   {
-    label: 'Traffic',
+    label: 'What happened',
     items: [
-      { href: '/traffic', icon: 'scan-line', label: 'Traffic', count: counts.traffic },
-      { href: '/traffic?tab=findings', icon: 'eye-off', label: 'Findings', count: counts.findings },
+      { href: '/traffic', icon: 'scan-line', label: 'Requests', count: counts.traffic },
+      { href: '/findings', icon: 'eye-off', label: 'What we found', count: counts.findings },
     ],
   },
   {
-    label: 'Control',
+    label: 'How it decides',
     items: [
-      { href: '/detectors', icon: 'activity', label: 'Detectors', count: counts.detectors },
-      { href: '/policy', icon: 'list-filter', label: 'Policy', count: counts.policy },
+      { href: '/detectors', icon: 'activity', label: 'Detection', count: counts.detectors },
+      { href: '/policy', icon: 'list-filter', label: 'Rules' },
     ],
   },
   {
-    label: 'Assurance',
+    label: 'Proof',
     items: [
       { href: '/coverage', icon: 'shield', label: 'Coverage', count: counts.coverage },
-      { href: '/licence', icon: 'file-text', label: 'Licence' },
+      { href: '/licence', icon: 'file-text', label: 'Usage' },
+      { href: '/method', icon: 'book-open', label: 'How it works' },
     ],
   },
 ];
@@ -122,13 +135,26 @@ export function ConsoleShell({
           </div>
         ))}
 
+        {/* Environments is a destination, not decoration. The two entries carried no
+            link before and could not be reached; both now open the comparison, which
+            is the only screen where one environment means anything. */}
         <div className="zt-rail-secondary" style={{ marginTop: 20 }}>
           <div className="zt-eyebrow zt-rail-label" style={{ padding: '0 10px 8px', color: 'rgba(242,242,240,0.36)' }}>
             Environments
           </div>
           <div className="zt-rail-items" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <RailItem icon="activity" label="production" active={false} />
-            <RailItem icon="activity" label="staging" active={false} />
+            {([['production', 'Live', 'acting'], ['staging', 'Test', 'watching']] as const).map(
+              ([slug, label, state]) => (
+                <Link key={slug} href={`/environments#${slug}`} style={{ textDecoration: 'none' }}>
+                  <RailItem
+                    icon={slug === 'production' ? 'shield' : 'activity'}
+                    label={label}
+                    count={state}
+                    active={pathname.startsWith('/environments')}
+                  />
+                </Link>
+              ),
+            )}
           </div>
         </div>
 
@@ -143,7 +169,7 @@ export function ConsoleShell({
         >
           <StatusDot state="clean" size={6} live />
           <span className="zt-mono-sm" style={{ color: 'var(--text-on-dark-quiet)' }}>
-            gateway live · 4 ms
+            protection on
           </span>
         </div>
       </aside>
@@ -162,7 +188,7 @@ export function ConsoleShell({
           <span style={{ font: 'var(--type-body-sm)' }}>{heading}</span>
           <span style={{ flex: 1 }} />
           {actions}
-          <Badge status="clean" tone="clean">Enforcing</Badge>
+          <Badge status="clean" tone="clean">Protecting</Badge>
           <Tooltip label="Documentation">
             <IconButton name="book-open" label="Documentation" />
           </Tooltip>

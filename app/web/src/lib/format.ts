@@ -46,6 +46,19 @@ export function risk(v: number | null): string {
   return v === null ? '-' : v.toFixed(2);
 }
 
+/**
+ * A 0-1 score, at whatever precision is needed to keep it honest.
+ *
+ * Four decimals by default. But a recall of 0.999994 rounds to `1.0000`, and a
+ * score printed as a perfect one beside a badge saying it missed something is the
+ * console contradicting itself - so a value that is not 1 never prints as 1.
+ */
+export function score(v: number): string {
+  const four = v.toFixed(4);
+  if (v < 1 && four === '1.0000') return v.toFixed(6);
+  return four;
+}
+
 /** Microseconds to a readable unit-tagged string. */
 export function micros(us: number): string {
   return us < 1000 ? `${us} µs` : `${(us / 1000).toFixed(2)} ms`;

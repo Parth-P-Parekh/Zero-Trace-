@@ -1,154 +1,201 @@
 'use client';
 
+/**
+ * Policy - the rules, and whether they held.
+ *
+ * The green/amber/red verdict panel is gone. It charted an internal confidence state
+ * that means nothing without knowing the two thresholds either side of it, and the
+ * one consequence a reader actually needs from it - that an uncertain finding is
+ * never treated as a certain one - is a sentence, not a chart.
+ *
+ * What is left is the rules themselves in plain words, the one promise the product
+ * makes about credentials, and the one place the machinery broke.
+ */
 import { useState } from 'react';
-import { Badge, Button, Card, Icon, StatusDot, Tag, Tooltip } from '@/ds';
-import { PageHead, SectionLabel } from '@/components/Chrome';
-import { classToken } from '@/lib/format';
-import { ACTION_LATTICE } from '@/lib/types';
-import type { PolicyException, PolicyVersion } from '@/lib/types';
+import { Badge, Card, SegmentedControl } from '@/ds';
+import { BarSeries, RatioBar } from '@/components/console/Draw';
+import { Caveat, Column, Figure, Footnote, Headline, Pair, Panel, Provenance, TableHead, columns } from '@/components/console/Frame';
+import { run } from '@/lib/benchmark';
+import { compact, exact, percent } from '@/lib/format';
+import { group, instruction, oneIn, thing } from '@/lib/words';
 
-export function PolicyView({
-  active,
-  versions,
-  exceptions,
-}: {
-  active: PolicyVersion;
-  versions: PolicyVersion[];
-  exceptions: PolicyException[];
-}) {
-  const [selected, setSelected] = useState(active.version);
-  const shown = versions.find((v) => v.version === selected) ?? active;
-  const pending = exceptions.filter((e) => !e.approvedBy);
+/**
+ * The rules that decided this run, in the order a reader would ask about them.
+ * Transcribed from the policy the pipeline actually ran with, so the counts beside
+ * them are the counts these lines produced.
+ */
+const RULES: Array<{ family: string; action: string; why: string }> = [
+  { family: 'CREDENTIAL', action: 'block', why: 'A key that has left cannot be un-sent. There is no safe version of sending one.' },
+  { family: 'INDIA_ID', action: 'tokenize', why: 'Swapped for a stand-in that is the same every time, so the AI can still follow who is who.' },
+  { family: 'FINANCIAL', action: 'tokenize', why: 'The same treatment as ID numbers.' },
+  { family: 'CONTACT', action: 'tokenize', why: 'Kept in a form the far side can still read as an email or a phone number.' },
+  { family: 'COMPOSITE', action: 'tokenize', why: 'A record that identifies someone even though no single field in it does.' },
+  { family: 'SENSITIVE_CATEGORY', action: 'mask', why: 'Who may read these depends on which team they are in, decided per person.' },
+  { family: 'PERSON_DATA', action: 'tokenize', why: 'Needs the name-detection model, which is not built yet.' },
+  { family: 'LOW_CONFIDENCE', action: 'warn', why: 'Counted as supporting evidence. Never enough on its own.' },
+];
+
+const COLS: Column[] = [
+  { key: 'group', head: 'Kind of data', w: 'minmax(0,180px)' },
+  { key: 'action', head: 'What we do', w: '158px' },
+  { key: 'why', head: 'Why', w: 'minmax(0,1fr)' },
+  { key: 'count', head: 'Times seen', w: '96px', align: 'right' },
+];
+
+export function PolicyView() {
+  const [mode, setMode] = useState('applied');
+  const { integrity, actions, collisions } = run;
+  const counts = Object.fromEntries(run.byFamily.map((f) => [f.family, f.count]));
+  const total = run.status.total;
+  const strictness = ['allow', 'warn', 'tokenize', 'mask', 'block'];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 'var(--page-max)' }}>
-      <PageHead
-        title="One policy file, inherited down"
-        sub="Policy is org-scoped. A business unit may narrow an action, never widen it - the resolver takes the stronger of the two and refuses a weaker override at publish time."
-        right={
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="secondary" size="sm" icon="copy">Copy YAML</Button>
-            <Button size="sm" icon="check">Publish new version</Button>
-          </div>
-        }
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 'var(--page-max)' }}>
+      <div className="zt-split">
+        <div>
+          <Headline
+            sub="Eight rules, one per kind of data. A team can make a rule stricter for
+                 itself but never looser, and every decision is written down before
+                 anything is sent."
+          >
+            <Figure>{exact(total)}</Figure> requests, each measured against the same rules.
+          </Headline>
 
-      <Card pad={20}>
-        <SectionLabel>The action lattice</SectionLabel>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {ACTION_LATTICE.map((a, i) => (
-            <span key={a} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <Tag mono>{a}</Tag>
-              {i < ACTION_LATTICE.length - 1 ? (
-                <span style={{ color: 'var(--text-faint)' }} aria-hidden>→</span>
-              ) : null}
-            </span>
-          ))}
-          <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)', marginLeft: 8 }}>
-            weaker to stronger. An override may move right, never left.
-          </span>
+          <div style={{ marginTop: 26 }}>
+            <RatioBar
+              segments={strictness.filter((a) => actions[a]).map((a, i) => ({
+                label: instruction(a),
+                value: actions[a] ?? 0,
+                stop: [0.22, 0.36, 0.52, 0.72, 1.0][i] ?? 0.11,
+              }))}
+              total={total}
+            />
+          </div>
+        </div>
+
+        {/* The promise, and where it was not kept. */}
+        <Card tone="dark" pad={24}>
+          <Panel title="The one promise" onDark>
+            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+              <Pair
+                value={percent(integrity.credential_block_rate, 1)}
+                of="of requests carrying a key were stopped"
+                onDark
+                size={33}
+              />
+              <Pair value={exact(integrity.credential_not_blocked)} of="got through" onDark />
+            </div>
+            <Footnote onDark measure="50ch">
+              The rule never failed. Every key it found was stopped, and no key was ever
+              swapped for a stand-in instead. The ones that got through were never found in
+              the first place - all of them typed with spaces or padding, and all of them on
+              the previous screen.
+            </Footnote>
+          </Panel>
+        </Card>
+      </div>
+
+      {/* -- the rules ----------------------------------------------------------- */}
+      <Card pad={0}>
+        <div style={{ padding: '18px 20px 12px' }}>
+          <Panel
+            title="The rules"
+            right={
+              <SegmentedControl
+                size="sm"
+                value={mode}
+                onChange={setMode}
+                items={[
+                  { value: 'applied', label: 'Most used' },
+                  { value: 'lattice', label: 'Strictest first' },
+                ]}
+              />
+            }
+          >
+            <div />
+          </Panel>
+        </div>
+        <div className="zt-table">
+          <div>
+            <TableHead cols={COLS} />
+            {[...RULES]
+              .sort((a, b) =>
+                mode === 'lattice'
+                  ? strictness.indexOf(b.action) - strictness.indexOf(a.action)
+                  : (counts[b.family] ?? 0) - (counts[a.family] ?? 0))
+              .map((r) => (
+                <div
+                  key={r.family}
+                  className="zt-row"
+                  style={{
+                    display: 'grid', gridTemplateColumns: columns(COLS), gap: 12,
+                    alignItems: 'center', minHeight: 'var(--row-h)', padding: '12px 16px',
+                    boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
+                    opacity: counts[r.family] ? 1 : 0.52,
+                  }}
+                >
+                  <span style={{ font: 'var(--type-body-sm)' }}>{group(r.family)}</span>
+                  <span>
+                    <Badge
+                      status={r.action === 'block' ? 'blocked'
+                        : r.action === 'mask' || r.action === 'tokenize' ? 'redacted' : 'info'}
+                      tone={r.action === 'block' ? 'blocked'
+                        : r.action === 'mask' || r.action === 'tokenize' ? 'redacted' : 'neutral'}
+                    >
+                      {instruction(r.action)}
+                    </Badge>
+                  </span>
+                  <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)', minWidth: 0 }}>
+                    {r.why}
+                  </span>
+                  <span className="zt-mono-sm zt-nums" style={{ textAlign: 'right' }}>
+                    {counts[r.family] ? compact(counts[r.family]) : 'never'}
+                  </span>
+                </div>
+              ))}
+          </div>
         </div>
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.6fr) minmax(0,1fr)', gap: 12, alignItems: 'start' }}>
-        {/* The live policy is what governs every decision on every other screen. Dark card. */}
-        <Card tone="dark" pad={0}>
-          <div
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '14px 20px',
-              boxShadow: 'inset 0 -1px 0 var(--border-on-dark)',
-            }}
-          >
-            <StatusDot state={shown.active ? 'clean' : 'idle'} size={6} live={shown.active} />
-            <span style={{ font: 'var(--type-label)', color: 'var(--ink-inverse)' }}>
-              policy v{shown.version}
-            </span>
-            <span className="zt-mono-sm" style={{ color: 'var(--text-on-dark-quiet)' }}>
-              {shown.active ? 'active' : 'superseded'} · {shown.createdBy}
-            </span>
-            <span style={{ flex: 1 }} />
-            <Tooltip label="Copy to clipboard">
-              <span style={{ color: 'rgba(242,242,240,0.52)', display: 'inline-flex' }}>
-                <Icon name="copy" size={14} />
-              </span>
-            </Tooltip>
+      {/* -- the one place the machinery broke ------------------------------------ */}
+      <Card pad={22}>
+        <Panel
+          title="Where it broke"
+          note="When two rules both want to change the same characters, the request fails instead of being cleaned up."
+        >
+          <div style={{ display: 'flex', gap: 30, flexWrap: 'wrap', marginBottom: 22 }}>
+            <Pair
+              value={oneIn(collisions.reached_the_splice / total)}
+              of="requests hit this"
+              size={27}
+            />
+            <Pair value={exact(collisions.reached_the_splice)} of="in this run" size={27} />
           </div>
-          <pre
-            className="zt-mono-sm"
-            style={{
-              margin: 0, padding: 20, overflowX: 'auto', color: 'var(--text-on-dark-body)',
-              lineHeight: 1.62, tabSize: 2,
-            }}
-          >
-            {shown.yaml}
-          </pre>
-        </Card>
+          <BarSeries
+            rows={Object.entries(collisions.pairs).map(([pair, n]) => ({
+              label: pair.split('+').map(thing).join('  and  '),
+              value: n,
+            }))}
+            format={compact}
+            limit={6}
+          />
+          <p style={{ margin: '20px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '72ch' }}>
+            Nothing leaked - the request is abandoned rather than sent. But the app gets a
+            generic server error instead of a clear explanation, and no record of the
+            decision is kept, so an auditor looking later sees a gap where a decision
+            should be. It is the clearest thing on this dashboard to fix next.
+          </p>
+        </Panel>
+      </Card>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Card pad={20}>
-            <SectionLabel>Versions</SectionLabel>
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {versions.map((v) => {
-                const on = v.version === selected;
-                return (
-                  <button
-                    key={v.version}
-                    onClick={() => setSelected(v.version)}
-                    style={{
-                      display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start',
-                      textAlign: 'left', padding: '10px 12px', border: 0, cursor: 'pointer',
-                      borderRadius: 'var(--r-6)', background: on ? 'rgba(17,17,17,0.05)' : 'transparent',
-                      boxShadow: on ? 'inset 1px 0 0 var(--ink)' : 'none',
-                      transition: 'var(--t-hover)',
-                    }}
-                  >
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="zt-mono-sm" style={{ color: 'var(--ink)' }}>v{v.version}</span>
-                      {v.active ? <Badge status="clean" tone="clean">Active</Badge> : null}
-                    </span>
-                    <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>{v.note}</span>
-                    <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>
-                      {v.createdBy} · {new Date(v.createdAt).toISOString().slice(11, 16)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </Card>
+      <Caveat>
+        Rule versions, per-team overrides, approvals and time-limited exceptions all exist
+        in the product but were not used in this test - it ran every request against one
+        set of rules. The version history this screen used to show was invented, so it has
+        been removed rather than restyled.
+      </Caveat>
 
-          <Card pad={20}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <span className="zt-eyebrow">Exceptions</span>
-              <span style={{ flex: 1 }} />
-              {pending.length ? (
-                <Badge status="redacted" tone="redacted">{pending.length} awaiting approval</Badge>
-              ) : null}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {exceptions.map((e) => (
-                <div key={e.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Tag mono>{classToken(e.entityClass)}</Tag>
-                    <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{e.scope.direction}</span>
-                  </div>
-                  <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)' }}>{e.reason}</p>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <StatusDot state={e.approvedBy ? 'clean' : 'redacted'} size={6} />
-                    <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-                      {e.approvedBy
-                        ? `Raised by ${e.requestedBy}, approved by ${e.approvedBy}`
-                        : `Raised by ${e.requestedBy}, awaiting a second person`}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p style={{ margin: '16px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-              An exception cannot be approved by the person who raised it. The database refuses it.
-            </p>
-          </Card>
-        </div>
-      </div>
+      <Provenance />
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { ConsoleShell } from '@/components/ConsoleShell';
 import { getSession } from '@/lib/auth';
-import { listDetectors, listRequests, listExceptions, getCoverage } from '@/lib/client';
+import { run } from '@/lib/benchmark';
+import { compact } from '@/lib/format';
 
 /** Every console route reads the session, so none of them can be prerendered. */
 export const dynamic = 'force-dynamic';
@@ -12,13 +13,17 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
   const session = await getSession();
   if (!session) redirect('/login');
 
-  const requests = listRequests();
+  // Rail counts come from the run, so the badge beside a destination is the same
+  // number the destination opens with. A count that disagrees with its own screen
+  // is worse than no count.
+  // Policy and Metering carry no count. Every other badge names the thing its screen
+  // is a list of; policy's would have been "3 actions used", which is a number nobody
+  // asked for sitting where a total belongs.
   const counts = {
-    traffic: requests.length,
-    findings: requests.reduce((n, r) => n + r.findings.length, 0),
-    detectors: listDetectors().filter((d) => d.status === 'active').length,
-    policy: listExceptions().length,
-    coverage: getCoverage().events.filter((e) => e.verdict === 'direct_egress').length,
+    traffic: compact(run.status.total),
+    findings: compact(run.outcomes.findings_total),
+    detectors: run.detectors.length,
+    coverage: Object.keys(run.coverage.harness).length,
   };
 
   return (

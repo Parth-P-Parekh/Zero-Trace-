@@ -1,8 +1,8 @@
 import { TrafficView } from '@/components/views/TrafficView';
-import { listRequests, trafficSummary } from '@/lib/client';
+import { sampleFeed } from '@/lib/benchmark';
 
-export const metadata = { title: 'Traffic · ZeroTrace' };
+export const metadata = { title: 'Requests · ZeroTrace' };
 
 export default function TrafficPage() {
-  return <TrafficView rows={listRequests()} summary={trafficSummary()} />;
+  return <TrafficView rows={sampleFeed()} />;
 }

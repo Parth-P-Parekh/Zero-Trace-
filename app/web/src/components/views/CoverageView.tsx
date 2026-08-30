@@ -1,205 +1,209 @@
 'use client';
 
-import { Badge, Button, Card, Icon, StatusDot, Tag, Tooltip, EmptyState } from '@/ds';
-import { GridHead, PageHead, SectionLabel, StubNote } from '@/components/Chrome';
-import { classToken, count, exact, percent } from '@/lib/format';
-import type {
-  CoverageReport, Counterfactual, HarnessCoverageSnapshot, LedgerHead, StubNotice,
-} from '@/lib/types';
+/**
+ * Coverage - is this all of it?
+ *
+ * The first question a security lead asks, and the one this deployment cannot
+ * answer. The dark card carries the absence rather than a number, because a
+ * coverage percentage over an unmeasured base is the single most persuasive false
+ * claim this product could make.
+ *
+ * The raw field names that used to sit in that card - `scope: gateway_observed_only`
+ * and friends - said the same thing in a form only someone reading the source could
+ * check. The sentence says it to everyone.
+ */
+import { useState } from 'react';
+import { Card, SegmentedControl } from '@/ds';
+import { BarSeries, RatioBar } from '@/components/console/Draw';
+import { Caveat, Figure, Footnote, Headline, Panel, Provenance } from '@/components/console/Frame';
+import { run } from '@/lib/benchmark';
+import { compact, exact, percent } from '@/lib/format';
 
-const COLUMNS = '84px minmax(0,1fr) 200px 168px';
+const DIMENSIONS: Record<string, { label: string; note: string }> = {
+  workload: {
+    label: 'App',
+    note: 'Which application made the request.',
+  },
+  harness: {
+    label: 'Tool',
+    note: 'Which AI tool it came through. “unknown” means we could not name the tool, not that it got around us.',
+  },
+  channel: {
+    label: 'How it connected',
+    note: 'A command-line tool writes the AI’s answer to disk, which is why stand-in values are refused there.',
+  },
+};
 
-export function CoverageView({
-  report,
-  harnessCoverage,
-  counterfactual,
-  ledger,
-  stub,
-}: {
-  report: CoverageReport;
-  harnessCoverage: HarnessCoverageSnapshot | null;
-  counterfactual: Counterfactual;
-  ledger: LedgerHead;
-  stub: StubNotice;
-}) {
-  const bypass = report.events.filter((e) => e.verdict === 'direct_egress');
+/** Job titles, not system roles. */
+const ROLE_COPY: Record<string, string> = {
+  officer: 'Case officer',
+  auditor: 'Auditor',
+  director: 'Director',
+  contractor: 'Outside contractor',
+  support_agent: 'Support agent',
+  service: 'An application, not a person',
+  unregistered: 'Nobody we recognise',
+  engineer: 'Engineer',
+};
+
+export function CoverageView() {
+  const [dim, setDim] = useState('workload');
+  const { coverage, status, byActorRole } = run;
+  const table = coverage[dim as keyof typeof coverage] as Record<string, number>;
+  const unknown = coverage.harness.unknown ?? 0;
+
+  const roles = Object.entries(byActorRole).reduce<Record<string, Record<string, number>>>(
+    (acc, [key, n]) => {
+      const [role, action] = key.split(':');
+      acc[role] = acc[role] ?? {};
+      acc[role][action] = n;
+      return acc;
+    },
+    {},
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 'var(--page-max)' }}>
-      <PageHead
-        title="What reached a model without passing through"
-        sub="Provider domains are denied at the network boundary, so the gateway is the only route out. Anything that tried another one is named below."
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 'var(--page-max)' }}>
+      <div className="zt-split">
+        <div>
+          <Headline
+            sub="Everything on this dashboard is traffic that came through us. Whether that
+                 is all of the organisation’s AI traffic is a separate question, and this
+                 setup cannot answer it."
+          >
+            <Figure>{exact(status.total)}</Figure> requests came through us.
+          </Headline>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(360px,1fr))', gap: 12, alignItems: 'stretch' }}>
-        {/* The coverage number is what a security buyer asks for first, so it takes the dark card. */}
-        <Card tone="dark" pad={28} style={{ display: 'flex', flexDirection: 'column' }}>
-          <SectionLabel onDark>Coverage · {report.windowLabel}</SectionLabel>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <span
-              className="zt-nums"
+          <div style={{ marginTop: 26 }}>
+            <RatioBar
+              segments={Object.entries(coverage.provider).map(([p, n], i) => ({
+                label: p === 'anthropic' ? 'Anthropic models' : 'OpenAI models',
+                value: n,
+                stop: [1.0, 0.52, 0.22][i] ?? 0.11,
+              }))}
+            />
+          </div>
+        </div>
+
+        {/* The card carries what is missing, not a percentage. */}
+        <Card tone="dark" pad={24}>
+          <Panel title="What share of all AI traffic" onDark>
+            <div
               style={{
-                font: 'var(--w-semibold) var(--t-72)/var(--lh-tight) var(--font-core)',
-                letterSpacing: 'var(--tr-display)', color: 'var(--ink-inverse)',
+                font: 'var(--w-regular) 33px/1.1 var(--font-core)',
+                letterSpacing: 'var(--tr-display)', color: 'rgba(242,242,240,0.36)',
               }}
             >
-              {percent(report.ratio)}
-            </span>
-          </div>
-          <p style={{ margin: '12px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-on-dark-body)', maxWidth: '46ch' }}>
-            {exact(report.viaZeroTrace)} requests traversed ZeroTrace. {count(bypass.length)} workloads
-            resolved a provider domain without it, and {exact(report.blockedAtBoundary)} connections
-            were refused at the boundary.
-          </p>
-          <div style={{ display: 'flex', gap: 20, marginTop: 'auto', paddingTop: 20, boxShadow: 'inset 0 1px 0 var(--border-on-dark)' }}>
-            <DarkStat label="Via ZeroTrace" value={exact(report.viaZeroTrace)} />
-            <DarkStat label="Direct egress" value={String(bypass.length)} signal="blocked" />
-            <DarkStat label="Refused at boundary" value={exact(report.blockedAtBoundary)} />
-          </div>
-        </Card>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Card pad={20}>
-            <SectionLabel>If ZeroTrace had been off</SectionLabel>
-            <p style={{ margin: '0 0 16px', font: 'var(--type-body)', maxWidth: '44ch' }}>
-              {exact(counterfactual.spans)} spans across {counterfactual.classes} classes would have
-              left the building in the {counterfactual.windowLabel}.
+              We don&rsquo;t know
+            </div>
+            <p
+              style={{
+                margin: '20px 0 0', font: 'var(--type-body-sm)',
+                color: 'var(--text-on-dark-body)', maxWidth: '48ch',
+              }}
+            >
+              To say &ldquo;we cover 98% of AI traffic&rdquo; you need to know the other 2%
+              exists. That means watching the network itself &ndash; which machines called
+              an AI provider without coming through us &ndash; and that connection has not
+              been built.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {counterfactual.byClass.slice(0, 5).map((c) => {
-                const share = c.spans / counterfactual.byClass[0].spans;
-                return (
-                  <div key={c.entityClass} style={{ display: 'grid', gridTemplateColumns: '132px 1fr 52px', gap: 10, alignItems: 'center' }}>
-                    <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{classToken(c.entityClass)}</span>
-                    <span style={{ height: 4, background: 'rgba(17,17,17,0.11)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
-                      <span style={{ display: 'block', height: '100%', width: `${share * 100}%`, background: 'rgba(17,17,17,0.52)' }} />
-                    </span>
-                    <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)', textAlign: 'right' }}>{exact(c.spans)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          <Card pad={20}>
-            <SectionLabel>Evidence ledger</SectionLabel>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <StatusDot state={ledger.intact ? 'clean' : 'blocked'} size={6} />
-              <span style={{ font: 'var(--type-body-sm)' }}>
-                {ledger.intact ? 'Chain verified unbroken' : 'Chain diverges'}
-              </span>
-              <span style={{ flex: 1 }} />
-              <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{ledger.verifiedAt}</span>
-            </div>
-            <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px', font: 'var(--type-body-sm)' }}>
-              <dt style={{ color: 'var(--text-quiet)' }}>Height</dt>
-              <dd style={{ margin: 0, textAlign: 'right' }} className="zt-mono-sm zt-nums">{exact(ledger.height)}</dd>
-              <dt style={{ color: 'var(--text-quiet)' }}>Head</dt>
-              <dd style={{ margin: 0, textAlign: 'right' }} className="zt-mono-sm">{ledger.head}</dd>
-            </dl>
-            <div style={{ marginTop: 16 }}>
-              <Button variant="secondary" size="sm" icon="terminal" full>
-                Verify the chain yourself
-              </Button>
-            </div>
-          </Card>
-        </div>
+            <Footnote onDark>
+              So this screen shows what we did see, and no percentage. A number here with
+              nothing underneath it would be the easiest thing on the dashboard to believe
+              and the least true.
+            </Footnote>
+          </Panel>
+        </Card>
       </div>
 
-      {harnessCoverage ? (
-        <Card pad={0}>
-          <div style={{ padding: '16px 16px 12px' }}>
-            <SectionLabel>Observed harnesses · this gateway process</SectionLabel>
-            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-              {exact(harnessCoverage.total_requests)} checks traversed ZeroTrace since startup.
-              Direct egress is not visible here, so this is traversal evidence-not a coverage percentage.
-            </p>
-          </div>
-          <div className="zt-table">
-            <div>
-              <GridHead columns="minmax(160px,1fr) 210px 130px 100px 100px" cells={['Harness', 'Route', 'Provider', 'Requests', 'Blocked']} />
-              {harnessCoverage.harnesses.map((row) => (
-                <div
-                  key={`${row.harness}:${row.route}:${row.channel}`}
-                  style={{
-                    display: 'grid', gridTemplateColumns: 'minmax(160px,1fr) 210px 130px 100px 100px',
-                    gap: 12, minHeight: 'var(--row-h)', padding: '8px 16px', alignItems: 'center',
-                    boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-                  }}
-                >
-                  <span style={{ font: 'var(--type-body-sm)' }}>{row.harness}</span>
-                  <span className="zt-mono-sm">{row.route}</span>
-                  <span className="zt-mono-sm">{row.provider}</span>
-                  <span className="zt-mono-sm zt-nums">{exact(row.requests)}</span>
-                  <span className="zt-mono-sm zt-nums">{exact(row.blocked)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
-      ) : null}
-
-      <Card pad={0}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '16px 16px 12px' }}>
-          <div style={{ flex: 1 }}>
-            <SectionLabel>Exceptions</SectionLabel>
-            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '62ch' }}>
-              Workloads that resolved a provider domain without traversing the gateway. Each one is a
-              service to onboard, not an alert to clear.
-            </p>
-          </div>
-          <Badge status={bypass.length ? 'blocked' : 'clean'} tone={bypass.length ? 'blocked' : 'clean'}>
-            {bypass.length ? `${count(bypass.length)} to chase` : 'None'}
-          </Badge>
-        </div>
-
-        <div className="zt-table">
-        <div>
-        <GridHead columns={COLUMNS} cells={['Time', 'Workload', 'Destination', 'Verdict']} />
-
-        {report.events.length ? (
-          report.events.map((e) => (
-            <div
-              key={e.id}
-              style={{
-                display: 'grid', gridTemplateColumns: COLUMNS, gap: 12, alignItems: 'center',
-                minHeight: 'var(--row-h)', padding: '8px 16px',
-                boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-              }}
-            >
-              <span className="zt-mono-sm" style={{ color: 'var(--text-quiet)' }}>{e.ts}</span>
-              <span style={{ font: 'var(--type-body-sm)' }}>{e.workload}</span>
-              <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{e.dstDomain}</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <StatusDot state={e.verdict === 'direct_egress' ? 'blocked' : e.verdict === 'blocked_at_boundary' ? 'redacted' : 'clean'} size={6} />
-                <span style={{ font: 'var(--type-body-sm)' }}>
-                  {e.verdict === 'direct_egress' ? 'Direct egress' : e.verdict === 'blocked_at_boundary' ? 'Refused at boundary' : 'Via ZeroTrace'}
-                </span>
-              </span>
-            </div>
-          ))
-        ) : (
-          <EmptyState icon="shield" title="Nothing bypassed the gateway" description="Every AI-bound flow in this window traversed ZeroTrace." />
-        )}
-        </div>
-        </div>
+      {/* -- what did come through ------------------------------------------------ */}
+      <Card pad={22}>
+        <Panel
+          title="Where it came from"
+          note={`${DIMENSIONS[dim].note} The counts are close to even because this is test traffic, not a real estate.`}
+          right={
+            <SegmentedControl
+              size="sm"
+              value={dim}
+              onChange={setDim}
+              items={Object.entries(DIMENSIONS).map(([value, d]) => ({ value, label: d.label }))}
+            />
+          }
+        >
+          <BarSeries
+            rows={Object.entries(table)
+              .sort((a, b) => b[1] - a[1])
+              .map(([label, value]) => ({ label, value }))}
+            format={compact}
+            limit={12}
+          />
+        </Panel>
       </Card>
 
-      <StubNote capability={stub.capability} detail={stub.detail} />
-    </div>
-  );
-}
+      {/* -- who was sending ------------------------------------------------------ */}
+      <Card pad={22}>
+        <Panel
+          title="Who was sending"
+          note="Right now this is taken from a header the caller sets itself, which anyone could fake. Proper sign-in checking is designed and not built."
+        >
+          <div className="zt-table">
+            <div>
+              {Object.entries(roles)
+                .sort((a, b) =>
+                  Object.values(b[1]).reduce((x, y) => x + y, 0)
+                  - Object.values(a[1]).reduce((x, y) => x + y, 0))
+                .map(([role, acts]) => {
+                  const t = Object.values(acts).reduce((x, y) => x + y, 0);
+                  const stopped = (acts.block ?? 0) + (acts.tokenize ?? 0) + (acts.mask ?? 0);
+                  return (
+                    <div
+                      key={role}
+                      style={{
+                        display: 'grid', gridTemplateColumns: '200px 80px minmax(0,1fr) 96px',
+                        gap: 16, alignItems: 'center', padding: '13px 4px',
+                        boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
+                      }}
+                    >
+                      <span
+                        style={{
+                          font: 'var(--type-body-sm)',
+                          color: role === 'unregistered' ? 'var(--signal-redacted)' : 'var(--text-body)',
+                        }}
+                      >
+                        {ROLE_COPY[role] ?? role}
+                      </span>
+                      <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)' }}>
+                        {compact(t)}
+                      </span>
+                      <RatioBar
+                        legend={false}
+                        height={6}
+                        total={t}
+                        segments={[
+                          { label: 'Sent as-is', value: acts.allow ?? 0, stop: 0.22 },
+                          { label: 'Cleaned up', value: acts.tokenize ?? 0, stop: 0.52 },
+                          { label: 'Stopped', value: acts.block ?? 0, stop: 1.0 },
+                        ]}
+                      />
+                      <span className="zt-mono-sm zt-nums" style={{ textAlign: 'right' }}>
+                        {percent(stopped / t, 0)} touched
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </Panel>
+      </Card>
 
-function DarkStat({ label, value, signal }: { label: string; value: string; signal?: 'blocked' }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span className="zt-eyebrow" style={{ color: 'rgba(242,242,240,0.52)' }}>{label}</span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        {signal ? <StatusDot state={signal} size={6} /> : null}
-        <span className="zt-nums" style={{ font: 'var(--w-semibold) var(--t-18)/1.2 var(--font-core)', color: 'var(--ink-inverse)' }}>
-          {value}
-        </span>
-      </span>
+      <Caveat>
+        {exact(unknown)} requests came from a tool we could not put a name to. Every one of
+        them was still checked and decided like the rest &ndash; it is a labelling gap, not
+        a hole. It is worth watching because a share that starts growing usually means a new
+        tool has appeared in the organisation.
+      </Caveat>
+
+      <Provenance />
     </div>
   );
 }
