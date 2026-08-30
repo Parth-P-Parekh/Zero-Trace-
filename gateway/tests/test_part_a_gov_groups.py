@@ -78,15 +78,53 @@ async def test_citizen_services_may_see_citizen_identifiers(citizen_class):
     assert await _action("s.iyer", citizen_class) == "allow"
 
 
-@pytest.mark.parametrize("citizen_class", ["AADHAAR", "VOTER_ID", "PAN"])
+@pytest.mark.parametrize("citizen_class", ["AADHAAR", "VOTER_ID", "DL_NUMBER"])
 async def test_everyone_else_sees_citizen_identifiers_masked(citizen_class):
-    """Revenue handles tax, not citizens. Being an officer is not a clearance."""
+    """Revenue handles tax, not citizens. Being an officer is not a clearance.
+
+    PAN is deliberately not in this list any more -- see the test below.
+    """
     assert await _action("r.banerjee", citizen_class) == "mask"
+
+
+@pytest.mark.parametrize("shared_class", ["PAN", "BANK_ACCOUNT", "IFSC"])
+async def test_the_shared_identifiers_clear_both_functions(shared_class):
+    """Rule 1, and the reason it was split out of rules 0 and 2.
+
+    A PAN is an identity document at a service counter and a tax identifier at an
+    assessment desk; a bank account and its IFSC sit on a pension case file and on a
+    refund order alike. While they lived in the citizen rule, the strongest action won
+    across a document's findings and a GST assessment quoting the assessee's PAN became
+    unreadable *by revenue* -- and a pension grievance naming the beneficiary's bank
+    became unreadable by citizen-services. Every realistic document spans both, so the
+    intersection was nobody.
+
+    This is a widening and it is worth being explicit about: what it does not do is give
+    either group the other's records, which is what the two tests below pin down.
+    """
+    assert await _action("s.iyer", shared_class) == "allow"
+    assert await _action("r.banerjee", shared_class) == "allow"
+    assert await _action("m.khan", shared_class) == "mask"
+    assert await _action("cag.audit", shared_class) == "mask"
 
 
 async def test_revenue_may_see_tax_records_and_citizen_services_may_not():
     """The separation runs both ways, or it is not a separation."""
     assert await _action("r.banerjee", "GSTIN") == "allow"
+    assert await _action("s.iyer", "GSTIN") == "mask"
+
+
+async def test_sharing_pan_did_not_open_the_records_on_either_side():
+    """The widening in rule 1 is exactly one rule wide.
+
+    Revenue gained the PAN that appears on its own assessments, not the citizen case
+    files it appears in; citizen-services gained the account number on a pension record,
+    not the tax ledger. If this ever fails, rule 1 has become the way around rules 0
+    and 2.
+    """
+    assert await _action("r.banerjee", "CUSTOMER_DATA") == "mask"
+    assert await _action("r.banerjee", "AADHAAR") == "mask"
+    assert await _action("s.iyer", "FINANCIAL_RECORD") == "mask"
     assert await _action("s.iyer", "GSTIN") == "mask"
 
 

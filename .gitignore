@@ -26,3 +26,8 @@ evidence/ledger/
 
 # PreToolUse cross-call fragment window (temp dir, but never commit one)
 zerotrace-window/
+
+# The demo corpus is generated (demo/corpus/generate.py), never committed: it is a
+# tree of identifier-shaped records, and checking it in is the exact thing ZeroTrace
+# refuses to let anyone do.
+demo/corpus/bharat-digital/

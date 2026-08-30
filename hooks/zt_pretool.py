@@ -15,12 +15,22 @@ What it checks:
     WebFetch      the URL, which may carry a token in a query parameter
     mcp__*        every string argument, since MCP tools take arbitrary payloads
 
-**Be clear about what this does not cover.** PreToolUse fires *before* the tool runs, so
-on a `Read` it sees the path and not the contents. It cannot stop a secret entering the
-transcript that way; the file's contents arrive as a tool *result* on the next request,
-which is the proxy's leg, not this one. Claiming this hook closes that gap would be
-wrong, and the honest summary is: `UserPromptSubmit` covers typed input, `PreToolUse`
-covers tool arguments, and file contents pulled into context need the proxy.
+It also gates what a tool is about to **return**, which is the other direction again:
+
+    Read, Grep,
+    Bash `cat`    the file itself -- opened, classified and judged against the logged-in
+                  actor's clearance before the tool runs (`gateway/part_a/reading.py`)
+
+**Why that is possible here.** PreToolUse sees a `Read`'s path and not its contents --
+from the *agent's* side. This hook is a local process with the same filesystem access, so
+it opens the file itself and refuses before a byte reaches the transcript. Doing it on
+PostToolUse instead would be too late in the only way that matters: the content is already
+in the context window by then.
+
+**What it still does not cover.** A read whose target is not named in the tool call:
+`curl | sh`, a file opened by a script the agent runs, an editor's own buffer. The honest
+summary is: `UserPromptSubmit` covers typed input, `PreToolUse` covers tool arguments and
+reads whose path it can resolve, and everything else needs the proxy.
 
 Install:  ``python hooks/install.py``     (installs both hooks for both hosts)
 
@@ -192,6 +202,13 @@ def run(event: dict) -> None:
     """Decide on one already-parsed hook event. See `zt_check.run` for why."""
     tool = event.get("tool_name", "")
     args = event.get("tool_input") or {}
+
+    # Clearance first, and before the early allow below. A `Read` harvests no text -- it
+    # is in SKIP, because its arguments are a path and carry no payload -- so every route
+    # after this point exits before the question "may this person see this file" is ever
+    # asked. The credential check guards what leaves; this guards what comes back.
+    _clearance_gate(tool, args if isinstance(args, dict) else {})
+
     text = harvest(tool, args if isinstance(args, dict) else {})
     if not text.strip():
         allow()
@@ -311,6 +328,75 @@ def run(event: dict) -> None:
             pass
 
     allow()
+
+
+def _clearance_gate(tool: str, args: dict) -> None:
+    """Refuse a read the logged-in actor is not cleared for. Denies, or returns.
+
+    Two cheap tests come first, and both matter. `_logged_in` is a file read: without a
+    role there is no clearance layer, and paying the Part A import on every tool call to
+    discover that would make the common case the expensive one. `candidate_paths` is a
+    few `stat` calls: most tool calls name no file at all, and those must cost nothing.
+
+    Every failure here degrades to "no clearance layer today" rather than to a refusal.
+    That is deliberate and it is the opposite of the credential path's fail-closed rule:
+    a credential check that cannot run has failed to protect a secret, while a clearance
+    check that cannot run has failed to enforce a policy that may not even be seeded. The
+    read still goes through the detectors either way.
+    """
+    if not _logged_in():
+        return
+
+    # The warm daemon first, before anything from `gateway` is imported. Building the
+    # Part A store measured at ~397ms and the detector pack at ~300ms more, which turned
+    # a gated `Read` into two thirds of a second. The daemon holds both, so ask it before
+    # paying for either -- importing and then deciding to delegate would pay the cost
+    # anyway, which is the same reasoning the credential fast path above follows.
+    from hooks import daemon_client
+
+    fast = daemon_client.ask_read(tool, args)
+    if fast is not None:
+        if not fast.get("skip") and not fast.get("allow", True):
+            deny(fast.get("reason") or "ZeroTrace withheld this read.")
+        return
+
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from gateway.part_a.reading import candidate_paths
+
+        paths = candidate_paths(tool, args)
+        if not paths:
+            return
+
+        import asyncio
+
+        from gateway.part_a.reading import decide_read
+
+        decision = asyncio.run(decide_read(paths))
+    except SystemExit:
+        raise
+    except Exception:  # noqa: BLE001
+        return
+
+    if decision is not None and not decision.allow:
+        deny(decision.reason)
+
+
+def _logged_in() -> bool:
+    """Is there a session at all -- answered without importing anything.
+
+    The same cheap test `zt_check` makes, for the same reason: the Part A stack measured
+    at ~117ms to import, and this runs in front of every tool call.
+    """
+    import json as _json
+
+    home = Path(os.environ.get("ZT_HOME") or (Path.home() / ".zerotrace"))
+    try:
+        raw = _json.loads((home / "session.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(raw.get("tenant") and raw.get("actor"))
 
 
 def _escalate(session_id: str, tool: str, text: str, assessment) -> None:

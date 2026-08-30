@@ -27,51 +27,76 @@ from ..contracts.entity_classes import EntityClass
 
 @dataclass(frozen=True, slots=True)
 class DocumentClass:
-    """A record type, and the field signals that distinguish it."""
+    """A record type, and the field signals that distinguish it.
+
+    Signals come in two strengths, and the split is what keeps this a classifier rather
+    than a word filter. A **strong** signal is structurally field-shaped -- `employee_id`,
+    `ticket_id`, `cvss`, `connection_string`. Something wrote it as a key. A **weak**
+    signal is a bare noun from the subject's vocabulary -- `beneficiary`, `grievance`,
+    `severity`, `password` -- which appears just as readily in prose *about* records as in
+    a record.
+
+    A document therefore needs `quorum` distinct signals **and at least one strong one**.
+    Without that second condition a public scheme FAQ reaches quorum on "applicant" and
+    "grievance" and is classified as citizen data, which is exactly the false positive
+    this module's opening paragraph promises not to make -- and in a demo it means the
+    open circular gets withheld alongside the case file, teaching the operator that the
+    tool simply says no.
+    """
 
     entity_class: EntityClass
-    #: Distinct signals. A document must hit `quorum` of these, not one of them twice.
-    signals: tuple[str, ...]
+    #: Field-shaped. Something wrote these as keys, so one is evidence of a record.
+    strong: tuple[str, ...]
+    #: Subject vocabulary. These corroborate a record; they never establish one.
+    weak: tuple[str, ...] = ()
     quorum: int = 2
     confidence: float = 0.6
+
+    @property
+    def signals(self) -> tuple[str, ...]:
+        return self.strong + self.weak
 
 
 #: Ordered most specific first: a payslip mentioning a customer is still a payslip.
 DOCUMENT_CLASSES: tuple[DocumentClass, ...] = (
     DocumentClass(
         EntityClass.HR_RECORD,
-        signals=("employee[_ ]?id", "payslip", "salary", "ctc", "appraisal",
-                 "designation", "date[_ ]of[_ ]joining", "pf[_ ]number", "reporting manager"),
+        strong=("employee[_ ]?id", "payslip", "date[_ ]of[_ ]joining", "pf[_ ]number",
+                "reporting manager"),
+        weak=("salary", "ctc", "appraisal", "designation"),
     ),
     DocumentClass(
         EntityClass.FINANCIAL_RECORD,
-        signals=("invoice[_ ]?(no|number|id)", "gst[_ ]?amount", "ledger", "debit",
-                 "credit", "account[_ ]balance", "tax[_ ]invoice", "fiscal year"),
+        strong=("invoice[_ ]?(no|number|id)", "gst[_ ]?amount", "account[_ ]balance",
+                "tax[_ ]invoice"),
+        weak=("ledger", "debit", "credit", "fiscal year"),
     ),
     DocumentClass(
         EntityClass.CUSTOMER_DATA,
-        signals=("customer[_ ]?(id|name|record)", "beneficiary", "applicant",
-                 "case[_ ]?(id|file)", "grievance", "ticket[_ ]?id", "citizen[_ ]?id"),
+        strong=("customer[_ ]?(id|name|record)", "case[_ ]?(id|file)", "ticket[_ ]?id",
+                "citizen[_ ]?id"),
+        weak=("beneficiary", "applicant", "grievance"),
     ),
     DocumentClass(
         EntityClass.INFRA_SECRET,
-        signals=("api[_ ]?key", "secret[_ ]?key", "password", "credential",
-                 "private[_ ]key", "connection[_ ]string", "\\.env", "vault path"),
+        strong=("api[_ ]?key", "secret[_ ]?key", "private[_ ]key", "connection[_ ]string",
+                r"\.env", "vault path"),
+        weak=("password", "credential"),
     ),
     DocumentClass(
         EntityClass.SECURITY_FINDING,
-        signals=("cve-\\d{4}", "vulnerability", "severity", "exploit",
-                 "penetration test", "remediation", "cvss"),
+        strong=(r"cve-\d{4}", "cvss", "penetration test"),
+        weak=("vulnerability", "severity", "exploit", "remediation"),
     ),
     DocumentClass(
         EntityClass.LEGAL_PRIVILEGED,
-        signals=("privileged", "attorney", "counsel", "litigation",
-                 "without prejudice", "legal opinion"),
+        strong=("without prejudice", "legal opinion", "attorney"),
+        weak=("privileged", "counsel", "litigation"),
     ),
     DocumentClass(
         EntityClass.INCIDENT_REPORT,
-        signals=("incident[_ ]?(id|report)", "root cause", "postmortem",
-                 "time[_ ]to[_ ]detect", "blast radius", "impacted users"),
+        strong=("incident[_ ]?(id|report)", "time[_ ]to[_ ]detect", "blast radius"),
+        weak=("root cause", "postmortem", "impacted users"),
     ),
 )
 
@@ -108,17 +133,21 @@ def classify(text: str, *, limit: int = 20_000) -> list[DocumentFinding]:
     sample = text[:limit]
     out: list[DocumentFinding] = []
     for dc, patterns in _COMPILED:
-        hit = tuple(
-            dc.signals[i] for i, p in enumerate(patterns) if p.search(sample)
-        )
-        if len(hit) >= dc.quorum:
-            # More corroboration is more confidence, but never enough to enforce alone.
-            bonus = min(0.2, 0.05 * (len(hit) - dc.quorum))
-            out.append(
-                DocumentFinding(
-                    entity_class=dc.entity_class.value,
-                    confidence=round(dc.confidence + bonus, 2),
-                    matched=hit[:4],
-                )
+        names = dc.signals
+        hit = tuple(names[i] for i, p in enumerate(patterns) if p.search(sample))
+        if len(hit) < dc.quorum:
+            continue
+        # Quorum on vocabulary alone is prose about the subject, not a record of it.
+        # `strong` comes first in `signals`, so membership is the test.
+        if not any(name in dc.strong for name in hit):
+            continue
+        # More corroboration is more confidence, but never enough to enforce alone.
+        bonus = min(0.2, 0.05 * (len(hit) - dc.quorum))
+        out.append(
+            DocumentFinding(
+                entity_class=dc.entity_class.value,
+                confidence=round(dc.confidence + bonus, 2),
+                matched=hit[:4],
             )
+        )
     return out

@@ -19,11 +19,12 @@
 # everything is the thing an auditor cannot distinguish from no policy at all.
 #
 # Rule set:
-#   0-2  inbound citizen identifiers, tax records and staff records, each masked
-#        unless the actor is in the matching group.
-#   3    inbound infrastructure secrets, blocked outright.
-#   4    outbound credentials, blocked with NO clearance block at all.
-#   5-6  outbound citizen and financial data, tokenized format-preserving.
+#   0-3  inbound citizen identifiers, the identifiers shared between citizen services
+#        and revenue, tax records and staff records -- each masked unless the actor is
+#        in a matching group.
+#   4    inbound infrastructure secrets, blocked outright.
+#   5    outbound credentials, blocked with NO clearance block at all.
+#   6-7  outbound citizen and financial data, tokenized format-preserving.
 #
 # Empanelled vendors are handled by the business-unit policy
 # (bharat-digital-contractors.yaml), which may only raise these actions.
@@ -44,24 +45,48 @@ rules:
   #     would restrict the Aadhaar and leave the case notes about that citizen open.
   - match:
       direction: inbound
-      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, CUSTOMER_DATA, QUASI_IDENTIFIER_SET]
+      class: [AADHAAR, VOTER_ID, DL_NUMBER, CUSTOMER_DATA, QUASI_IDENTIFIER_SET]
     action: mask
     unless:
       - actor_group: [citizen-services]
       - actor_role: [director]
     reason: "citizen identifiers are served only to citizen-services and directors"
 
-  # 1 — tax and financial records belong to revenue, not to whoever asks.
+  # 1 — the identifiers that genuinely belong to BOTH functions, and the reason this
+  #     rule exists separately at all.
+  #
+  #     A PAN is an identity document at a service counter and a tax identifier at an
+  #     assessment desk; a bank account and its IFSC sit on a pension case file and on a
+  #     refund order alike. When they were folded into rules 0 and 2, the strongest
+  #     action won across a document's findings and the result was that a GST assessment
+  #     quoting the assessee's PAN became unreadable by revenue, and a pension grievance
+  #     naming the beneficiary's bank branch became unreadable by citizen-services. Every
+  #     realistic document spans both, so the intersection was nobody -- which reads as a
+  #     broken tool rather than as a policy, and a tool that answers "no" to everyone is
+  #     one people route around.
+  #
+  #     Clearing both groups is not a weakening: neither group gains the other's records,
+  #     only the shared identifier that appears on their own.
   - match:
       direction: inbound
-      class: [GSTIN, FINANCIAL_RECORD, BANK_ACCOUNT, IFSC]
+      class: [PAN, BANK_ACCOUNT, IFSC]
+    action: mask
+    unless:
+      - actor_group: [citizen-services, revenue]
+      - actor_role: [director]
+    reason: "shared identity and payment identifiers are served to citizen-services and revenue"
+
+  # 2 — tax and financial records belong to revenue, not to whoever asks.
+  - match:
+      direction: inbound
+      class: [GSTIN, FINANCIAL_RECORD]
     action: mask
     unless:
       - actor_group: [revenue]
       - actor_role: [director]
     reason: "tax and financial records are served only to revenue and directors"
 
-  # 2 — staff records. Same shape, its own group, deliberately not merged with
+  # 3 — staff records. Same shape, its own group, deliberately not merged with
   #     citizen data: one group cleared for both would defeat the separation.
   - match:
       direction: inbound
@@ -72,7 +97,7 @@ rules:
       - actor_role: [director]
     reason: "staff records are served only to hr-personnel and directors"
 
-  # 3 — an infrastructure secret never surfaces in a model reply, for anyone
+  # 4 — an infrastructure secret never surfaces in a model reply, for anyone
   #     outside infosec. Blocked rather than masked: a masked secret is still a
   #     secret that was retrieved.
   - match:
@@ -83,7 +108,7 @@ rules:
       - actor_group: [infosec]
     reason: "infrastructure secrets and security findings stay inside infosec"
 
-  # 4 — a credential must never leave the agency. No `except` block, on purpose:
+  # 5 — a credential must never leave the agency. No `except` block, on purpose:
   #     there is no role, group or destination for which this is negotiable, and
   #     writing an empty clearance here would invite someone to fill it in.
   - match:
@@ -93,7 +118,7 @@ rules:
     action: block
     reason: "a credential must not leave the agency"
 
-  # 5 — citizen identifiers leave only as a one-way token of the same shape, so a
+  # 6 — citizen identifiers leave only as a one-way token of the same shape, so a
   #     model can still reason about "the same citizen" without holding the number.
   #
   #     The `except` block is where a role changes what you may TYPE, not only what you
@@ -112,7 +137,7 @@ rules:
       - actor_group: [citizen-services]
     reason: "citizen identifiers leave only as a derived, shape-preserving token, except for caseworkers"
 
-  # 6 — financial and staff records, same treatment.
+  # 7 — financial and staff records, same treatment.
   - match:
       direction: outbound
       class: [GSTIN, FINANCIAL_RECORD, BANK_ACCOUNT, HR_RECORD]

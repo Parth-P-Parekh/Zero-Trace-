@@ -59,6 +59,7 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "zerotrace"
     checker = None          # set by serve()
     tool_checker = None
+    read_checker = None
     token = ""
     last_seen = time.monotonic()
 
@@ -88,6 +89,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(200, _Handler.tool_checker(
                 str(body.get("tool") or ""), body.get("tool_input") or {},
                 str(body.get("session_id") or ""),
+            ))
+        elif self.path == "/check-read":
+            self._reply(200, _Handler.read_checker(
+                str(body.get("tool") or ""), body.get("tool_input") or {},
             ))
         elif self.path == "/shutdown":
             self._reply(200, {"stopping": True})
@@ -216,12 +221,46 @@ def build_checker():
                     return bridged
         return result
 
-    return check, check_tool
+    # The clearance leg, warm for the same reason. `plane()` measured at ~397ms -- it
+    # pulls the whole Part A store stack, pydantic included -- and paying that per `Read`
+    # made a file open cost two thirds of a second. Everything it caches is the *plumbing*
+    # (the store handle, the ledger); the session, the actor and the policy are re-read on
+    # every call, so logging in as someone else or publishing a new policy takes effect on
+    # the next read rather than on the next restart.
+    plane_holder: dict = {}
+
+    def check_read(tool: str, args: dict) -> dict:
+        from gateway.part_a.reading import candidate_paths, decide_read
+
+        paths = candidate_paths(tool, args if isinstance(args, dict) else {})
+        if not paths:
+            return {"skip": True}
+        from gateway.part_a.reading import _value_classes_local
+
+        try:
+            # `_value_classes_local`, never the default: the default asks the daemon over
+            # loopback, and a daemon asking itself from inside its own handler re-enters
+            # `loop.run_until_complete` on a loop that is already running. That did not
+            # raise a clean error -- it took the process down, and the endpoint file went
+            # with it, so the next hook silently found no daemon.
+            decision = loop.run_until_complete(
+                decide_read(paths, plane=plane_holder, scan=_value_classes_local)
+            )
+        except Exception:  # noqa: BLE001
+            # A clearance layer that cannot run must not turn into a refusal: the policy
+            # may not even be seeded. The credential check has already run either way.
+            return {"skip": True}
+        if decision is None:
+            return {"skip": True}
+        return {"allow": decision.allow, "reason": decision.reason if not decision.allow
+                else ""}
+
+    return check, check_tool, check_read
 
 
 def serve(port: int = 0) -> None:
     """Run until idle. Publishes its endpoint only once it is ready to answer."""
-    _Handler.checker, _Handler.tool_checker = build_checker()
+    _Handler.checker, _Handler.tool_checker, _Handler.read_checker = build_checker()
     _Handler.token = secrets.token_hex(16)
 
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)

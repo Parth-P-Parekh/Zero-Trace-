@@ -52,6 +52,10 @@ class GuardResult:
     visible: list[Any] = field(default_factory=list)
     withheld: list[Verdict] = field(default_factory=list)
     verdicts: list[Verdict] = field(default_factory=list)
+    #: The full Outcome behind each verdict that had findings, keyed by document id.
+    #: The Verdict is what a caller shows a user; the Outcome is what the ledger needs,
+    #: and a decision nobody can record is one Part A says we must not act on.
+    outcomes: dict[str, Any] = field(default_factory=dict)
 
     def explain(self) -> str:
         """What to tell the user in place of the documents they did not get.
@@ -78,31 +82,40 @@ class GuardResult:
 class RetrievalGuard:
     """Filter retrieved documents through the inbound policy."""
 
-    __slots__ = ("_ctx", "_min_confidence")
+    __slots__ = ("_ctx", "_min_confidence", "_classify")
 
-    def __init__(self, context: Any, *, min_confidence: float = 0.0) -> None:
+    def __init__(self, context: Any, *, min_confidence: float = 0.0,
+                 classifier: Any = None) -> None:
         self._ctx = context
         self._min_confidence = min_confidence
+        # Injected so a caller with a stronger classifier can supply one. A file on disk
+        # can be run through the *value* detectors as well as the structural ones -- a
+        # bare column of Aadhaar numbers has no record vocabulary to match, so structure
+        # alone would call it prose. A retriever's chunk usually cannot afford that scan;
+        # a single file read can. See gateway/part_a/reading.py.
+        self._classify = classifier or classify
 
     async def filter(self, documents: list[Any], actor: Any) -> GuardResult:
         """Classify each document, ask the policy, keep only what the actor may see."""
         result = GuardResult()
         for index, doc in enumerate(documents):
             doc_id, text = _unpack(doc, index)
-            verdict = await self._judge(doc_id, text, actor)
+            verdict, outcome = await self._judge(doc_id, text, actor)
             result.verdicts.append(verdict)
+            if outcome is not None:
+                result.outcomes[doc_id] = outcome
             if verdict.visible:
                 result.visible.append(doc)
             else:
                 result.withheld.append(verdict)
         return result
 
-    async def _judge(self, doc_id: str, text: str, actor: Any) -> Verdict:
+    async def _judge(self, doc_id: str, text: str, actor: Any):
         from zerotrace.spans.model import Finding
 
-        found = [f for f in classify(text) if f.confidence >= self._min_confidence]
+        found = [f for f in self._classify(text) if f.confidence >= self._min_confidence]
         if not found:
-            return Verdict(doc_id, "allow")
+            return Verdict(doc_id, "allow"), None
 
         findings = [
             Finding(entity_class=f.entity_class, span_path=f"documents[{doc_id}]",
@@ -117,7 +130,7 @@ class RetrievalGuard:
             rule_index=outcome.rule_index,
             rule_scope=outcome.rule_scope,
             reason=f"{outcome.action} for {actor.id}",
-        )
+        ), outcome
 
 
 def _unpack(doc: Any, index: int) -> tuple[str, str]:

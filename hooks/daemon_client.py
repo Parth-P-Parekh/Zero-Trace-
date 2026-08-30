@@ -196,6 +196,38 @@ def ask_tool(tool: str, args: dict, session_id: str = "") -> dict | None:
 START_BACKOFF_S = 15.0
 
 
+def ask_read(tool: str, args: dict) -> dict | None:
+    """Ask a running daemon whether this read is cleared. None when there is not one.
+
+    Separate from `ask_tool` because it answers a different question about a different
+    leg -- that one asks whether the *arguments* carry a secret out, this asks whether
+    the *contents* may come back in -- and because a tool call can fail one and pass the
+    other.
+    """
+    if disabled():
+        return None
+    endpoint = _endpoint()
+    if endpoint is None:
+        return None
+    port, token = endpoint
+    try:
+        answer = _post(port, token, "/check-read", {"tool": tool, "tool_input": args})
+        # A daemon too old to know this route replies 404 with a JSON error body, which
+        # parses perfectly well and contains neither key. Returning it would leave the
+        # caller reading `allow` off a dict that has no opinion -- defaulting to True and
+        # silently skipping the clearance check. So an answer that is not one of ours is
+        # treated as no answer at all, and the caller falls back to deciding in-process.
+        if not isinstance(answer, dict) or not ("skip" in answer or "allow" in answer):
+            return None
+        return answer
+    except (OSError, ValueError):
+        try:
+            (_home() / "daemon.json").unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
 def start() -> None:
     """Spawn a daemon and return immediately. Best effort, never fatal.
 
