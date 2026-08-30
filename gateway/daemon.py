@@ -121,6 +121,7 @@ def build_checker():
     from gateway.detect.encodings import EncodedScanner
     from gateway.detect.obfuscation import ObfuscationScanner
     from gateway.detect.s0_credentials import scan_span_credentials
+    from gateway.detect.composite import scan_span_composite
     from gateway.detect.s1_context import ContextScanner
     from gateway.detectors import ALL_DETECTORS
 
@@ -128,7 +129,8 @@ def build_checker():
     pack = DetectorPack.build(
         detectors, version=1,
         scanners=[scan_span_credentials, ObfuscationScanner(detectors),
-                  ContextScanner(), EncodedScanner(scan_span_credentials)],
+                  ContextScanner(), scan_span_composite,
+                  EncodedScanner(scan_span_credentials)],
     )
     # A real cache here, unlike the hook's NullSpanCache: this process lives long enough
     # for a repeated span to be worth remembering.

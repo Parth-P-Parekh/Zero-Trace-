@@ -44,7 +44,7 @@ rules:
   #     would restrict the Aadhaar and leave the case notes about that citizen open.
   - match:
       direction: inbound
-      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, CUSTOMER_DATA]
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, CUSTOMER_DATA, QUASI_IDENTIFIER_SET]
     action: mask
     unless:
       - actor_group: [citizen-services]
@@ -105,7 +105,7 @@ rules:
   #     degrades it to mask and says so. It never fakes a token.
   - match:
       direction: outbound
-      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER]
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, QUASI_IDENTIFIER_SET]
     action: tokenize
     format_preserving: true
     except:

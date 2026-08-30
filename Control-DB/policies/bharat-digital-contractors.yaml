@@ -27,7 +27,7 @@ rules:
   # Citizen identifiers do not reach a vendor at all, masked or otherwise.
   - match:
       direction: inbound
-      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, CUSTOMER_DATA]
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, CUSTOMER_DATA, QUASI_IDENTIFIER_SET]
     action: block
     unless:
       - actor_role: [director]
@@ -66,6 +66,7 @@ rules:
   # -- it does not leave at all.
   - match:
       direction: outbound
-      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, GSTIN, FINANCIAL_RECORD, BANK_ACCOUNT]
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, GSTIN, FINANCIAL_RECORD,
+              BANK_ACCOUNT, QUASI_IDENTIFIER_SET]
     action: block
     reason: "a vendor sends no citizen, tax or financial identifier to a model"

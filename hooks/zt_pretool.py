@@ -161,6 +161,7 @@ def check(text: str, session_id: str) -> dict:
     from gateway.detect.encodings import EncodedScanner
     from gateway.detect.obfuscation import ObfuscationScanner
     from gateway.detect.s0_credentials import scan_span_credentials
+    from gateway.detect.composite import scan_span_composite
     from gateway.detect.s1_context import ContextScanner
     from gateway.detectors import ALL_DETECTORS
 
@@ -168,7 +169,8 @@ def check(text: str, session_id: str) -> dict:
     pack = DetectorPack.build(
         detectors, version=1,
         scanners=[scan_span_credentials, ObfuscationScanner(detectors),
-                  ContextScanner(), EncodedScanner(scan_span_credentials)],
+                  ContextScanner(), scan_span_composite,
+                  EncodedScanner(scan_span_credentials)],
     )
     checker = Checker(pack, NullSpanCache(),
                       os.environ.get("ZT_VAULT_MASTER_KEY", "dev-key").encode(),

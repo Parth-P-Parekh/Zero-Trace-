@@ -84,17 +84,76 @@ class DeploymentProfile:
 
 
 async def profile_for(store: Any, tenant: str) -> DeploymentProfile:
-    """Read the deployment's profile out of its own policy."""
+    """Read the deployment's profile out of its own policy and its own traffic."""
+    classes: set[str] = set()
     try:
         policies = await store.load_policies(tenant)
+        for policy in (policies.org, policies.bu):
+            for rule in getattr(policy, "rules", ()) or ():
+                classes.update(getattr(rule.match, "class_", ()) or ())
     except Exception:  # noqa: BLE001
-        return DeploymentProfile(tenant)
+        pass
+    return DeploymentProfile(tenant, tuple(sorted(classes)), KeyNames().seen(tenant))
 
-    classes: set[str] = set()
-    for policy in (policies.org, policies.bu):
-        for rule in getattr(policy, "rules", ()) or ():
-            classes.update(getattr(rule.match, "class_", ()) or ())
-    return DeploymentProfile(tenant, tuple(sorted(classes)))
+
+class KeyNames:
+    """The field names this deployment actually puts identifiers under.
+
+    Every organisation's records have a schema, and it is not ours to guess: one agency
+    writes `beneficiary_uid`, the next `applicant_ref`, the third a bare UUID under
+    `subject`. A detector shipped with a global list of key names is wrong everywhere
+    except where it was written, which is the same reason the composite scanner leans on
+    co-occurrence rather than on knowing the field.
+
+    So the names are *observed*. A key that repeatedly sits beside something the detectors
+    could not classify is exactly what the blind loop should be told about, and it is a
+    field name -- not a value -- so nothing sensitive is being retained. The cap is what
+    keeps a payload full of random keys from filling the file.
+    """
+
+    __slots__ = ("_path", "_cap")
+
+    def __init__(self, path: str | Path | None = None, cap: int = 200) -> None:
+        home = Path(os.environ.get("ZT_HOME") or (Path.home() / ".zerotrace"))
+        self._path = Path(path) if path else home / "keynames.json"
+        self._cap = cap
+
+    def _load(self) -> dict[str, dict[str, int]]:
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def seen(self, tenant: str, limit: int = 40) -> tuple[str, ...]:
+        """The most frequent field names, commonest first."""
+        counts = self._load().get(tenant, {})
+        return tuple(sorted(counts, key=lambda k: -counts[k])[:limit])
+
+    def observe(self, tenant: str, key_name: str) -> None:
+        """Record one sighting. Field names only -- never a value.
+
+        `«opaque»` is what `features_of` produces when the key was not an identifier, and
+        it carries no information about this deployment's schema, so it is dropped rather
+        than counted.
+        """
+        key = (key_name or "").strip().lower()
+        if not key or key == "«opaque»" or len(key) > 64:
+            return
+        data = self._load()
+        counts = data.setdefault(tenant, {})
+        counts[key] = counts.get(key, 0) + 1
+        if len(counts) > self._cap:
+            # Keep the ones that recur. A key seen once is a coincidence in any payload.
+            keep = sorted(counts.items(), key=lambda kv: -kv[1])[: self._cap]
+            data[tenant] = dict(keep)
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            tmp.replace(self._path)
+        except OSError:
+            pass
 
 
 class LearnedPack:
@@ -206,6 +265,13 @@ class SelfImprovingGuard:
         """
         if self.adjudicator is None:
             return None
+
+        # What this deployment calls its fields is worth keeping whether or not the model
+        # proposes anything: it is the schema the next proposal will be reasoning about.
+        key_name = getattr(features, "key_name", "")
+        if key_name:
+            KeyNames().observe(self.profile.tenant, key_name)
+
         proposal = await self.adjudicator.adjudicate(features)
         doc = getattr(proposal, "candidate_detector", None)
         if not doc:

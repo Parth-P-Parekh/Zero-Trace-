@@ -291,3 +291,100 @@ def test_the_prompt_context_carries_classes_not_content():
     context = profile.as_prompt_context()
     assert context["classes_this_deployment_enforces"] == ["AADHAAR"]
     assert "text" not in context and "sample" not in context
+
+
+# --------------------------------------------- the deployment's own field names --
+
+def test_field_names_are_remembered_per_deployment(tmp_path, monkeypatch):
+    """Every organisation's records have a schema, and it is not ours to guess.
+
+    One agency writes `beneficiary_uid`, the next `applicant_ref`. A detector shipped with
+    a global list of key names is wrong everywhere except where it was written.
+    """
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from gateway.intel.learned import KeyNames
+
+    names = KeyNames()
+    for _ in range(3):
+        names.observe("agency-a", "beneficiary_uid")
+    names.observe("agency-a", "applicant_ref")
+    names.observe("agency-b", "member_no")
+
+    assert names.seen("agency-a")[0] == "beneficiary_uid"      # commonest first
+    assert "applicant_ref" in names.seen("agency-a")
+    assert names.seen("agency-b") == ("member_no",)
+
+
+def test_only_field_names_are_kept_never_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from gateway.intel.learned import KeyNames
+
+    names = KeyNames()
+    names.observe("t", "customer_ref")
+    names.observe("t", "«opaque»")            # what features_of emits for a non-identifier
+    names.observe("t", "x" * 200)             # not a field name
+
+    stored = (tmp_path / "keynames.json").read_text(encoding="utf-8")
+    assert "customer_ref" in stored
+    assert "opaque" not in stored
+    assert "x" * 200 not in stored
+
+
+def test_the_memory_is_bounded(tmp_path, monkeypatch):
+    """A payload of random keys must not fill the file; the ones that recur survive."""
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from gateway.intel.learned import KeyNames
+
+    names = KeyNames(cap=10)
+    for _ in range(5):
+        names.observe("t", "recurring_key")
+    for i in range(50):
+        names.observe("t", f"one_off_{i}")
+
+    assert len(names.seen("t", limit=100)) <= 10
+    assert "recurring_key" in names.seen("t", limit=100)
+
+
+async def test_the_profile_carries_the_deployments_field_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from gateway.intel.learned import KeyNames, profile_for
+    from gateway.part_a.store import PartAStore
+    from gateway.part_a.wiring import DEMO_TENANT, PartAPlane, seed_demo
+    from zerotrace.store.kv import MemoryKV
+    from zerotrace.store.ledger import RedisLedger
+
+    kv = MemoryKV()
+    plane = PartAPlane(store=PartAStore(kv), ledger=RedisLedger(kv), backend="mem")
+    await seed_demo(plane)
+    KeyNames().observe(DEMO_TENANT, "beneficiary_uid")
+
+    profile = await profile_for(plane.store, DEMO_TENANT)
+    assert "beneficiary_uid" in profile.key_names
+    assert "beneficiary_uid" in str(profile.as_prompt_context())
+
+
+async def test_a_sighting_is_recorded_even_when_no_rule_is_proposed(tmp_path, monkeypatch):
+    """The schema is worth keeping whether or not the model had an idea about it."""
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from gateway.intel.features import EscalationFeatures
+    from gateway.intel.learned import (
+        DeploymentProfile,
+        KeyNames,
+        LearnedPack,
+        SelfImprovingGuard,
+    )
+
+    class Silent:
+        async def adjudicate(self, features):
+            return type("P", (), {"candidate_detector": None})()
+
+    guard = SelfImprovingGuard(
+        pack=LearnedPack(tmp_path / "learned.json"),
+        profile=DeploymentProfile("agency", classes=("AADHAAR",)),
+        adjudicator=Silent(),
+    )
+    await guard.learn_from(EscalationFeatures(
+        span_path_safe="p", key_name="beneficiary_uid", shape="9999-9999",
+        length=12, charset="digits", entropy=2.5, origin="user", leg="outbound",
+    ))
+    assert "beneficiary_uid" in KeyNames().seen("agency")

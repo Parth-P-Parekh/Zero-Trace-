@@ -23,6 +23,8 @@ worth a class that would be ignored. Adding it needs per-state patterns, not a r
 
 from __future__ import annotations
 
+import re
+
 from ..base.budget import Deadline
 from ..base.detector import Detector, Match
 from ..contracts.entity_classes import EntityClass
@@ -93,6 +95,20 @@ class AadhaarDetector(Detector):
     _WINDOW = 48
     _LABELS = ("aadhaar", "aadhar", "adhaar", "uidai", "आधार")
 
+    #: Keys that mean "identifier" without naming the scheme. These must be the field
+    #: the value actually sits under -- anchored at the end of the preceding text, so
+    #: the key is immediately followed by its separator and then the number.
+    #:
+    #: Proximity alone was not enough. A log line of the form `uid=1000 pid=<digits>`
+    #: has "uid" within a dozen characters, but the field this value belongs to is
+    #: `pid`, and a unix user id elsewhere on the line must not label it.
+    _KEY_WINDOW = 24
+    _KEY_RE = re.compile(
+        r"(uid|uidai|beneficiary[_ ]?id|citizen[_ ]?id|enrol?ment[_ ]?(no|number|id))"
+        r"[\"']?\s*[:=]\s*[\"']?$",
+        re.IGNORECASE,
+    )
+
     def confirm(self, text: str, start: int, end: int, deadline: Deadline) -> Match | None:
         digits = "".join(c for c in text[start:end] if c.isdigit())
         if len(digits) != 12 or _touching_alnum(text, start, end):
@@ -106,6 +122,10 @@ class AadhaarDetector(Detector):
         before = text[max(0, start - self._WINDOW):start].lower()
         if any(label in before for label in self._LABELS):
             return Match(start=start, end=end, confidence=0.82)
+
+        near = text[max(0, start - self._KEY_WINDOW):start]
+        if self._KEY_RE.search(near):
+            return Match(start=start, end=end, confidence=0.78)
         return None
 
 

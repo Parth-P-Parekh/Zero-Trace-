@@ -109,6 +109,7 @@ def check_embedded(text: str, session_id: str) -> dict:
     from gateway.detect.encodings import EncodedScanner
     from gateway.detect.obfuscation import ObfuscationScanner
     from gateway.detect.s0_credentials import scan_span_credentials
+    from gateway.detect.composite import scan_span_composite
     from gateway.detect.s1_context import ContextScanner
 
     detectors = list(ALL_DETECTORS)
@@ -119,6 +120,10 @@ def check_embedded(text: str, session_id: str) -> dict:
             scan_span_credentials,
             ObfuscationScanner(detectors),
             ContextScanner(),
+            # S2: co-occurrence. A bare twelve-digit run is ambiguous; the same number
+            # beside a name, a date of birth and a district is a citizen record. This is
+            # the only path that reaches an identifier nobody labelled.
+            scan_span_composite,
             EncodedScanner(scan_span_credentials),
         ],
     )
