@@ -352,48 +352,6 @@ switched off.
 
 ---
 
-## The console
-
-A Next.js admin console lives in `app/web` — the operator view of policies, decisions and
-coverage.
-
-```bash
-cd app/web
-npm install
-npm run dev            # http://localhost:3000
-```
-
-Sign in with the **development** credential:
-
-| field | value |
-|---|---|
-| Login ID | `admin` |
-| Password | `zerotrace-demo` |
-
-**This credential only exists outside production, and that is enforced in code, not by
-convention.** `adminConfig()` reads `ZT_ADMIN_ID`, `ZT_ADMIN_PASSWORD` and
-`ZT_SESSION_SECRET` from the environment; when `NODE_ENV=production` and any of the three
-is missing it returns `null` and the deployment **refuses every sign-in** rather than
-falling back to a shipped password. That fallback is the failure mode which turns a demo
-credential into a real incident, so there isn't one. The console also labels itself when
-the demo credential is in use, so nobody mistakes a dev instance for a configured one.
-
-For anything deployed, set all three:
-
-```bash
-ZT_ADMIN_ID=...            # not `admin`
-ZT_ADMIN_PASSWORD=...      # generated, not chosen
-ZT_SESSION_SECRET=...      # e.g. `openssl rand -hex 32`
-```
-
-This is a **break-glass local admin**, not the identity model. The product holds no
-accounts of its own: actors resolve from the enterprise IdP — OIDC/SAML for people, SPIFFE
-for services — and this single credential exists only to keep the console from being open
-to anyone who knows the URL while that integration is stubbed. It is the first thing to
-delete when the directory integration is real.
-
----
-
 ## Evidence
 
 Every decision is appended to a **hash-chained ledger** before the payload is dispatched,
