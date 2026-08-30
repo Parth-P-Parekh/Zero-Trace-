@@ -1,0 +1,653 @@
+<title>ZeroTrace Demo Rig</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  /* Committed to a single dark world on purpose: this page is looked at while a screen
+     recording is running, and a light flash mid-take ruins the take. Every colour is
+     painted explicitly so it holds on any host ground. */
+  :root {
+    --ground:    #14181F;
+    --surface:   #1B212B;
+    --surface-2: #222A35;
+    --line:      #2E3846;
+    --ink:       #E8E3D9;
+    --ink-dim:   #9AA4B2;
+    --ink-faint: #66707E;
+    --amber:     #D9A441;
+    --allow:     #7FA37F;
+    --block:     #C4685A;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, Segoe UI, sans-serif;
+    --display: "Fraunces", Georgia, serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------------------------------------------------------------- header -- */
+
+  header {
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .brand {
+    font-family: var(--display);
+    font-size: 20px; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .brand span { color: var(--amber); }
+  .tag { font-size: 12.5px; color: var(--ink-dim); }
+  .spacer { flex: 1 1 auto; }
+
+  .clock {
+    font-family: var(--mono); font-size: 13px; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .clock b { color: var(--ink); font-weight: 500; }
+
+  .btn {
+    font: inherit; font-size: 12.5px;
+    color: var(--ink-dim); background: transparent;
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 11px; cursor: pointer;
+  }
+  .btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .btn[aria-pressed="true"] { color: var(--ground); background: var(--amber); border-color: var(--amber); }
+
+  /* ------------------------------------------------------------------ main -- */
+
+  main {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    gap: 1px;
+    background: var(--line);
+    min-height: 0;
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  section { background: var(--ground); min-width: 0; display: flex; flex-direction: column; }
+
+  .pane-label {
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-faint); padding: 12px 22px 0;
+  }
+
+  /* ---------------------------------------------------------- teleprompter -- */
+
+  .shot-head { padding: 6px 22px 0; }
+  .shot-no {
+    font-family: var(--mono); font-size: 12px; color: var(--amber);
+    font-variant-numeric: tabular-nums;
+  }
+  .shot-title {
+    font-family: var(--display); font-size: clamp(21px, 2.4vw, 29px);
+    font-weight: 600; letter-spacing: -0.015em; margin: 3px 0 0;
+    text-wrap: balance; line-height: 1.15;
+  }
+  .shot-screen {
+    font-size: 12.5px; color: var(--ink-dim); margin: 9px 0 0;
+    padding-left: 12px; border-left: 2px solid var(--line);
+    max-width: 62ch; line-height: 1.5;
+  }
+  .shot-screen b { color: var(--ink); font-weight: 500; }
+
+  .script {
+    padding: 18px 22px 26px; overflow-y: auto; flex: 1 1 auto; min-height: 0;
+  }
+  .line {
+    font-size: clamp(17px, 1.75vw, 22px);
+    line-height: 1.5; max-width: 40ch; margin: 0 0 0.85em;
+    color: var(--ink-faint);
+    transition: color .35s ease;
+  }
+  .line.on  { color: var(--ink); }
+  .line.done { color: var(--ink-faint); }
+  .line em { font-style: italic; color: var(--amber); }
+  .line strong { font-weight: 600; color: #F3D89A; font-style: italic; }
+  .line.pause {
+    font-family: var(--mono); font-size: 13px; font-style: normal;
+    color: var(--ink-faint); letter-spacing: 0.02em;
+  }
+  .line.pause.on { color: var(--amber); }
+
+  /* --------------------------------------------------------------- terminal -- */
+
+  .term-wrap { padding: 6px 22px 22px; flex: 1 1 auto; min-height: 0; display: flex; }
+  .term {
+    flex: 1 1 auto;
+    background: var(--surface);
+    border: 1px solid var(--line); border-radius: 8px;
+    display: flex; flex-direction: column; min-height: 0;
+    overflow: hidden;
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 7px;
+    padding: 9px 12px; border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+  .term-name {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint);
+    margin-left: 5px;
+  }
+  .term-body {
+    flex: 1 1 auto; overflow: auto; padding: 14px 16px;
+    font-family: var(--mono); font-size: clamp(12px, 1.05vw, 14px);
+    line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+  }
+  .t-cmd    { color: var(--ink); }
+  .t-cmd::before { content: "$ "; color: var(--amber); }
+  .t-you    { color: #A9C4DE; }
+  .t-you::before { content: "› "; color: var(--ink-faint); }
+  .t-out    { color: var(--ink-dim); }
+  .t-allow  { color: var(--allow); }
+  .t-block  { color: var(--block); }
+  .t-note   { color: var(--ink-faint); font-style: italic; }
+  .caret {
+    display: inline-block; width: 8px; height: 1.05em; margin-left: 1px;
+    background: var(--amber); vertical-align: text-bottom;
+    animation: blink 1.05s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
+
+  /* --------------------------------------------------------------- footer -- */
+
+  footer {
+    border-top: 1px solid var(--line); background: var(--surface);
+    padding: 11px 22px 14px;
+  }
+  .transport { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .rail {
+    flex: 1 1 240px; height: 4px; border-radius: 2px;
+    background: var(--line); overflow: hidden; min-width: 140px;
+  }
+  .rail > i { display: block; height: 100%; width: 0; background: var(--amber); }
+  .chips { display: flex; gap: 5px; margin-top: 11px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-faint); background: transparent;
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 3px 8px; cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .chip:hover { color: var(--ink); }
+  .chip[aria-current="true"] { color: var(--ground); background: var(--amber); border-color: var(--amber); }
+  .chip.done { color: var(--ink-dim); border-color: var(--ink-faint); }
+
+  .hint {
+    margin-top: 10px; font-size: 11.5px; color: var(--ink-faint);
+    font-family: var(--mono);
+  }
+  .hint kbd {
+    font: inherit; color: var(--ink-dim);
+    border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+  }
+
+  /* record mode: strip everything that is not the two panes */
+  body.rec header, body.rec footer, body.rec .pane-label { display: none; }
+  body.rec .script { padding-top: 26px; }
+</style>
+
+<header>
+  <div class="brand">Zero<span>Trace</span></div>
+  <div class="tag">demo rig — teleprompter + terminal replay</div>
+  <div class="spacer"></div>
+  <div class="clock">shot <b id="cShot">1</b>/12 · <b id="cElapsed">0:00</b> / <span id="cTotal">5:30</span></div>
+  <button class="btn" id="bRec" aria-pressed="false" title="Hide chrome for recording (R)">record mode</button>
+</header>
+
+<main>
+  <section>
+    <div class="pane-label">Narration</div>
+    <div class="shot-head">
+      <div class="shot-no" id="sNo">Shot 01 · 0:00–0:20</div>
+      <h1 class="shot-title" id="sTitle">cold open</h1>
+      <p class="shot-screen" id="sScreen"></p>
+    </div>
+    <div class="script" id="script"></div>
+  </section>
+
+  <section>
+    <div class="pane-label">On screen</div>
+    <div class="term-wrap">
+      <div class="term">
+        <div class="term-bar">
+          <i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <span class="term-name" id="termName">claude code</span>
+        </div>
+        <div class="term-body" id="term"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="transport">
+    <button class="btn" id="bPrev">◀ prev</button>
+    <button class="btn" id="bPlay">play</button>
+    <button class="btn" id="bNext">next ▶</button>
+    <div class="rail"><i id="rail"></i></div>
+    <button class="btn" id="bReset">reset</button>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="hint">
+    <kbd>space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> shot · <kbd>R</kbd> record mode
+    — narration paces at 150&nbsp;wpm; the terminal replays itself
+  </div>
+</footer>
+
+<script>
+/* The shots. Narration mirrors VOICEOVER.md word for word so the two cannot drift:
+   if you edit one, edit the other. `t` is the shot's target length in seconds. */
+const SHOTS = [
+  {
+    n: "0:00–0:20", t: 20, title: "cold open", term: "claude code",
+    screen: "Black, then the title. Cut to a <b>Claude Code</b> window, empty prompt.",
+    say: [
+      "An AI coding agent is the widest data egress your company has ever installed <em>on purpose</em>.",
+      "It reads your files. It runs your commands. And everything it touches goes into a transcript you cannot recall.",
+      "ZeroTrace sits between the agent and everything else — and asks two questions."
+    ],
+    lines: [ {k:"note", s:"— empty prompt —"} ]
+  },
+  {
+    n: "0:20–0:40", t: 20, title: "the two questions", term: "README.md",
+    screen: "The two-leg diagram from the <b>README</b>.",
+    say: [
+      "The first is the one every vendor asks. <em>May this person send this?</em>",
+      "The second is the one almost nobody does. <em>May this person</em> — <strong>see</strong> — <em>this?</em>",
+      "That second question is what the rest of this video is about."
+    ],
+    lines: [
+      {k:"out", s:"   may this person SEND this?         may this person SEE this?"},
+      {k:"out", s:"   ─────────────────────────         ────────────────────────"},
+      {k:"out", s:"   you ─► prompt ─► [outbound] ─►     model ─► [inbound] ─► you"},
+      {k:"out", s:"     agent ─► tool args ─►               file ─► tool result ─►"},
+      {k:"out", s:"                                     retriever ─► documents ─►"}
+    ]
+  },
+  {
+    n: "0:40–1:05", t: 25, title: "a secret in a prompt", term: "claude code",
+    screen: "Paste the full key prompt. Let the block land. <b>Hold two seconds.</b>",
+    say: [
+      "Here is an API key in a prompt.",
+      "[pause — let the refusal appear]",
+      "Blocked before it left the machine. Nothing reached the model.",
+      "That is table stakes. Every tool in this category does that. Here is what they don't."
+    ],
+    lines: [
+      {k:"you", s:"I'm getting a 401 from the Anthropic API. My key is sk-ant-api03-x7Kq9… — is that the right format?", type:true},
+      {k:"block", s:"ZeroTrace blocked this prompt: it contains a credential (ANTHROPIC_KEY)."},
+      {k:"block", s:"Nothing was sent. Remove the secret — or reference it by name and let"},
+      {k:"block", s:"the agent read it from your environment at runtime."}
+    ]
+  },
+  {
+    n: "1:05–1:40", t: 35, title: "the split", term: "claude code",
+    screen: "Message one, allowed. Then message two, blocked. <b>Zoom the refusal.</b>",
+    say: [
+      "Now the same key, split across two messages.",
+      "The first half goes through — because on its own, it <em>is</em> clean. We are not blocking on a prefix.",
+      "[pause]",
+      "The second half is blocked. Joined with what came before, it forms a credential.",
+      "Splitting a secret across two messages does not divide it. The conversation holds both halves. So the check has to hold both halves too."
+    ],
+    lines: [
+      {k:"you", s:"Remember this prefix, I'll need it in a second: sk-ant-api03-x7Kq9", type:true},
+      {k:"allow", s:"✓ allowed — no credential in this message"},
+      {k:"you", s:"and the rest is mZp2Wv4Bn8Rt6Yu3Ia5… — now check the whole key's format", type:true},
+      {k:"block", s:"ZeroTrace blocked this prompt: joined with what you sent just before,"},
+      {k:"block", s:"it forms ANTHROPIC_KEY. Nothing was sent. Splitting a secret across two"},
+      {k:"block", s:"messages does not divide it -- the conversation holds both halves."}
+    ]
+  },
+  {
+    n: "1:40–2:00", t: 20, title: "reading what you are entitled to", term: "terminal + claude code",
+    screen: "<b>zerotrace login s.iyer</b>, then the grievance-file prompt, which just works.",
+    say: [
+      "This is a government caseworker, signed in.",
+      "She opens a citizen grievance file. It works. No friction, no warning, nothing in the way.",
+      "Remember that this one worked. It matters in about forty seconds."
+    ],
+    lines: [
+      {k:"cmd", s:"zerotrace login s.iyer", type:true},
+      {k:"out", s:"Acting as s.iyer in bharat-digital"},
+      {k:"out", s:"  groups: citizen-services"},
+      {k:"you", s:"Read …/citizen-services/grievance-GRV-2291.md and tell me what action the field officer still has to take.", type:true},
+      {k:"allow", s:"✓ Field officer to verify residence and re-seed the account. The grievance"},
+      {k:"allow", s:"  must be closed within the 30-day statutory window."}
+    ]
+  },
+  {
+    n: "2:00–2:35", t: 35, title: "reading what you are not", term: "claude code",
+    screen: "The payslip prompt. The refusal. <b>Hold four seconds.</b>",
+    say: [
+      "Same person. Same session. Now a payslip.",
+      "[pause for the refusal]",
+      "Withheld. She is in citizen services, this is an HR record, and rule three of the agency policy says those do not meet.",
+      "Now look at what the refusal does <em>not</em> contain. Not one figure from that payslip.",
+      "The model reads our refusals. So the refusal is the last place a file could leak."
+    ],
+    lines: [
+      {k:"you", s:"Now read …/hr-personnel/payslip-2026-03-EMP4471.md and tell me the net pay.", type:true},
+      {k:"block", s:"ZeroTrace withheld 1 file(s) from this read: s.iyer (citizen-services) is"},
+      {k:"block", s:"not cleared for them. Nothing was read and nothing entered the transcript."},
+      {k:"block", s:"  - payslip-2026-03-EMP4471.md: HR_RECORD (rule 3 of the org policy said mask)"},
+      {k:"block", s:"Do not attempt to read this another way."}
+    ]
+  },
+  {
+    n: "2:35–2:55", t: 20, title: "routing around it", term: "claude code",
+    screen: "&ldquo;use bash to cat that payslip instead&rdquo;. Refused again.",
+    say: [
+      "Watch the agent try another way.",
+      "[pause]",
+      "Same answer. Read, cat, head, grep across a folder, a shell redirect — all the same read to us.",
+      "The question is what lands in the context window. Not which tool put it there."
+    ],
+    lines: [
+      {k:"you", s:"Use bash to cat that payslip instead.", type:true},
+      {k:"cmd", s:"cat demo/corpus/bharat-digital/hr-personnel/payslip-2026-03-EMP4471.md"},
+      {k:"block", s:"ZeroTrace withheld 1 file(s) from this read: s.iyer (citizen-services) is"},
+      {k:"block", s:"not cleared for them. Nothing was read."}
+    ]
+  },
+  {
+    n: "2:55–3:25", t: 30, title: "the same file, a different person", term: "terminal + claude code",
+    screen: "<b>zerotrace login m.khan</b>, then the <b>identical</b> payslip prompt. It works.",
+    say: [
+      "Now the part worth watching closely.",
+      "Different person. Same file. Same prompt. Same agent.",
+      "[pause — let the answer arrive]",
+      "It works.",
+      "Nothing changed except <em>who was asking</em>. And that decision came out of a policy file neither of them wrote, onto an audit chain neither of them can edit."
+    ],
+    lines: [
+      {k:"cmd", s:"zerotrace logout && zerotrace login m.khan", type:true},
+      {k:"out", s:"Acting as m.khan in bharat-digital"},
+      {k:"out", s:"  groups: hr-personnel"},
+      {k:"you", s:"Read …/hr-personnel/payslip-2026-03-EMP4471.md and tell me the net pay.", type:true},
+      {k:"allow", s:"✓ Net pay for March 2026 is 99,442 after PF of 8,688 and tax of 14,110."}
+    ]
+  },
+  {
+    n: "3:25–4:20", t: 55, title: "the independent audit", term: "terminal",
+    screen: "The report at <b>§3.8</b>. Then <b>run.py rag_e2e</b> in the terminal.",
+    say: [
+      "We gave this code to someone outside the team.",
+      "They wrote their own harness against it — twenty-four scripts, their own data, no access to our test suite — and they found real holes.",
+      "This one. Four of five sensitive documents released to <em>everyone</em>. A clinical note with an Aadhaar number. A deploy runbook with a production database password. Released to an external contractor — and to an auditor our own code describes as having no clearance at all.",
+      "That was real, and it was ours.",
+      "This is their script. We did not edit it. Watch it run.",
+      "[pause for the output]",
+      "Five of five. Everything sensitive held back.",
+      "And notice: the infosec engineer still gets the runbook. A rule has to leave <em>someone</em> able to do the job — or it is not a policy, it is an outage."
+    ],
+    lines: [
+      {k:"cmd", s:"python zerotrace-test-harness/run.py rag_e2e", type:true},
+      {k:"out", s:"--- cag.audit   role=auditor    groups=('audit',)"},
+      {k:"allow", s:"    visible (3): ['doc-benefits-faq', 'doc-tender-public', 'doc-org-chart']"},
+      {k:"block", s:"    withheld: doc-clinical-note     AADHAAR,QUASI_IDENTIFIER_SET  -> mask"},
+      {k:"block", s:"    withheld: doc-citizen-record    AADHAAR,PAN,QUASI_IDENT…     -> mask"},
+      {k:"block", s:"    withheld: doc-infosec-incident  AWS_ACCESS_KEY               -> block"},
+      {k:"block", s:"    withheld: doc-runbook           DB_URI                       -> block"},
+      {k:"out", s:"--- a.das       role=officer    groups=('infosec',)"},
+      {k:"allow", s:"    visible (5): [… 'doc-infosec-incident', 'doc-runbook']"}
+    ]
+  },
+  {
+    n: "4:20–4:55", t: 35, title: "how it works, briefly", term: "README.md",
+    screen: "Three-tier diagram, then the security-group table, then a policy snippet.",
+    say: [
+      "Underneath it: a three-tier scan. One prefilter pass across every anchor at once. Then linear-time regex, where catastrophic backtracking is not merely unlikely — it is not <em>possible</em>. Then checksums.",
+      "But a checksum is a filter, not a decision. One in ten random twelve-digit numbers passes the Aadhaar check digit. We measured that. So we look at what <em>surrounds</em> a number, not only the number.",
+      "And what a record <em>means</em> is a policy question — in a file an auditor can read. Five groups, named by function, not seniority. A business unit can make a rule stricter. Never weaker."
+    ],
+    lines: [
+      {k:"out", s:"  Aho-Corasick prefilter  →  RE2 confirm  →  checksum / structure"},
+      {k:"note", s:"  1 in 10 random 12-digit strings passes Verhoeff — measured, not assumed"},
+      {k:"out", s:""},
+      {k:"out", s:"  allow  <  warn  <  tokenize  <  mask  <  block"},
+      {k:"note", s:"  a business unit may move an action UP this lattice, never down"}
+    ]
+  },
+  {
+    n: "4:55–5:15", t: 20, title: "the loop, and the guarantee", term: "README.md",
+    screen: "The <b>Loop 2</b> diagram.",
+    say: [
+      "When our own detectors are unsure, a model gets asked — <em>after</em> the response has already gone. Never in the request path.",
+      "And it never sees the text. It gets a shape. A reference like ACM-4417-KP becomes AAA-9999-AA.",
+      "There is no free-text field in that payload for anyone to fill in later. That is not a policy we wrote down. It is the shape of the object.",
+      "What comes back is a proposed <em>rule</em> — never a verdict. Nothing it learns can block anyone."
+    ],
+    lines: [
+      {k:"out", s:"  features ─► model ─► proposed RULE (never a verdict)"},
+      {k:"out", s:"           ─► closed-DSL validation ─► confidence cap"},
+      {k:"note", s:"  ACM-4417-KP  ─►  AAA-9999-AA        no free-text field exists"}
+    ]
+  },
+  {
+    n: "5:15–5:30", t: 15, title: "close", term: "terminal",
+    screen: "<b>verify_ledger.py</b> — the PASS line. Then the title card.",
+    say: [
+      "Every decision you just saw is on a hash-chained ledger. Who asked, which rule, which version of which policy.",
+      "Everyone can stop a key going out in a prompt.",
+      "We also stop the payslip coming <em>back</em>. Per person. On a policy that person didn't write. With the receipt."
+    ],
+    lines: [
+      {k:"cmd", s:"python scripts/verify_ledger.py", type:true},
+      {k:"out", s:"  ok   bharat-digital     508 records   head 6c01ac5838e00f73…"},
+      {k:"allow", s:"PASS -- every chain verifies from genesis."}
+    ]
+  }
+];
+
+const TOTAL = SHOTS.reduce((a, s) => a + s.t, 0);
+
+const $ = (id) => document.getElementById(id);
+const scriptEl = $("script"), termEl = $("term"), chipsEl = $("chips");
+
+let idx = 0, playing = false, shotStart = 0, elapsedBefore = 0, raf = null, token = 0;
+
+function fmt(sec) {
+  sec = Math.max(0, Math.round(sec));
+  return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+}
+
+/* ---------------------------------------------------------------- rendering -- */
+
+function buildChips() {
+  chipsEl.innerHTML = "";
+  SHOTS.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.className = "chip";
+    b.textContent = String(i + 1).padStart(2, "0");
+    b.title = s.title;
+    b.addEventListener("click", () => goto(i));
+    chipsEl.appendChild(b);
+  });
+}
+
+function renderShot() {
+  const s = SHOTS[idx];
+  $("sNo").textContent = "Shot " + String(idx + 1).padStart(2, "0") + " · " + s.n;
+  $("sTitle").textContent = s.title;
+  $("sScreen").innerHTML = s.screen;
+  $("termName").textContent = s.term;
+  $("cShot").textContent = idx + 1;
+
+  scriptEl.innerHTML = "";
+  s.say.forEach((line) => {
+    const p = document.createElement("p");
+    const isPause = line.startsWith("[");
+    p.className = "line" + (isPause ? " pause" : "");
+    p.innerHTML = isPause ? line : line;
+    scriptEl.appendChild(p);
+  });
+  scriptEl.scrollTop = 0;
+
+  [...chipsEl.children].forEach((c, i) => {
+    c.setAttribute("aria-current", i === idx ? "true" : "false");
+    c.classList.toggle("done", i < idx);
+  });
+
+  runTerminal(s);
+}
+
+/* Replay the terminal for one shot. Cancellable: every scheduled step checks the
+   token it was issued under, so switching shots mid-replay cannot leave a stray
+   line arriving into the next shot's pane. */
+function runTerminal(s) {
+  token += 1;
+  const mine = token;
+  termEl.innerHTML = "";
+  let i = 0;
+
+  const step = () => {
+    if (mine !== token) return;
+    if (i >= s.lines.length) return;
+    const ln = s.lines[i++];
+    const el = document.createElement("div");
+    el.className = "t-" + ln.k;
+    termEl.appendChild(el);
+
+    if (ln.type) {
+      typeInto(el, ln.s, mine, () => setTimeout(step, 340));
+    } else {
+      el.textContent = ln.s;
+      termEl.scrollTop = termEl.scrollHeight;
+      setTimeout(step, 190);
+    }
+  };
+  setTimeout(step, 260);
+}
+
+function typeInto(el, text, mine, done) {
+  const caret = document.createElement("i");
+  caret.className = "caret";
+  el.appendChild(caret);
+  let j = 0;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) {
+    el.textContent = text;
+    done();
+    return;
+  }
+  const tick = () => {
+    if (mine !== token) return;
+    j += Math.max(1, Math.round(text.length / 90));
+    el.textContent = text.slice(0, j);
+    el.appendChild(caret);
+    termEl.scrollTop = termEl.scrollHeight;
+    if (j < text.length) setTimeout(tick, 18);
+    else { caret.remove(); done(); }
+  };
+  setTimeout(tick, 60);
+}
+
+/* ------------------------------------------------------------------ timing -- */
+
+function shotElapsed() {
+  return playing ? elapsedBefore + (performance.now() - shotStart) / 1000 : elapsedBefore;
+}
+
+function tick() {
+  const s = SHOTS[idx];
+  const e = shotElapsed();
+  const before = SHOTS.slice(0, idx).reduce((a, x) => a + x.t, 0);
+  $("cElapsed").textContent = fmt(before + Math.min(e, s.t));
+  $("rail").style.width = ((before + Math.min(e, s.t)) / TOTAL * 100) + "%";
+
+  // Light the narration line whose share of the shot we are inside.
+  const lines = [...scriptEl.children];
+  if (lines.length) {
+    const per = s.t / lines.length;
+    const active = Math.min(lines.length - 1, Math.floor(e / per));
+    lines.forEach((l, i) => {
+      l.classList.toggle("on", i === active);
+      l.classList.toggle("done", i < active);
+    });
+  }
+
+  if (e >= s.t) {
+    if (idx < SHOTS.length - 1) { goto(idx + 1, true); }
+    else { pause(); }
+  }
+  if (playing) raf = requestAnimationFrame(tick);
+}
+
+function play() {
+  if (playing) return;
+  playing = true;
+  shotStart = performance.now();
+  $("bPlay").textContent = "pause";
+  raf = requestAnimationFrame(tick);
+}
+
+function pause() {
+  if (!playing) return;
+  elapsedBefore = shotElapsed();
+  playing = false;
+  $("bPlay").textContent = "play";
+  if (raf) cancelAnimationFrame(raf);
+}
+
+function goto(i, keepPlaying) {
+  const wasPlaying = playing || keepPlaying;
+  pause();
+  idx = Math.max(0, Math.min(SHOTS.length - 1, i));
+  elapsedBefore = 0;
+  renderShot();
+  tickOnce();
+  if (wasPlaying) play();
+}
+
+function tickOnce() {
+  const before = SHOTS.slice(0, idx).reduce((a, x) => a + x.t, 0);
+  $("cElapsed").textContent = fmt(before);
+  $("rail").style.width = (before / TOTAL * 100) + "%";
+  const lines = [...scriptEl.children];
+  lines.forEach((l, i) => { l.classList.toggle("on", i === 0); l.classList.remove("done"); });
+}
+
+/* ------------------------------------------------------------------ wiring -- */
+
+$("bPlay").addEventListener("click", () => (playing ? pause() : play()));
+$("bPrev").addEventListener("click", () => goto(idx - 1));
+$("bNext").addEventListener("click", () => goto(idx + 1));
+$("bReset").addEventListener("click", () => { pause(); goto(0); });
+$("bRec").addEventListener("click", () => {
+  const on = document.body.classList.toggle("rec");
+  $("bRec").setAttribute("aria-pressed", String(on));
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.code === "Space") { e.preventDefault(); playing ? pause() : play(); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); goto(idx + 1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); goto(idx - 1); }
+  else if (e.key.toLowerCase() === "r") { $("bRec").click(); }
+});
+
+$("cTotal").textContent = fmt(TOTAL);
+buildChips();
+renderShot();
+tickOnce();
+</script>

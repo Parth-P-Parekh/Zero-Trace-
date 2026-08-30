@@ -31,3 +31,6 @@ zerotrace-window/
 # tree of identifier-shaped records, and checking it in is the exact thing ZeroTrace
 # refuses to let anyone do.
 demo/corpus/bharat-digital/
+
+# Rendered demo video and its intermediates (regenerate: python scripts/make_demo_video.py)
+build/
