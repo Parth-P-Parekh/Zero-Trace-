@@ -1,0 +1,38 @@
+# acme-tech / security — a business unit policy.
+#
+# It exists to demonstrate the one property that is most of what "enterprise
+# policy" means: a business unit may move an action UP the lattice, never down.
+#
+#     allow  <  warn  <  tokenize  <  mask  <  block
+#
+# The org masks customer data, HR records and financial records on the way in.
+# Security handles none of that content at all, so it raises all three to
+# block. Infrastructure secrets were already blocked by the org; the child
+# keeps that.
+# The ONLY clearance in this business unit is the executive role — the group
+# clearances of the org policy do not apply here.
+#
+# A business-unit policy names the parent as org and ITSELF as business_unit,
+# and carries neither `mode` nor `fail` — the org policy owns both.
+
+version: 1
+org: acme-tech
+business_unit: acme-tech-security
+default: allow
+
+rules:
+  - match:
+      direction: inbound
+      class: [CUSTOMER_DATA, HR_RECORD, FINANCIAL_RECORD]
+    action: block
+    unless:
+      - actor_role: [executive]
+    reason: "security handles no customer, HR or financial content; none arrives unmasked"
+
+  - match:
+      direction: inbound
+      class: [INFRA_SECRET]
+    action: block
+    unless:
+      - actor_role: [executive]
+    reason: "an infrastructure secret never surfaces in this business unit either"

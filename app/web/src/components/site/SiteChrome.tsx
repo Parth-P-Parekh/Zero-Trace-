@@ -93,13 +93,8 @@ export function SiteFooter() {
           alignItems: 'flex-start', justifyContent: 'space-between', gap: 40, flexWrap: 'wrap',
         }}
       >
-        <div style={{ maxWidth: '38ch' }}>
+        <div>
           <Wordmark size={15} tone="inverse" descriptor="egress firewall for AI traffic" />
-          <p style={{ font: 'var(--type-body-sm)', color: 'var(--text-on-dark-body)', margin: '20px 0 0' }}>
-            Every figure on this page carries its source inline. Modelled figures are labelled as
-            modelled, vendor performance claims as vendor claims, and unconfirmed breaches as
-            claimed.
-          </p>
         </div>
         <div style={{ display: 'flex', gap: 56, flexWrap: 'wrap' }}>
           <FooterCol title="Product" links={['Console', 'Architecture', 'Evidence ledger', 'Detection pack']} />

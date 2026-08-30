@@ -1,0 +1,115 @@
+# bharat-digital — a government digital services agency.
+#
+# The worked example for security groups. A public body is a better demonstration
+# than a private company because its access control is not a preference: citizen
+# identifiers are held under statute, the people who may see them are named by
+# function rather than by seniority, and an auditor must be able to ask "who was
+# cleared to see this, and under which rule" long after the request.
+#
+# The groups are the point. Five of them, each mapping to a real function:
+#
+#   citizen-services   handles Aadhaar, voter and PAN records for service delivery
+#   revenue            handles tax and financial records
+#   hr-personnel       handles staff records
+#   infosec            handles infrastructure secrets
+#   audit              oversight; sees decisions, never the content behind them
+#
+# `director` is the one role that clears inbound classes, and it clears them one
+# rule at a time rather than globally — an executive override that applies to
+# everything is the thing an auditor cannot distinguish from no policy at all.
+#
+# Rule set:
+#   0-2  inbound citizen identifiers, tax records and staff records, each masked
+#        unless the actor is in the matching group.
+#   3    inbound infrastructure secrets, blocked outright.
+#   4    outbound credentials, blocked with NO clearance block at all.
+#   5-6  outbound citizen and financial data, tokenized format-preserving.
+#
+# Empanelled vendors are handled by the business-unit policy
+# (bharat-digital-contractors.yaml), which may only raise these actions.
+
+version: 1
+org: bharat-digital
+mode: enforce
+default: allow
+unregistered_workload: mask
+promotion: approve
+fail: closed
+
+rules:
+  # 0 — citizen identifiers. The core statutory holding, and the reason the
+  #     agency needs a control plane at all.
+  - match:
+      direction: inbound
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER]
+    action: mask
+    unless:
+      - actor_group: [citizen-services]
+      - actor_role: [director]
+    reason: "citizen identifiers are served only to citizen-services and directors"
+
+  # 1 — tax and financial records belong to revenue, not to whoever asks.
+  - match:
+      direction: inbound
+      class: [GSTIN, FINANCIAL_RECORD, BANK_ACCOUNT, IFSC]
+    action: mask
+    unless:
+      - actor_group: [revenue]
+      - actor_role: [director]
+    reason: "tax and financial records are served only to revenue and directors"
+
+  # 2 — staff records. Same shape, its own group, deliberately not merged with
+  #     citizen data: one group cleared for both would defeat the separation.
+  - match:
+      direction: inbound
+      class: [HR_RECORD]
+    action: mask
+    unless:
+      - actor_group: [hr-personnel]
+      - actor_role: [director]
+    reason: "staff records are served only to hr-personnel and directors"
+
+  # 3 — an infrastructure secret never surfaces in a model reply, for anyone
+  #     outside infosec. Blocked rather than masked: a masked secret is still a
+  #     secret that was retrieved.
+  - match:
+      direction: inbound
+      class: [INFRA_SECRET, SECURITY_FINDING]
+    action: block
+    unless:
+      - actor_group: [infosec]
+    reason: "infrastructure secrets and security findings stay inside infosec"
+
+  # 4 — a credential must never leave the agency. No `except` block, on purpose:
+  #     there is no role, group or destination for which this is negotiable, and
+  #     writing an empty clearance here would invite someone to fill it in.
+  - match:
+      direction: outbound
+      class: [ANTHROPIC_KEY, OPENAI_KEY, PRIVATE_KEY, SSH_PRIVATE_KEY, JWT,
+              DB_URI, INFRA_SECRET, AWS_ACCESS_KEY, AWS_SECRET_KEY, GITHUB_TOKEN]
+    action: block
+    reason: "a credential must not leave the agency"
+
+  # 5 — citizen identifiers leave only as a one-way token of the same shape, so a
+  #     model can still reason about "the same citizen" without holding the number.
+  #     Part A cannot honour this yet: tokenize needs the vault (C8), so redact.py
+  #     degrades it to mask and says so. It never fakes a token.
+  - match:
+      direction: outbound
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER]
+    action: tokenize
+    format_preserving: true
+    reason: "citizen identifiers leave only as a derived, shape-preserving token"
+
+  # 6 — financial and staff records, same treatment.
+  - match:
+      direction: outbound
+      class: [GSTIN, FINANCIAL_RECORD, BANK_ACCOUNT, HR_RECORD]
+    action: tokenize
+    format_preserving: true
+    reason: "financial and staff records leave only as a derived token"
+
+escalation:
+  band_lo: 0.35
+  band_hi: 0.75
+  sample_rate: 0.15

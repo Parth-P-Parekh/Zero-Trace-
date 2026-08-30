@@ -395,3 +395,37 @@ def test_action_lattice_only_tightens():
     assert Action.ALLOW.raised_to(Action.BLOCK) is Action.BLOCK
     assert Action.BLOCK.raised_to(Action.ALLOW) is Action.BLOCK
     assert Action.TOKENIZE.raised_to(Action.MASK) is Action.MASK
+
+
+def test_no_module_imports_a_scan_engine_directly():
+    """Only scanner.py may import pyahocorasick or google-re2, and only inside a try.
+
+    They are optional extras. The packaging promises that without them ZeroTrace "degrades
+    to slower pure-Python fallbacks rather than to a failure", and a direct import breaks
+    that promise in the worst possible way: importing the detector raises
+    ModuleNotFoundError, the hook treats it as an internal error, and the default
+    fail-closed policy denies -- so a bare install would block every prompt on a new
+    machine. `zerotrace check` did exactly that until it was tried in a clean virtualenv.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path.name == "scanner.py" or "tests" in path.parts:
+            continue
+        # utf-8-sig: at least one source file carries a BOM, and plain utf-8
+        # leaves it in the text, which ast.parse rejects.
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in ("ahocorasick", "re2"):
+                        offenders.append(f"{path.name}:{node.lineno} imports {alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module in ("ahocorasick", "re2"):
+                offenders.append(f"{path.name}:{node.lineno} imports from {node.module}")
+
+    assert not offenders, (
+        "import the resolved backends from gateway.base.scanner instead: " + "; ".join(offenders)
+    )

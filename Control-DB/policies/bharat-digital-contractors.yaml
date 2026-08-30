@@ -1,0 +1,60 @@
+# bharat-digital / contractors — the empanelled-vendor business unit.
+#
+# This is where the "a business unit may only raise" rule earns its keep. Vendors
+# work inside the agency's systems but are not the agency: an empanelled developer
+# debugging a service has a legitimate reason to be in the request path and no
+# legitimate reason to see a citizen's Aadhaar number.
+#
+# So the child raises the org's `mask` to `block` for citizen identifiers and for
+# tax records, and removes the group clearances entirely — `citizen-services` and
+# `revenue` are agency groups, and membership does not follow a person into a
+# vendor engagement. What remains is the `director` role, because someone inside
+# the agency must still be able to work in this unit.
+#
+# It may not go the other way. `check_bu_may_only_raise` rejects a child that
+# weakens the parent at publish time, which is what stops a business unit quietly
+# becoming the easiest route to the data the organisation restricted.
+#
+# A business-unit policy names the parent as org and ITSELF as business_unit, and
+# carries neither `mode` nor `fail` — the org policy owns both.
+
+version: 1
+org: bharat-digital
+business_unit: bharat-digital-contractors
+default: allow
+
+rules:
+  # Citizen identifiers do not reach a vendor at all, masked or otherwise.
+  - match:
+      direction: inbound
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER]
+    action: block
+    unless:
+      - actor_role: [director]
+    reason: "an empanelled vendor sees no citizen identifier, in any form"
+
+  # Tax and financial records, the same.
+  - match:
+      direction: inbound
+      class: [GSTIN, FINANCIAL_RECORD, BANK_ACCOUNT, IFSC]
+    action: block
+    unless:
+      - actor_role: [director]
+    reason: "tax and financial records stay inside the agency"
+
+  # Staff records: a vendor has no HR function here, and unlike the two above
+  # there is no director exception either. Nobody reads staff records through a
+  # vendor engagement.
+  - match:
+      direction: inbound
+      class: [HR_RECORD]
+    action: block
+    reason: "staff records are not readable through a vendor engagement"
+
+  # The org already blocks these inbound for anyone outside infosec, and infosec
+  # is not a vendor group, so this restates the parent rather than weakening it.
+  - match:
+      direction: inbound
+      class: [INFRA_SECRET, SECURITY_FINDING]
+    action: block
+    reason: "infrastructure secrets and security findings never reach a vendor"

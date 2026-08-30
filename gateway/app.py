@@ -102,6 +102,12 @@ async def lifespan(app: FastAPI):
         config=CheckerConfig.from_env(),
     )
     app.state.policy = StubPolicyClient()
+    # Part A: the real control plane. Off unless ZT_PART_A=1, because it needs a tenant,
+    # a published policy and a store, and failing every request for want of a seed would
+    # be a worse default than keeping the behaviour we had.
+    from .part_a.wiring import build as _build_part_a
+
+    app.state.part_a = _build_part_a()
     app.state.intel = IntelPlane()
     app.state.coverage = CoverageMonitor()
     # File-backed until persistence lands; the chain semantics are the Postgres ones.
@@ -198,7 +204,8 @@ async def prompt_check(request: Request) -> Response:
         matching = tuple(f for f in check.findings if f.span_path == span.path)
         if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
             request.app.state.intel.maybe_escalate(
-                features_of(span, matching, request.app.state.checker._tenant_key)
+                features_of(span, matching, request.app.state.checker._tenant_key,
+                            neighbours=_neighbours(check, span))
             )
 
     verdict: CheckVerdict = to_verdict(check, actor)
@@ -293,6 +300,17 @@ async def _proxy(request: Request, *, provider: str, path: str) -> Response:
         return outcome
     check, decision, plan, dispatched = outcome
 
+    # Part A decides and records BEFORE anything is dispatched, and before the root's own
+    # block path returns. Evidence written after the fact leaves a gap that looks, to an
+    # auditor, exactly like a request nobody checked -- and a request the root blocks is
+    # still a request the control plane must be able to account for.
+    gate = await _part_a_gate(
+        request, check, tree, provider=provider, root_blocked=dispatched is None
+    )
+    if isinstance(gate, Response):
+        _record_coverage(request, actor, provider=provider, outcome="blocked")
+        return gate
+
     if dispatched is None:
         await _record(request, actor, check, decision, plan,
                       destination=provider, dispatched=False)
@@ -333,7 +351,8 @@ async def _run(request: Request, tree: SpanTree, actor: Actor):
         matching = tuple(f for f in check.findings if f.span_path == span.path)
         if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
             app.state.intel.maybe_escalate(
-                features_of(span, matching, app.state.checker._tenant_key)
+                features_of(span, matching, app.state.checker._tenant_key,
+                            neighbours=_neighbours(check, span))
             )
 
     if decision.action is Action.BLOCK:
@@ -497,6 +516,64 @@ async def _dispatch(
 
 # ---------------------------------------------------------------- helpers --
 
+async def _part_a_gate(request: Request, check, tree, *, provider: str,
+                       root_blocked: bool):
+    """Ask Part A, and record what it said. Returns a Response to refuse, else None.
+
+    `root_blocked` says the root's own policy already stopped this request. Part A still
+    decides and still records -- evidence is the point -- but it does not replace the
+    provider-shaped block the harness expects. Two refusals for one request would be
+    worse than one, and the provider-compatible shape is what keeps Claude Code and Codex
+    working instead of erroring.
+
+    Findings cross as Part A findings via `RootDetector`'s conversion rules -- advisory
+    ones are withheld, because their `Finding` cannot mark a signal as unenforceable and
+    an unmarked one would offer the policy engine a reason to block that we do not stand
+    behind.
+    """
+    plane = getattr(request.app.state, "part_a", None)
+    if plane is None:
+        return None
+
+    from .part_a.context import EvidenceWriteFailed, UnknownTenant
+    from .part_a.detector import convert as convert_findings
+    from .part_a.store import PolicyMissing
+    from .part_a.wiring import identity_of
+
+    tenant, actor_id = identity_of(request.headers, default_tenant=plane.default_tenant)
+    ctx = await plane.context()
+    try:
+        pa_actor = await ctx.resolve(tenant, actor_id)
+        root_findings = list(getattr(check, "findings", ()) or ())
+        # Advisory findings are withheld from policy because Part A's Finding cannot mark
+        # a signal as unenforceable. They are NOT lost: `_run` above already escalates
+        # every span carrying a 0.35-0.75 finding to the blind agent, which is exactly
+        # this case. Escalating again here would queue the same span twice and double
+        # Loop 2's volume for no new information.
+        findings, _withheld = convert_findings(root_findings, "outbound")
+        outcome = await ctx.decide(findings, pa_actor, leg="outbound",
+                                   destination=provider)
+        await ctx.record(
+            outcome,
+            request_id=_request_id(request),
+            model=request.headers.get("x-zerotrace-model", provider),
+        )
+    except (UnknownTenant, PolicyMissing) as exc:
+        # No rulebook means no accountable decision. Refusing is the fail-closed answer.
+        return _error(403, "zt.part_a_unconfigured", str(exc))
+    except EvidenceWriteFailed as exc:
+        return _error(503, "zt.evidence_unavailable", str(exc))
+
+    if outcome.blocked and not root_blocked:
+        return _error(
+            403, "zt.part_a_blocked",
+            f"Part A blocked this request: {', '.join(outcome.finding_classes) or 'policy'}"
+            f" (rule {outcome.rule_index}, {outcome.rule_scope}, org policy v"
+            f"{outcome.policies.org.version}).",
+        )
+    return None
+
+
 def _resolve_actor(request: Request, *, default_channel: str) -> Actor:
     """Placeholder for Track A's ``identity.resolve``.
 
@@ -514,6 +591,20 @@ def _resolve_actor(request: Request, *, default_channel: str) -> Actor:
         channel=request.headers.get("x-zerotrace-channel", default_channel),  # type: ignore[arg-type]
         session_id=request.headers.get("x-zerotrace-session"),
     )
+
+
+def _neighbours(check, span) -> tuple:
+    """Classes found elsewhere in this request.
+
+    A high-entropy run means little alone and a great deal beside an `ANTHROPIC_KEY` on
+    another span -- that is what tells Loop 2 whether it is looking at a novel credential
+    or at a base64 blob nobody cares about.
+    """
+    return tuple(f.entity_class for f in check.findings if f.span_path != span.path)
+
+
+def _tenant_key() -> bytes:
+    return os.getenv("ZT_VAULT_MASTER_KEY", "dev-key-not-a-secret").encode()
 
 
 def _request_id(request: Request) -> str:

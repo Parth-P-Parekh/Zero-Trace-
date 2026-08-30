@@ -1,0 +1,85 @@
+# acme-tech — the Acme Technologies org policy.
+#
+# Rule set:
+#   0-3  inbound. Customer data, HR records and financial records are masked
+#        unless the actor is in the matching clearance group or is an
+#        executive. Infrastructure secrets are blocked outright with the same
+#        two clearances. Retrieval is not access control.
+#   4-5  outbound. Credentials and infrastructure secrets never leave. Customer,
+#        HR and financial data leaves only as a one-way token (Part A degrades
+#        tokenize to mask and says so; it never fakes a token).
+#
+# The executive role clears EVERY inbound class through a role exception, so
+# the security business-unit policy (acme-tech-security.yaml) raises the first
+# three classes to block while the executive exception still applies there.
+
+version: 1
+org: acme-tech
+mode: enforce
+default: allow
+unregistered_workload: mask
+promotion: approve
+fail: closed
+
+rules:
+  # 0 — customer data may come back, but only to people cleared for it.
+  - match:
+      direction: inbound
+      class: [CUSTOMER_DATA]
+    action: mask
+    unless:
+      - actor_group: [support]
+      - actor_role: [executive]
+    reason: "customer data is served only to the support group and executives"
+
+  # 1 — HR records, same shape, its own group.
+  - match:
+      direction: inbound
+      class: [HR_RECORD]
+    action: mask
+    unless:
+      - actor_group: [hr]
+      - actor_role: [executive]
+    reason: "HR records are served only to the hr group and executives"
+
+  # 2 — financial records, same shape, its own group.
+  - match:
+      direction: inbound
+      class: [FINANCIAL_RECORD]
+    action: mask
+    unless:
+      - actor_group: [finance]
+      - actor_role: [executive]
+    reason: "financial records are served only to the finance group and executives"
+
+  # 3 — an infrastructure secret never surfaces in a model reply.
+  - match:
+      direction: inbound
+      class: [INFRA_SECRET]
+    action: block
+    unless:
+      - actor_group: [security]
+      - actor_role: [executive]
+    reason: "an infrastructure secret must never reach a client"
+
+  # 4 — a credential must never leave the company. No exception block, on purpose.
+  - match:
+      direction: outbound
+      class: [ANTHROPIC_KEY, PRIVATE_KEY, JWT, DB_URI, INFRA_SECRET]
+    action: block
+    reason: "a credential must not leave the company"
+
+  # 5 — customer, HR and financial data leaves as a one-way token of the same shape.
+  #     Part A cannot honour this yet: tokenize needs the vault (C8, Part B),
+  #     so redact.py degrades it to mask and says so. It never fakes a token.
+  - match:
+      direction: outbound
+      class: [CUSTOMER_DATA, HR_RECORD, FINANCIAL_RECORD]
+    action: tokenize
+    format_preserving: true
+    reason: "customer, HR and financial data leaves only as a derived token"
+
+escalation:
+  band_lo: 0.35
+  band_hi: 0.75
+  sample_rate: 0.15

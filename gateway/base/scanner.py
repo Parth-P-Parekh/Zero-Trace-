@@ -126,6 +126,48 @@ class _AhoAutomaton:
             yield start, start + length, key
 
 
+class _FallbackPyAho:
+    """pyahocorasick's own API, in pure Python.
+
+    `_FallbackAutomaton` above serves the detector pack, which uses this module's
+    add/build/iter shape. `s0_credentials` predates it and speaks pyahocorasick directly,
+    so it needs a stand-in with *that* API rather than a rewrite of a frozen detector.
+
+    Without this, importing s0_credentials on a machine that has not installed the extras
+    raises ModuleNotFoundError. In the hook path that is an internal error, which under
+    the default fail-closed policy denies -- so a bare install would block every prompt on
+    a new machine while the packaging promised it would merely run slower.
+    """
+
+    __slots__ = ("_words",)
+
+    def __init__(self) -> None:
+        self._words: list[tuple[str, object]] = []
+
+    def add_word(self, word: str, value: object) -> None:
+        self._words.append((word, value))
+
+    def make_automaton(self) -> None:
+        # Longest first, matching how the real automaton reports overlapping anchors.
+        self._words.sort(key=lambda pair: -len(pair[0]))
+
+    def iter(self, text: str):
+        """Yield (end_index, value), which is pyahocorasick's contract."""
+        for word, value in self._words:
+            start = text.find(word)
+            while start != -1:
+                yield start + len(word) - 1, value
+                start = text.find(word, start + 1)
+
+
+#: The automaton class, real or not. Named so callers read the same either way.
+Automaton = _ac.Automaton if _ac is not None else _FallbackPyAho  # type: ignore[union-attr]
+
+#: The regex engine: google-re2, or `re` when it is absent. `re` backtracks, which is why
+#: `assert_production_engines()` refuses it outside development.
+regex = _re
+
+
 # ------------------------------------------------------------------- pack --
 
 @dataclass(slots=True)

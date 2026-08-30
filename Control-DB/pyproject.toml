@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zerotrace-control-db"
+version = "0.1.0a1"
+description = "ZeroTrace Part A — the control-group DB"
+requires-python = ">=3.12"
+dependencies = [
+    # The root distribution. Part A imports VOCAB-01 from gateway.contracts rather than
+    # mirroring it: one vocabulary, one place to change it. This is a one-way dependency
+    # -- the root never imports Part A.
+    "zerotrace",
+    "aiosqlite==0.22.1",
+    "alembic==1.19.1",
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "PyYAML==6.0.3",
+    "redis==8.1.0",
+    "sqlalchemy==2.0.52",
+    "structlog==26.1.0",
+    "uvicorn[standard]==0.52.4",
+]
+
+[project.optional-dependencies]
+# PostgreSQL is no longer the default store, so its driver is no longer a hard
+# dependency. Part A runs natively on Redis; asyncpg is here for anyone still pointing
+# ZT_PG_DSN at a Postgres instance, and asking for it is now an explicit act.
+postgres = ["asyncpg==0.31.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["zerotrace*"]
+
+[tool.setuptools.package-data]
+"zerotrace.db" = ["migrations/*.py", "migrations/versions/*.py"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:aiosqlite.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
