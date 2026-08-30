@@ -1,18 +1,18 @@
-import { Section, SectionHead, Source } from './Shared';
+import { Section, SectionHead } from './Shared';
 
 /**
- * Move 3: the competition, credited and then disqualified.
+ * Move 3: the gap, stated and not explained.
  *
- * Nine vendors in a table was the honest version and the unreadable one. The
- * consolidation is one line, and only the four gaps that are structural survive
- * - the ones a competitor cannot close by shipping faster.
+ * Each line is the gap and its consequence in one breath. A title with a
+ * paragraph under it asks the reader to assemble the point themselves; a
+ * sentence hands it over. Four sentences, no descriptions.
  */
 
-const GAPS: Array<[string, string, string]> = [
-  ['G1', 'Wrong insertion point', 'Endpoint agents and browser extensions watch people typing. The leak is server-side, in service pipelines and agent tool results where no human is present.'],
-  ['G2', 'Entity-level blindness', 'Detectors classify spans one at a time. A record with pincode, DOB, gender and employer identifies one person and contains no flaggable entity. Every entity tool passes it.'],
-  ['G3', 'Cost scales with traffic', 'A guardrail that calls a model per request gets more expensive every year adoption grows. Against a budget fixed annually, that is unprocurable however good it is.'],
-  ['G4', 'No audit-grade evidence', 'Logs show detection after exposure. There is no tamper-evident record an auditor or a court will accept as proof that nothing left.'],
+const GAPS: Array<[string, string]> = [
+  ['They watch laptops.', 'The leak is server-side, where no human is present.'],
+  ['They classify spans one at a time.', 'The record with no flaggable entity walks straight through.'],
+  ['They call a model on every request.', 'Cost grows with adoption, forever, against a budget fixed once a year.'],
+  ['They write logs, not proof.', 'Nothing an auditor or a court will accept as evidence that nothing left.'],
 ];
 
 export function Competitors() {
@@ -21,26 +21,35 @@ export function Competitors() {
       <SectionHead
         step="02 · The gap"
         title="Every serious AI-security company is headquartered somewhere else."
-        lead="Protect AI went to Palo Alto, Lakera to Check Point, Prompt Security to SentinelOne, Robust Intelligence to Cisco - the category consolidated into foreign platform vendors in eighteen months. They are good products. Four things none of them do are structural rather than roadmap items."
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: '32px 44px' }}>
-        {GAPS.map(([id, title, body]) => (
-          <div key={id} style={{ display: 'grid', gridTemplateColumns: '36px minmax(0,1fr)', gap: 14 }}>
-            <span className="zt-mono-sm" style={{ color: 'var(--text-faint)', paddingTop: 3 }}>{id}</span>
-            <div>
-              <h3 style={{ font: 'var(--type-h3)', margin: '0 0 8px' }}>{title}</h3>
-              <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)', maxWidth: '44ch' }}>
-                {body}
-              </p>
-            </div>
-          </div>
+      {/* Not mono: the system reserves mono for machine data, and these are company
+          names. Ramp .36 carries the same "this is a footnote" weight. */}
+      <p
+        style={{
+          margin: '-24px 0 44px', font: 'var(--type-body-sm)',
+          color: 'var(--text-faint)', maxWidth: '62ch',
+        }}
+      >
+        Protect AI to Palo Alto. Lakera to Check Point. Prompt Security to SentinelOne. Robust
+        Intelligence to Cisco.
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {GAPS.map(([gap, consequence]) => (
+          <p
+            key={gap}
+            style={{
+              margin: 0, padding: '22px 0', maxWidth: '46ch',
+              font: 'var(--w-regular) var(--t-21)/var(--lh-snug) var(--font-core)',
+              letterSpacing: 'var(--tr-heading)',
+              boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
+            }}
+          >
+            {gap} <span style={{ color: 'var(--text-faint)' }}>{consequence}</span>
+          </p>
         ))}
       </div>
-
-      <p style={{ margin: '32px 0 0' }}>
-        <Source>Acquisition values as reported in trade press, not disclosed.</Source>
-      </p>
     </Section>
   );
 }
