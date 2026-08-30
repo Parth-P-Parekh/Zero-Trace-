@@ -415,6 +415,41 @@ def _activate_role(actor: str, tenant: str | None) -> None:
     print("           prompts are now decided by this actor's policy too")
 
 
+def _explain(args: argparse.Namespace) -> int:
+    """Show both halves of the decision for one piece of text.
+
+    `check` answers "is there something in here". This answers "and may *I* send it",
+    which is the question the two halves of the product answer together -- and the one a
+    demo needs to make visible in a single command.
+    """
+    import asyncio
+
+    from gateway.part_a.session import current, decide_prompt
+    from hooks.zt_check import check_embedded
+
+    text = args.text
+    detection = check_embedded(text, "cli")
+    classes = ", ".join(detection.get("classes") or []) or "nothing"
+    print(f"  detection   {'FOUND' if not detection['allow'] else 'clean':<9} {classes}")
+
+    here = current()
+    if here is None:
+        print("  policy      not applied -- no role. `zerotrace on --as <name>`")
+        return 0 if detection["allow"] else 1
+
+    role = asyncio.run(decide_prompt(text))
+    if role is None:
+        print(f"  policy      not applied -- {here.tenant!r} is not in the local store")
+        return 0 if detection["allow"] else 1
+
+    print(f"  actor       {role.actor} in {role.tenant}")
+    print(f"  policy      {role.action.upper():<9} rule {role.rule_index} "
+          f"({role.rule_scope}) of policy v{role.policy_version}")
+    if not role.allow:
+        print(f"  {role.reason}")
+    return 0 if role.allow else 1
+
+
 # ----------------------------------------------------------------------- role --
 
 def _seed(args: argparse.Namespace) -> int:
@@ -547,6 +582,19 @@ def _hook(args: argparse.Namespace) -> int:
 
 # ----------------------------------------------------------------------- main --
 
+def _make_output_safe() -> None:
+    """A cp437 console mangles the em dash in a block reason.
+
+    "Remove the secret ? or reference it by name" reads like a bug in the tool, and this
+    is the one message people actually read.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="zerotrace",
@@ -576,6 +624,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="what is wired and what is carried").set_defaults(fn=_status)
     sub.add_parser("reset", help="clear carried cross-call state").set_defaults(fn=_reset)
 
+    e = sub.add_parser("explain", help="what detection found, and what your role allows")
+    e.add_argument("text")
+    e.set_defaults(fn=_explain)
+
     c = sub.add_parser("check", help="run one string through the checker")
     c.add_argument("text", nargs="?", help="text to check (or pipe on stdin)")
     c.set_defaults(fn=_check)
@@ -601,6 +653,7 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--host", choices=["claude", "codex"])
     h.set_defaults(fn=_hook)
 
+    _make_output_safe()
     args = parser.parse_args(argv)
     return args.fn(args)
 

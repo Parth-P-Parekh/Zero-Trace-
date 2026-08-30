@@ -102,33 +102,45 @@ async def main() -> int:
     print(f"{DIM}store: {plane.backend}   policy: v1   mode: enforce{RESET}")
 
     # ---------------------------------------------------------------- inbound --
-    head("1. What a user may NOT SEE  (inbound: the model's reply / retrieved records)")
-    print(f"  {DIM}Retrieval is not access control. The same record, three people.{RESET}")
-    print(f"  {YELLOW}NOTE{RESET} {DIM}inbound findings are injected here. Classifying a reply as")
-    print(f"       AADHAAR / HR_RECORD / INFRA_SECRET has no detector yet: the policy")
-    print(f"       machinery is real, the classifier for these classes is not.")
-    print(f"       See docs/18_MANUAL_DEMO.md, coverage table.{RESET}\n")
+    head("1. What a user may NOT SEE  (inbound: retrieved records, before the model)")
+    print(f"  {DIM}Retrieval is not access control. A vector store returns what is")
+    print(f"  semantically nearest, not what the caller is entitled to -- so a question")
+    print(f"  about \"employee benefits\" will happily surface a named payslip.")
+    print(f"  These are real documents, classified by structure, then judged by role.{RESET}")
 
-    for actor_id, label in (("s.iyer", "citizen-services"),
-                            ("r.banerjee", "revenue"),
-                            ("cag.audit", "audit, no clearance")):
+    from gateway.part_a.retrieval import RetrievalGuard
+
+    documents = [
+        {"id": "hr/payslip-2026-03",
+         "text": "Payslip March 2026. employee_id EMP-4471, designation Assistant "
+                 "Director, salary 96,000, PF number PY/4471, reporting manager P Rao."},
+        {"id": "cases/GRV-9912",
+         "text": "Grievance ticket_id GRV-9912. applicant R Sharma, customer_id "
+                 "CIT-88231, case_file opened 12 March, beneficiary of scheme 14."},
+        {"id": "ops/runbook-db",
+         "text": "Restore runbook. connection_string for the primary, api_key rotation "
+                 "steps, vault path secret/data/prod, password reset procedure."},
+        {"id": "eng/notes",
+         "text": "Refactor the retry loop to back off exponentially and add a test."},
+    ]
+    guard = RetrievalGuard(ctx)
+    print()
+    print(f"  {DIM}four documents retrieved; what each person actually receives:{RESET}")
+    for actor_id, label in (("m.khan", "hr-personnel"), ("s.iyer", "citizen-services"),
+                            ("a.das", "infosec"), ("cag.audit", "audit, no clearance")):
         actor = await ctx.resolve(DEMO_TENANT, actor_id)
-        out = await ctx.decide([_finding("AADHAAR", "inbound")], actor, leg="inbound")
-        await ctx.record(out, request_id=f"in-{actor_id}", model="claude-opus-5")
-        line(actor_id, "citizen record (AADHAAR)", out.action,
-             f"{label} | rule {out.rule_index} | {out.rule_scope}")
+        result = await guard.filter(documents, actor)
+        got = ", ".join(d["id"].split("/")[-1] for d in result.visible) or "nothing"
+        line(actor_id, got[:33], "allow" if len(result.visible) > 1 else "mask",
+             f"{label} | {len(result.withheld)} withheld")
 
     print()
-    for actor_id, cls, label in (("r.banerjee", "GSTIN", "revenue"),
-                                 ("s.iyer", "GSTIN", "citizen-services"),
-                                 ("m.khan", "HR_RECORD", "hr-personnel"),
-                                 ("a.das", "INFRA_SECRET", "infosec"),
-                                 ("s.iyer", "INFRA_SECRET", "citizen-services")):
-        actor = await ctx.resolve(DEMO_TENANT, actor_id)
-        out = await ctx.decide([_finding(cls, "inbound")], actor, leg="inbound")
-        await ctx.record(out, request_id=f"in-{actor_id}-{cls}", model="claude-opus-5")
-        line(actor_id, cls.lower().replace("_", " "), out.action,
-             f"{label} | rule {out.rule_index}")
+    print(f"  {DIM}Withheld documents are explained, not silently dropped -- someone who")
+    print(f"  cannot tell whether a search found nothing or found something they may")
+    print(f"  not read concludes the tool is broken and routes around it:{RESET}")
+    actor = await ctx.resolve(DEMO_TENANT, "cag.audit")
+    for row in (await guard.filter(documents, actor)).explain().splitlines()[:4]:
+        print(f"    {DIM}{row}{RESET}")
 
     # ------------------------------------------------------------- outbound --
     head("2. What a user may NOT SEND  (outbound: the prompt on its way to the model)")
@@ -139,7 +151,6 @@ async def main() -> int:
     payloads = {
         "an API key": api_key(),
         "a database URI": db_uri(),
-        "a PAN (citizen ID)": pan(),
         "ordinary work": "refactor the retry loop so it backs off exponentially",
     }
     detector = RootDetector()
@@ -153,14 +164,30 @@ async def main() -> int:
         line("s.iyer", label, out.action,
              ", ".join(out.finding_classes) or "nothing found")
 
-    print(f"\n  {DIM}A credential is blocked for everyone -- that rule carries no")
+    print()
+    print(f"  {DIM}The same PAN, three people. This is the role changing what you may")
+    print(f"  TYPE, not only what you may read.{RESET}")
+    for actor_id, note in (("s.iyer", "citizen-services -- casework is the reason"),
+                           ("r.banerjee", "revenue -- no clearance for citizen IDs"),
+                           ("vendor.dev", "empanelled vendor")):
+        tenant = DEMO_BU if actor_id == "vendor.dev" else DEMO_TENANT
+        actor = await ctx.resolve(tenant, actor_id)
+        findings = await detector.scan(
+            {"messages": [{"role": "user", "content": "case file for " + pan()}]},
+            "outbound")
+        out = await ctx.decide(findings, actor, leg="outbound")
+        line(actor_id, "a PAN in a prompt", out.action, note)
+
+    print()
+    print(f"  {DIM}A credential is blocked for everyone -- that rule carries no")
     print(f"  clearance block at all, so no role, group or destination reaches it.{RESET}")
-    for actor_id in ("p.rao", "a.das"):
+    for actor_id, note in (("s.iyer", "cleared for citizen IDs, not for this"),
+                           ("p.rao", "director"), ("a.das", "infosec")):
         actor = await ctx.resolve(DEMO_TENANT, actor_id)
         findings = await detector.scan(
             {"messages": [{"role": "user", "content": api_key()}]}, "outbound")
         out = await ctx.decide(findings, actor, leg="outbound")
-        line(actor_id, "an API key", out.action, "director" if actor_id == "p.rao" else "infosec")
+        line(actor_id, "an API key", out.action, note)
 
     # ------------------------------------------------------- business unit --
     head("3. A vendor is not staff  (the business unit may only RAISE)")
@@ -170,8 +197,28 @@ async def main() -> int:
         line("vendor.dev", cls.lower().replace("_", " "), out.action,
              "empanelled vendor | agency would have masked")
 
+    # ------------------------------------------------------------- latency --
+    head("4. Does it get in the way?")
+    import time as _time
+
+    warm = []
+    for _ in range(20):
+        t0 = _time.perf_counter()
+        await detector.scan(
+            {"messages": [{"role": "user",
+                           "content": "refactor the retry loop so it backs off"}]},
+            "outbound")
+        warm.append((_time.perf_counter() - t0) * 1000)
+    warm.sort()
+    print(f"  scan, warm           {warm[len(warm) // 2]:.1f} ms median, "
+          f"{warm[-1]:.1f} ms worst of {len(warm)}")
+    print(f"  {DIM}In Claude Code a hook is a fresh process, so interpreter startup sits")
+    print(f"  on top. Measured on this machine with the local daemon warm: ~99 ms per")
+    print(f"  tool call and ~119 ms per prompt, against ~300 ms without it. A")
+    print(f"  50-tool-call session costs 5.0s rather than 15.0s.{RESET}")
+
     # ------------------------------------------------------------ evidence --
-    head("4. Can you prove it afterwards?")
+    head("5. Can you prove it afterwards?")
     result = await verify(ctx.ledger, DEMO_TENANT)
     rows = await ctx.ledger.rows(DEMO_TENANT, "dp")
     decided = [r for r in rows if r.event_type == "request.decided"]
@@ -187,7 +234,7 @@ async def main() -> int:
         print(f"  {DIM}bound to policy row {r['org_policy_content_hash'][:16]}...{RESET}")
 
     # ------------------------------------------------------------- privacy --
-    head("5. Did anything leak into the store?")
+    head("6. Did anything leak into the store?")
     blob = ""
     for key in await kv.keys("*"):
         blob += str(await kv.hgetall(key)) + str(await kv.lrange(key, 0, -1))

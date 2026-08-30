@@ -268,7 +268,16 @@ def run(event: dict) -> None:
     classes = tuple(result.get("classes") or ())
 
     if not result.get("allow", False):
-        if _has_credential(classes) or role is None or not role.allow:
+        if _has_credential(classes):
+            # Never explained away by a role: no clearance reaches a credential.
+            deny(_denial_reason(result))
+        if role is not None and not role.allow:
+            # Prefer the policy's reason. "It contains sensitive data" leaves the user
+            # unable to tell why a colleague may send the same thing and they may not;
+            # naming the actor and the rule is the difference between a refusal someone
+            # can act on and one they work around.
+            deny(role.reason)
+        if role is None:
             deny(_denial_reason(result))
         # else: policy cleared this actor for a non-credential class. Fall through.
     elif role is not None and not role.allow:

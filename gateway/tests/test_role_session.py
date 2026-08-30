@@ -238,3 +238,70 @@ def test_an_unknown_actor_does_not_log_you_in(home, capsys):
     _activate_role("nobody-here", None)
     assert current() is None
     assert "not in" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------- explain --
+
+def test_explain_shows_detection_and_policy(home, capsys):
+    """The command the manual test script leans on: both halves, one invocation."""
+    import argparse
+
+    from gateway.cli import _explain
+    from gateway.part_a.session import login
+
+    login("r.banerjee", AGENCY)
+    code = _explain(argparse.Namespace(text="case file for " + _pan()))
+    out = capsys.readouterr().out
+
+    assert "detection" in out and "PAN" in out
+    assert "r.banerjee" in out
+    assert "policy" in out
+    assert code == 1, "revenue has no clearance for a citizen identifier"
+
+
+def test_explain_without_a_role_says_so(home, capsys):
+    import argparse
+
+    from gateway.cli import _explain
+    from gateway.part_a.session import logout
+
+    logout()
+    _explain(argparse.Namespace(text="refactor the retry loop"))
+    assert "no role" in capsys.readouterr().out
+
+
+def test_explain_allows_the_cleared_caseworker(home):
+    import argparse
+
+    from gateway.cli import _explain
+    from gateway.part_a.session import login
+
+    login("s.iyer", AGENCY)
+    assert _explain(argparse.Namespace(text="case file for " + _pan())) == 0
+
+
+def _pan() -> str:
+    return "ABC" + "PZ" + "1234" + "C"
+
+
+def test_a_policy_denial_names_the_actor_and_the_rule(home):
+    """"It contains sensitive data" leaves the user unable to tell why a colleague may
+    send the same thing and they may not. Naming the rule is the difference between a
+    refusal someone can act on and one they route around."""
+    from gateway.part_a.session import login
+
+    login("r.banerjee", AGENCY)
+    decision = _decide("case file for " + _pan())
+    assert decision is not None and not decision.allow
+    assert "r.banerjee" in decision.reason
+    assert "revenue" in decision.reason
+    assert "Rule" in decision.reason
+
+
+def test_a_credential_denial_is_never_explained_away_by_a_role(home):
+    """The credential message must stay the credential message: no clearance reaches it,
+    so attributing the block to a policy rule would misdescribe why it happened."""
+    from hooks.zt_check import _has_credential
+
+    assert _has_credential(("ANTHROPIC_KEY",))
+    assert not _has_credential(("PAN",))
