@@ -5,6 +5,7 @@
  * defined once here and the sections spend their variation on composition
  * instead of on chrome. Everything resolves to a design-system token.
  */
+import { Fragment } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
 export const SHELL: CSSProperties = { maxWidth: 1120, margin: '0 auto', padding: '0 32px' };
@@ -110,6 +111,7 @@ export function Stat({
   value,
   unit,
   body,
+  detail,
   source,
   onDark,
   size = 'md',
@@ -117,6 +119,8 @@ export function Stat({
   value: string;
   unit?: string;
   body: ReactNode;
+  /** Optional working, shown under the figure. Lines of [label, value]. */
+  detail?: Array<[string, string]>;
   source: string;
   onDark?: boolean;
   size?: 'md' | 'lg';
@@ -152,6 +156,26 @@ export function Stat({
       >
         {body}
       </p>
+      {detail ? (
+        <div
+          className="zt-mono-sm"
+          style={{
+            display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: '4px 16px',
+            paddingTop: 12, maxWidth: '34ch',
+            boxShadow: `inset 0 1px 0 ${onDark ? 'var(--border-on-dark)' : 'var(--border-hairline)'}`,
+            color: onDark ? 'var(--text-on-dark-quiet)' : 'var(--text-quiet)',
+          }}
+        >
+          {detail.map(([label, val]) => (
+            <Fragment key={label}>
+              <span>{label}</span>
+              <span style={{ textAlign: 'right', color: onDark ? 'var(--ink-inverse)' : 'var(--ink)' }}>
+                {val}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
       <Source onDark={onDark}>{source}</Source>
     </div>
   );

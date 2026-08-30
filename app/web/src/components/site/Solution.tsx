@@ -1,4 +1,4 @@
-import { Section, SectionHead, Source, Pull, Stat } from './Shared';
+import { Section, SectionHead, Source, Stat } from './Shared';
 
 /**
  * Move 4: what it does, and the three things that cannot be copied quickly.
@@ -63,47 +63,22 @@ export function Solution() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 36 }}>
           <Stat onDark value="8-12% → <3%" body="Escalation rate, launch to maturity." source="Placeholder. Target, not yet measured." />
           <Stat onDark value="₹0.75 → ₹0.52" body="COGS per 1M tokens scanned, still falling." source="Placeholder. Tracks model cost, not yet measured." />
-          <Stat onDark value="0.78" body="Composite risk on a record with no name, no ID, no phone - and no flaggable entity." source="Placeholder. Formula holds; its inputs are not calibrated." />
+          <Stat
+            onDark
+            value="0.78"
+            body="Composite risk on a record with no name, no ID, no phone - and no flaggable entity."
+            detail={[
+              ['pincode + dob + gender + employer', '13.7 digits'],
+              ['identity needed to be unique in 1.4bn', '9.2 digits'],
+              ['so the record is unique, risk term', '1.00'],
+              ['x confidence in the four detections', '0.78'],
+            ]}
+            source="Population basis 1.4bn. Detector confidences illustrative."
+          />
         </div>
 
-        <div style={{ marginTop: 44 }}>
-          <Pull onDark sub="Every mainstream tool classifies spans independently. Pincode with a date of birth, a gender and an employer identifies one person, and passes every entity filter on the market. Scoring the set instead of the span is a different unit of analysis, not a longer rule list - which is why it is the hardest thing here to copy.">
-            Anonymised isn&rsquo;t anonymous.
-          </Pull>
-        </div>
       </Section>
 
-      <Section tight>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 44 }}>
-          <Third
-            label="Coherent across hops"
-            title="Redaction that breaks the answer gets switched off."
-            body="Format-preserving tokens stay referentially stable - the same person is the same token on hop 1 and hop 7, across sessions and restarts. The response is re-hydrated before your user sees it."
-          />
-          <Third
-            label="The evidence layer"
-            title="What would have left, if this had been off?"
-            body="Every decision writes to a hash-chained ledger storing classes, offsets and hashes, never the values. The counterfactual answers the only question an auditor actually asks."
-          />
-          <Third
-            label="India-context pack"
-            title="Aadhaar-format, PAN, ABHA, EPIC, GSTIN, IFSC."
-            body="With Verhoeff validation, scheme-specific beneficiary formats, and names across the 22 scheduled languages and their transliterations. Department-specific formats are learned, not quoted as a customisation."
-          />
-        </div>
-      </Section>
     </>
-  );
-}
-
-function Third({ label, title, body }: { label: string; title: string; body: string }) {
-  return (
-    <div>
-      <div className="zt-eyebrow" style={{ marginBottom: 14 }}>{label}</div>
-      <h3 style={{ font: 'var(--type-h3)', margin: '0 0 12px', maxWidth: '24ch' }}>{title}</h3>
-      <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)', maxWidth: '42ch' }}>
-        {body}
-      </p>
-    </div>
   );
 }
