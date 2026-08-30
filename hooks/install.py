@@ -50,13 +50,27 @@ MARKERS = tuple(h[1] for h in HOOKS)
 def claude_entry(
     script_path: str, script: str, matcher: str | None, status: str
 ) -> dict:
-    """Claude command hooks keep the executable and arguments separate."""
+    """One command string. Not an executable plus an `args` array.
+
+    This was `{"command": "python", "args": [path, "--claude"]}`, and it failed in the
+    worst way available: Claude Code has no `args` field on a command hook, so it ran
+    bare `python`, which read the hook's JSON payload from stdin **as a Python script**.
+    A hook event is a valid Python dict literal, so the interpreter evaluated it happily
+    and exited 0 -- a silent allow, on every prompt and every tool call, with nothing on
+    stderr and nothing in any log to say the guard had stopped guarding.
+
+    `subprocess.list2cmdline` does the quoting rather than `shlex.quote`, which uses
+    POSIX single-quote rules that Windows shells do not honour -- and this is a Windows
+    path with a hyphen in it.
+    """
+    command = subprocess.list2cmdline(
+        [sys.executable, f"{script_path}/{script}", "--claude"]
+    )
     block: dict = {
         "hooks": [
             {
                 "type": "command",
-                "command": "python",
-                "args": [f"{script_path}/{script}", "--claude"],
+                "command": command,
                 "timeout": 10,
                 "statusMessage": status,
             }
