@@ -1,4 +1,4 @@
-import { Section, SectionHead, Source, Pull } from './Shared';
+import { Section, SectionHead } from './Shared';
 
 /**
  * Move 7: the price, and the one paragraph that justifies its shape.
@@ -59,19 +59,6 @@ export function Pricing() {
         ))}
       </div>
 
-      <div style={{ marginTop: 44 }}>
-        <Pull sub="India's average data breach costs ₹25.5 crore, shadow AI adds ₹1.79 crore on top, and the maximum penalty for a single security failure is ₹250 crore. IBM 2026, DPDP Act 2023.">
-          The Portal tier is ₹9 lakh a year. It pays for itself if it prevents one
-          incident in 283 years.
-        </Pull>
-      </div>
-
-      <p style={{ margin: '28px 0 0', maxWidth: '68ch' }}>
-        <Source>
-          Enterprise runs self-serve alongside this, from ₹1,499 per developer per month. Figures are
-          planning assumptions, not quoted prices.
-        </Source>
-      </p>
     </Section>
   );
 }
