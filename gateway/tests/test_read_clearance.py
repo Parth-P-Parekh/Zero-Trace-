@@ -513,3 +513,29 @@ def test_an_empty_argument_is_not_the_current_directory():
     paths = candidate_paths("Bash", {"command": 'grep -c "" pytest.ini'})
     assert [p.name for p in paths] == ["pytest.ini"]
     assert not any(".git" in str(p) for p in paths)
+
+
+def test_writing_to_a_file_is_not_reading_it():
+    """`Write` names `file_path` too, and judging a write against the file's *current*
+    contents is wrong in the direction that breaks people's work.
+
+    Editing a document about HR records became impossible on an HR clearance. Caught
+    when this repository's README was written and the hook refused to save it, because
+    the README discusses the very classes it documents. A tool that blocks writes gets
+    switched off within the hour.
+    """
+    payslip = str(CORPUS / "hr-personnel" / "payslip-2026-03-EMP4471.md")
+    assert candidate_paths("Write", {"file_path": payslip, "content": "x"}) == []
+    assert candidate_paths("Edit", {"file_path": payslip, "new_string": "x"}) == []
+    assert candidate_paths("NotebookEdit", {"notebook_path": payslip}) == []
+    # ...but reading the same file still is a read.
+    assert candidate_paths("Read", {"file_path": payslip})
+
+
+def test_an_unknown_reader_is_gated_and_an_unknown_writer_is_not():
+    """MCP servers are not ours to enumerate, so the tool's name is the only signal."""
+    faq = str(CORPUS / "public" / "scheme-14-faq.md")
+    assert candidate_paths("mcp__fs__read_file", {"path": faq})
+    assert candidate_paths("mcp__docs__get_document", {"path": faq})
+    assert candidate_paths("mcp__fs__save_note", {"path": faq}) == []
+    assert candidate_paths("mcp__fs__write_file", {"path": faq}) == []

@@ -46,12 +46,47 @@ READERS: frozenset[str] = frozenset({
     "type", "get-content", "gc",
 })
 
-#: Arg names that hold a path, for tools we do not have a table for. MCP servers and
-#: Codex's tool names are not ours to enumerate, and a server called `read_file` with a
-#: `path` argument should be gated like `Read`.
+#: Arg names that hold a path.
 PATH_KEYS: frozenset[str] = frozenset({
     "file_path", "filepath", "path", "notebook_path", "file", "filename", "target_file",
 })
+
+#: Tools whose *result* puts a file's contents in front of the model. Only these are
+#: reads.
+#:
+#: The first version of this gated any tool with a path-shaped argument, and that is
+#: wrong in the direction that breaks people's work: `Write` names `file_path` too, so
+#: writing to a file was judged against whatever that file *currently* contains. Editing
+#: a document about HR records became impossible on an HR clearance. Caught when this
+#: README was written and the hook refused to save it.
+#:
+#: Writing is not reading. `Write`, `Edit` and their aliases put content *into* the file
+#: and return no body to the model, and their payload is already covered by the
+#: credential scan on tool arguments.
+READ_TOOLS: frozenset[str] = frozenset({
+    "Read", "NotebookRead", "Grep",
+})
+
+#: Verbs in an unknown tool's name that mean it returns file content. MCP servers are
+#: not ours to enumerate, so a server called `read_file` or `get_document` is gated and
+#: one called `save_note` is not.
+#:
+#: This misses a bespoke reader with an unusual name, and that is the deliberate side to
+#: err on: the alternative -- treating every unknown path argument as a read -- blocks
+#: ordinary writes, and a tool that blocks writes gets switched off within the hour.
+READ_VERBS: tuple[str, ...] = (
+    "read", "cat", "open", "fetch", "get_file", "get_document", "load", "view",
+    "search", "grep", "find_in",
+)
+
+
+def _is_read_tool(tool: str) -> bool:
+    if tool in READ_TOOLS:
+        return True
+    if tool.startswith("mcp__"):
+        name = tool.rsplit("__", 1)[-1].lower()
+        return any(verb in name for verb in READ_VERBS)
+    return False
 
 #: How much of a file to classify. A record announces itself in its header; reading a
 #: gigabyte to find that out would make every `Read` slow to protect the rare huge file.
@@ -141,7 +176,7 @@ def candidate_paths(tool: str, args: dict) -> list[Path]:
     raw: list[str] = []
     if tool == "Bash" or tool == "shell":
         raw.extend(_bash_paths(str(args.get("command") or "")))
-    else:
+    elif _is_read_tool(tool):
         for key, value in args.items():
             if key.lower() in PATH_KEYS and isinstance(value, str) and value.strip():
                 raw.append(value)
