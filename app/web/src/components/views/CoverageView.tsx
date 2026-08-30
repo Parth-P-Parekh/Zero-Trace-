@@ -1,205 +1,226 @@
 'use client';
 
-import { Badge, Button, Card, Icon, StatusDot, Tag, Tooltip, EmptyState } from '@/ds';
-import { GridHead, PageHead, SectionLabel, StubNote } from '@/components/Chrome';
-import { classToken, count, exact, percent } from '@/lib/format';
-import type {
-  CoverageReport, Counterfactual, HarnessCoverageSnapshot, LedgerHead, StubNotice,
-} from '@/lib/types';
+/**
+ * Coverage - is this all the traffic?
+ *
+ * The first question a security buyer asks, and the one this product cannot yet
+ * answer. The gateway can prove what traversed it; proving the denominator needs
+ * DNS, firewall or flow logs, and none are connected. `CoverageMonitor.snapshot()`
+ * says so in three fields - `scope: gateway_observed_only`,
+ * `direct_egress_visible: false`, `denominator_available: false` - and this screen
+ * says the same thing in the same place instead of showing a percentage.
+ *
+ * So the dark card carries the absence, not a number. A coverage figure with no
+ * denominator is the single most persuasive false claim this product could make,
+ * and printing "98.7%" over an unmeasured base is how a security team stops
+ * believing the rest of the console.
+ */
+import { useState } from 'react';
+import { Card, SegmentedControl, StatusDot, Tag } from '@/ds';
+import { BarSeries, RatioBar } from '@/components/console/Draw';
+import { Caveat, Figure, Headline, Pair, Panel, Provenance } from '@/components/console/Frame';
+import { run } from '@/lib/benchmark';
+import { compact, exact, percent } from '@/lib/format';
 
-const COLUMNS = '84px minmax(0,1fr) 200px 168px';
+const DIMENSIONS: Record<string, { label: string; note: string; mono: boolean }> = {
+  harness: {
+    label: 'Harness',
+    note: 'Which tool made the call, from its user agent or an explicit header. “unknown” is a harness the gateway could not name, not a harness that bypassed it.',
+    mono: true,
+  },
+  route: {
+    label: 'Route',
+    note: 'The provider-compatible endpoint the request arrived on.',
+    mono: true,
+  },
+  channel: {
+    label: 'Channel',
+    note: 'How the caller reached the gateway. A CLI writes model output to disk, which is why tokenised values are refused there.',
+    mono: true,
+  },
+  workload: {
+    label: 'Workload',
+    note: 'The application behind the call.',
+    mono: false,
+  },
+};
 
-export function CoverageView({
-  report,
-  harnessCoverage,
-  counterfactual,
-  ledger,
-  stub,
-}: {
-  report: CoverageReport;
-  harnessCoverage: HarnessCoverageSnapshot | null;
-  counterfactual: Counterfactual;
-  ledger: LedgerHead;
-  stub: StubNotice;
-}) {
-  const bypass = report.events.filter((e) => e.verdict === 'direct_egress');
+export function CoverageView() {
+  const [dim, setDim] = useState('harness');
+  const { coverage, status, byActorRole } = run;
+  const table = coverage[dim as keyof typeof coverage] as Record<string, number>;
+  const unknown = coverage.harness.unknown ?? 0;
+
+  const roles = Object.entries(byActorRole).reduce<Record<string, Record<string, number>>>(
+    (acc, [key, n]) => {
+      const [role, action] = key.split(':');
+      acc[role] = acc[role] ?? {};
+      acc[role][action] = n;
+      return acc;
+    },
+    {},
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 'var(--page-max)' }}>
-      <PageHead
-        title="What reached a model without passing through"
-        sub="Provider domains are denied at the network boundary, so the gateway is the only route out. Anything that tried another one is named below."
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 'var(--page-max)' }}>
+      {/* Grid lives in `.zt-split` in globals.css, not inline: an inline
+          grid-template-columns beats the media query and the two columns never
+          collapsed on a narrow screen. */}
+      <div className="zt-split">
+        <div>
+          <Headline
+            sub={`Everything below is traffic that reached the gateway. What share of the
+                  organisation’s AI traffic that represents is a different number, and this
+                  deployment cannot compute it.`}
+          >
+            <Figure>{exact(status.total)}</Figure> payloads traversed the gateway.
+          </Headline>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(360px,1fr))', gap: 12, alignItems: 'stretch' }}>
-        {/* The coverage number is what a security buyer asks for first, so it takes the dark card. */}
-        <Card tone="dark" pad={28} style={{ display: 'flex', flexDirection: 'column' }}>
-          <SectionLabel onDark>Coverage · {report.windowLabel}</SectionLabel>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-            <span
-              className="zt-nums"
+          <div style={{ marginTop: 26 }}>
+            <RatioBar
+              segments={Object.entries(coverage.provider).map(([p, n], i) => ({
+                label: p,
+                value: n,
+                stop: [1.0, 0.52, 0.22][i] ?? 0.11,
+              }))}
+            />
+          </div>
+        </div>
+
+        {/* The dark card carries what is missing, not a percentage. */}
+        <Card tone="dark" pad={24}>
+          <Panel title="Coverage ratio" onDark>
+            <div
               style={{
-                font: 'var(--w-semibold) var(--t-72)/var(--lh-tight) var(--font-core)',
-                letterSpacing: 'var(--tr-display)', color: 'var(--ink-inverse)',
+                font: 'var(--w-regular) 33px/1.1 var(--font-core)',
+                letterSpacing: 'var(--tr-display)', color: 'rgba(242,242,240,0.36)',
               }}
             >
-              {percent(report.ratio)}
-            </span>
-          </div>
-          <p style={{ margin: '12px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-on-dark-body)', maxWidth: '46ch' }}>
-            {exact(report.viaZeroTrace)} requests traversed ZeroTrace. {count(bypass.length)} workloads
-            resolved a provider domain without it, and {exact(report.blockedAtBoundary)} connections
-            were refused at the boundary.
-          </p>
-          <div style={{ display: 'flex', gap: 20, marginTop: 'auto', paddingTop: 20, boxShadow: 'inset 0 1px 0 var(--border-on-dark)' }}>
-            <DarkStat label="Via ZeroTrace" value={exact(report.viaZeroTrace)} />
-            <DarkStat label="Direct egress" value={String(bypass.length)} signal="blocked" />
-            <DarkStat label="Refused at boundary" value={exact(report.blockedAtBoundary)} />
-          </div>
-        </Card>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Card pad={20}>
-            <SectionLabel>If ZeroTrace had been off</SectionLabel>
-            <p style={{ margin: '0 0 16px', font: 'var(--type-body)', maxWidth: '44ch' }}>
-              {exact(counterfactual.spans)} spans across {counterfactual.classes} classes would have
-              left the building in the {counterfactual.windowLabel}.
+              Not available
+            </div>
+            <p
+              style={{
+                margin: '16px 0 0', font: 'var(--type-body-sm)',
+                color: 'var(--text-on-dark-body)', maxWidth: '48ch',
+              }}
+            >
+              A coverage percentage is gateway traversals over all AI egress. The numerator
+              is known exactly. The denominator needs DNS resolutions, firewall logs or VPC
+              flow logs, and no connector is built - so the fraction has no bottom half and
+              is not shown.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {counterfactual.byClass.slice(0, 5).map((c) => {
-                const share = c.spans / counterfactual.byClass[0].spans;
-                return (
-                  <div key={c.entityClass} style={{ display: 'grid', gridTemplateColumns: '132px 1fr 52px', gap: 10, alignItems: 'center' }}>
-                    <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{classToken(c.entityClass)}</span>
-                    <span style={{ height: 4, background: 'rgba(17,17,17,0.11)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
-                      <span style={{ display: 'block', height: '100%', width: `${share * 100}%`, background: 'rgba(17,17,17,0.52)' }} />
-                    </span>
-                    <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)', textAlign: 'right' }}>{exact(c.spans)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          <Card pad={20}>
-            <SectionLabel>Evidence ledger</SectionLabel>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <StatusDot state={ledger.intact ? 'clean' : 'blocked'} size={6} />
-              <span style={{ font: 'var(--type-body-sm)' }}>
-                {ledger.intact ? 'Chain verified unbroken' : 'Chain diverges'}
-              </span>
-              <span style={{ flex: 1 }} />
-              <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{ledger.verifiedAt}</span>
-            </div>
-            <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px', font: 'var(--type-body-sm)' }}>
-              <dt style={{ color: 'var(--text-quiet)' }}>Height</dt>
-              <dd style={{ margin: 0, textAlign: 'right' }} className="zt-mono-sm zt-nums">{exact(ledger.height)}</dd>
-              <dt style={{ color: 'var(--text-quiet)' }}>Head</dt>
-              <dd style={{ margin: 0, textAlign: 'right' }} className="zt-mono-sm">{ledger.head}</dd>
-            </dl>
-            <div style={{ marginTop: 16 }}>
-              <Button variant="secondary" size="sm" icon="terminal" full>
-                Verify the chain yourself
-              </Button>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      {harnessCoverage ? (
-        <Card pad={0}>
-          <div style={{ padding: '16px 16px 12px' }}>
-            <SectionLabel>Observed harnesses · this gateway process</SectionLabel>
-            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-              {exact(harnessCoverage.total_requests)} checks traversed ZeroTrace since startup.
-              Direct egress is not visible here, so this is traversal evidence-not a coverage percentage.
-            </p>
-          </div>
-          <div className="zt-table">
-            <div>
-              <GridHead columns="minmax(160px,1fr) 210px 130px 100px 100px" cells={['Harness', 'Route', 'Provider', 'Requests', 'Blocked']} />
-              {harnessCoverage.harnesses.map((row) => (
-                <div
-                  key={`${row.harness}:${row.route}:${row.channel}`}
-                  style={{
-                    display: 'grid', gridTemplateColumns: 'minmax(160px,1fr) 210px 130px 100px 100px',
-                    gap: 12, minHeight: 'var(--row-h)', padding: '8px 16px', alignItems: 'center',
-                    boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-                  }}
-                >
-                  <span style={{ font: 'var(--type-body-sm)' }}>{row.harness}</span>
-                  <span className="zt-mono-sm">{row.route}</span>
-                  <span className="zt-mono-sm">{row.provider}</span>
-                  <span className="zt-mono-sm zt-nums">{exact(row.requests)}</span>
-                  <span className="zt-mono-sm zt-nums">{exact(row.blocked)}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 24 }}>
+              {[
+                ['scope', 'gateway_observed_only'],
+                ['direct_egress_visible', 'false'],
+                ['denominator_available', 'false'],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                  <span className="zt-mono-sm" style={{ color: 'rgba(242,242,240,0.36)' }}>{k}</span>
+                  <span className="zt-mono-sm" style={{ color: 'var(--text-on-dark-quiet)' }}>{v}</span>
                 </div>
               ))}
             </div>
-          </div>
-        </Card>
-      ) : null}
-
-      <Card pad={0}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '16px 16px 12px' }}>
-          <div style={{ flex: 1 }}>
-            <SectionLabel>Exceptions</SectionLabel>
-            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '62ch' }}>
-              Workloads that resolved a provider domain without traversing the gateway. Each one is a
-              service to onboard, not an alert to clear.
+            <p className="zt-mono-sm" style={{ margin: '20px 0 0', color: 'rgba(242,242,240,0.36)' }}>
+              GET /v1/coverage
             </p>
-          </div>
-          <Badge status={bypass.length ? 'blocked' : 'clean'} tone={bypass.length ? 'blocked' : 'clean'}>
-            {bypass.length ? `${count(bypass.length)} to chase` : 'None'}
-          </Badge>
-        </div>
+          </Panel>
+        </Card>
+      </div>
 
-        <div className="zt-table">
-        <div>
-        <GridHead columns={COLUMNS} cells={['Time', 'Workload', 'Destination', 'Verdict']} />
-
-        {report.events.length ? (
-          report.events.map((e) => (
-            <div
-              key={e.id}
-              style={{
-                display: 'grid', gridTemplateColumns: COLUMNS, gap: 12, alignItems: 'center',
-                minHeight: 'var(--row-h)', padding: '8px 16px',
-                boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-              }}
-            >
-              <span className="zt-mono-sm" style={{ color: 'var(--text-quiet)' }}>{e.ts}</span>
-              <span style={{ font: 'var(--type-body-sm)' }}>{e.workload}</span>
-              <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{e.dstDomain}</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <StatusDot state={e.verdict === 'direct_egress' ? 'blocked' : e.verdict === 'blocked_at_boundary' ? 'redacted' : 'clean'} size={6} />
-                <span style={{ font: 'var(--type-body-sm)' }}>
-                  {e.verdict === 'direct_egress' ? 'Direct egress' : e.verdict === 'blocked_at_boundary' ? 'Refused at boundary' : 'Via ZeroTrace'}
-                </span>
-              </span>
-            </div>
-          ))
-        ) : (
-          <EmptyState icon="shield" title="Nothing bypassed the gateway" description="Every AI-bound flow in this window traversed ZeroTrace." />
-        )}
-        </div>
-        </div>
+      {/* -- what did traverse ---------------------------------------------------- */}
+      <Card pad={22}>
+        <Panel
+          title="Observed traffic"
+          // The uniformity is said out loud. These counts are near-identical because
+          // the corpus picks a harness at random, and a reader who took the ranking
+          // for a real estate profile would be reading an artefact of the generator.
+          note={`${DIMENSIONS[dim].note} Counts are close to even because the corpus assigns this attribute at random; the ranking is not a measurement of any real estate.`}
+          right={
+            <SegmentedControl
+              size="sm"
+              value={dim}
+              onChange={setDim}
+              items={Object.entries(DIMENSIONS).map(([value, d]) => ({ value, label: d.label }))}
+            />
+          }
+        >
+          <BarSeries
+            rows={Object.entries(table)
+              .sort((a, b) => b[1] - a[1])
+              .map(([label, value]) => ({
+                label,
+                value,
+                mono: DIMENSIONS[dim].mono,
+                note: dim === 'harness' && label === 'unknown' ? 'unclassified' : undefined,
+              }))}
+            format={compact}
+            limit={12}
+          />
+        </Panel>
       </Card>
 
-      <StubNote capability={stub.capability} detail={stub.detail} />
-    </div>
-  );
-}
+      {/* -- who was calling ------------------------------------------------------ */}
+      <Card pad={22}>
+        <Panel
+          title="By actor role"
+          note="Resolved from the request headers, which are trivially spoofable on this path. Real identity is mTLS and OIDC, and neither is wired."
+        >
+          <div className="zt-table">
+            <div>
+              {Object.entries(roles)
+                .sort((a, b) =>
+                  Object.values(b[1]).reduce((x, y) => x + y, 0)
+                  - Object.values(a[1]).reduce((x, y) => x + y, 0))
+                .map(([role, acts]) => {
+                  const t = Object.values(acts).reduce((x, y) => x + y, 0);
+                  const stopped = (acts.block ?? 0) + (acts.tokenize ?? 0) + (acts.mask ?? 0);
+                  return (
+                    <div
+                      key={role}
+                      style={{
+                        display: 'grid', gridTemplateColumns: '160px 88px minmax(0,1fr) 84px',
+                        gap: 16, alignItems: 'center', padding: '12px 4px',
+                        boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
+                      }}
+                    >
+                      <span className="zt-mono-sm" style={{ color: role === 'unregistered' ? 'var(--signal-redacted)' : 'var(--text-body)' }}>
+                        {role}
+                      </span>
+                      <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)' }}>
+                        {compact(t)}
+                      </span>
+                      <RatioBar
+                        legend={false}
+                        height={6}
+                        total={t}
+                        segments={[
+                          { label: 'Allowed', value: acts.allow ?? 0, stop: 0.22 },
+                          { label: 'Tokenized', value: acts.tokenize ?? 0, stop: 0.52 },
+                          { label: 'Blocked', value: acts.block ?? 0, stop: 1.0 },
+                        ]}
+                      />
+                      <span className="zt-mono-sm zt-nums" style={{ textAlign: 'right' }}>
+                        {percent(stopped / t, 1)}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </Panel>
+      </Card>
 
-function DarkStat({ label, value, signal }: { label: string; value: string; signal?: 'blocked' }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span className="zt-eyebrow" style={{ color: 'rgba(242,242,240,0.52)' }}>{label}</span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        {signal ? <StatusDot state={signal} size={6} /> : null}
-        <span className="zt-nums" style={{ font: 'var(--w-semibold) var(--t-18)/1.2 var(--font-core)', color: 'var(--ink-inverse)' }}>
-          {value}
-        </span>
-      </span>
+      <Caveat>
+        <strong style={{ fontWeight: 'var(--w-medium)', color: 'var(--text-body)' }}>
+          {exact(unknown)} payloads arrived from a harness the gateway could not name.
+        </strong>{' '}
+        That is a labelling gap, not an enforcement gap - every one of them was inspected
+        and decided like the rest. It is reported because an unclassified share that grows
+        is the first sign a new tool has appeared in the estate.
+      </Caveat>
+
+      <Provenance scope="Coverage" />
     </div>
   );
 }

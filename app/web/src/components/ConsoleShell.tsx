@@ -30,10 +30,13 @@ export interface ConsoleShellProps {
 
 const ROUTE_TITLES: Array<[string, string]> = [
   ['/traffic', 'Traffic'],
+  ['/findings', 'Findings'],
   ['/detectors', 'Detectors'],
   ['/policy', 'Policy'],
   ['/coverage', 'Coverage'],
-  ['/licence', 'Licence'],
+  ['/environments', 'Environments'],
+  ['/licence', 'Metering'],
+  ['/method', 'Method'],
 ];
 
 function titleFor(pathname: string): string {
@@ -42,12 +45,18 @@ function titleFor(pathname: string): string {
   return hit ? hit[1] : 'Console';
 }
 
+/**
+ * Eight destinations under three headings, ordered by the question each answers:
+ * what moved, whether the machinery works, and whether any of it can be proved.
+ * Findings is its own route rather than a tab on Traffic - a payload is blocked
+ * once but can carry six findings, and the two counts belong on separate screens.
+ */
 const GROUPS = (counts: Record<string, number | string>): NavGroup[] => [
   {
     label: 'Traffic',
     items: [
       { href: '/traffic', icon: 'scan-line', label: 'Traffic', count: counts.traffic },
-      { href: '/traffic?tab=findings', icon: 'eye-off', label: 'Findings', count: counts.findings },
+      { href: '/findings', icon: 'eye-off', label: 'Findings', count: counts.findings },
     ],
   },
   {
@@ -61,7 +70,8 @@ const GROUPS = (counts: Record<string, number | string>): NavGroup[] => [
     label: 'Assurance',
     items: [
       { href: '/coverage', icon: 'shield', label: 'Coverage', count: counts.coverage },
-      { href: '/licence', icon: 'file-text', label: 'Licence' },
+      { href: '/licence', icon: 'file-text', label: 'Metering' },
+      { href: '/method', icon: 'book-open', label: 'Method' },
     ],
   },
 ];
@@ -122,13 +132,24 @@ export function ConsoleShell({
           </div>
         ))}
 
+        {/* Environments is a destination, not decoration. The two entries carried no
+            link before and could not be reached; both now open the comparison, which
+            is the only screen where one environment means anything. */}
         <div className="zt-rail-secondary" style={{ marginTop: 20 }}>
           <div className="zt-eyebrow zt-rail-label" style={{ padding: '0 10px 8px', color: 'rgba(242,242,240,0.36)' }}>
             Environments
           </div>
           <div className="zt-rail-items" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <RailItem icon="activity" label="production" active={false} />
-            <RailItem icon="activity" label="staging" active={false} />
+            {(['production', 'staging'] as const).map((env) => (
+              <Link key={env} href={`/environments#${env}`} style={{ textDecoration: 'none' }}>
+                <RailItem
+                  icon={env === 'production' ? 'shield' : 'activity'}
+                  label={env}
+                  count={env === 'production' ? 'enforce' : 'shadow'}
+                  active={pathname.startsWith('/environments')}
+                />
+              </Link>
+            ))}
           </div>
         </div>
 

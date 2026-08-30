@@ -1,0 +1,1136 @@
+{
+ "meta": {
+  "generated_at": "2026-08-30T05:23:28Z",
+  "records": 5000000,
+  "spans_scanned": 19537160,
+  "bytes_scanned": 1019690458,
+  "wall_seconds": 222.13,
+  "records_per_second": 22509.5,
+  "workers": 20,
+  "engines": "pyahocorasick/re2",
+  "corpus_seed": 20260830,
+  "note": "Synthetic corpus. Scan measured without the worker-thread hop; the async sample below measures that separately."
+ },
+ "latency": {
+  "p50": 270.5,
+  "p90": 778.5,
+  "p95": 1013.5,
+  "p99": 1917.5,
+  "p999": 17203.5,
+  "mean": 402.63,
+  "max": 134515.9
+ },
+ "latencyAsync": {
+  "records": 20000,
+  "p50_us": 260.2,
+  "p95_us": 565.4,
+  "p99_us": 888.6,
+  "max_us": 34584.6,
+  "mean_us": 295.92024
+ },
+ "throughput": {
+  "spans_per_record": 3.91,
+  "bytes_per_record": 203.9,
+  "mb_per_second": 4.6
+ },
+ "outcomes": {
+  "status": {
+   "clean": 3341035,
+   "blocked": 1475082,
+   "redacted": 183883
+  },
+  "action": {
+   "allow": 3341035,
+   "block": 1360954,
+   "tokenize": 298011
+  },
+  "verdict": {
+   "green": 3285924,
+   "red": 1671854,
+   "amber": 42222
+  },
+  "findings_total": 3601470,
+  "advisory_findings": 1054204,
+  "redactions_verified": 183885,
+  "verify_failures": 0,
+  "overlapping_redactions": 114128,
+  "readonly_findings_skipped": 82772,
+  "cache_hits": 15320091,
+  "cache_misses": 4217069
+ },
+ "integrity": {
+  "credential_records": 1067161,
+  "credential_not_blocked": 41329,
+  "credential_block_rate": 0.961272,
+  "tool_definition_enforced": 0,
+  "quiet_records": 3220469,
+  "quiet_false_positive_records": 57557,
+  "false_positive_rate": 0.01787224
+ },
+ "status": {
+  "clean": 3341035,
+  "redacted": 183883,
+  "blocked": 1475082,
+  "total": 5000000
+ },
+ "actions": {
+  "allow": 3341035,
+  "block": 1360954,
+  "tokenize": 298011
+ },
+ "verdicts": {
+  "green": 3285924,
+  "red": 1671854,
+  "amber": 42222
+ },
+ "byClass": [
+  {
+   "entityClass": "HIGH_ENTROPY_STRING",
+   "count": 1054204,
+   "share": 0.292715
+  },
+  {
+   "entityClass": "GENERIC_SECRET",
+   "count": 673451,
+   "share": 0.186993
+  },
+  {
+   "entityClass": "PAN",
+   "count": 374825,
+   "share": 0.104076
+  },
+  {
+   "entityClass": "AWS_ACCESS_KEY",
+   "count": 285232,
+   "share": 0.079199
+  },
+  {
+   "entityClass": "AADHAAR",
+   "count": 221000,
+   "share": 0.061364
+  },
+  {
+   "entityClass": "IFSC",
+   "count": 155603,
+   "share": 0.043205
+  },
+  {
+   "entityClass": "QUASI_IDENTIFIER_SET",
+   "count": 136925,
+   "share": 0.038019
+  },
+  {
+   "entityClass": "STRIPE_KEY",
+   "count": 112963,
+   "share": 0.031366
+  },
+  {
+   "entityClass": "ANTHROPIC_KEY",
+   "count": 102054,
+   "share": 0.028337
+  },
+  {
+   "entityClass": "GITHUB_TOKEN",
+   "count": 85212,
+   "share": 0.02366
+  },
+  {
+   "entityClass": "RAZORPAY_KEY",
+   "count": 64100,
+   "share": 0.017798
+  },
+  {
+   "entityClass": "OPENAI_KEY",
+   "count": 50007,
+   "share": 0.013885
+  },
+  {
+   "entityClass": "DB_URI",
+   "count": 47354,
+   "share": 0.013149
+  },
+  {
+   "entityClass": "UPI_VPA",
+   "count": 36959,
+   "share": 0.010262
+  },
+  {
+   "entityClass": "JWT",
+   "count": 36910,
+   "share": 0.010249
+  },
+  {
+   "entityClass": "SLACK_TOKEN",
+   "count": 36800,
+   "share": 0.010218
+  },
+  {
+   "entityClass": "GSTIN",
+   "count": 36682,
+   "share": 0.010185
+  },
+  {
+   "entityClass": "GOOGLE_API_KEY",
+   "count": 36513,
+   "share": 0.010138
+  },
+  {
+   "entityClass": "VOTER_ID",
+   "count": 27506,
+   "share": 0.007637
+  },
+  {
+   "entityClass": "PRIVATE_KEY",
+   "count": 27170,
+   "share": 0.007544
+  }
+ ],
+ "byFamily": [
+  {
+   "family": "CREDENTIAL",
+   "count": 1557766,
+   "share": 0.432536
+  },
+  {
+   "family": "LOW_CONFIDENCE",
+   "count": 1054204,
+   "share": 0.292715
+  },
+  {
+   "family": "INDIA_ID",
+   "count": 852575,
+   "share": 0.23673
+  },
+  {
+   "family": "COMPOSITE",
+   "count": 136925,
+   "share": 0.038019
+  }
+ ],
+ "byStage": {
+  "S0": 2791094,
+  "S1": 673451,
+  "S2": 136925
+ },
+ "byOrigin": {
+  "user": 3427423,
+  "system": 91275,
+  "tool_definition": 82771,
+  "metadata": 1
+ },
+ "byConfidence": {
+  "0.6": 1090411,
+  "0.7": 27506,
+  "0.8": 253271,
+  "0.9": 888416,
+  "1.0": 1341866
+ },
+ "bySpanPath": {
+  "messages[0].content": 3162812,
+  "messages[2].content[0].content": 182466,
+  "system": 91275,
+  "tools[0].description": 82771,
+  "content[0].text": 41181,
+  "choices[0].message.content": 40964,
+  "id": 1
+ },
+ "byDetector": {
+  "high_entropy": 1054204,
+  "(unnamed)": 755416,
+  "pan": 374825,
+  "aadhaar": 221000,
+  "s1:api_key_key:env_assignment": 207222,
+  "s1:secret_key:env_assignment": 186443,
+  "ifsc": 155603,
+  "composite_record": 136925,
+  "s1:table_column": 128322,
+  "anthropic_key": 74101,
+  "s1:password_key:env_assignment": 56517,
+  "upi_vpa": 36959,
+  "gstin": 36682,
+  "s1:bare_token_key:yaml_or_json": 36207,
+  "s1:secret_key:yaml_or_json": 29264,
+  "voter_id": 27506,
+  "s1:password_key:yaml_or_json": 14828,
+  "s1:api_key_key:yaml_or_json": 14648,
+  "db_uri+base64": 10747,
+  "stripe_key+base64": 10743,
+  "anthropic_key+base64": 10714,
+  "github_token+base64": 10667,
+  "anthropic_key+separators": 6594,
+  "anthropic_key+zero_width": 5333
+ },
+ "detectors": [
+  {
+   "entityClass": "STRIPE_KEY",
+   "expected": 96051,
+   "found": 85292,
+   "missed": 10759,
+   "recall": 0.887987,
+   "precision": 1.0,
+   "f1": 0.940671,
+   "falsePositives": 0,
+   "runtimeUs": 78.184,
+   "detectors": [
+    "high_entropy"
+   ],
+   "observed": 112963
+  },
+  {
+   "entityClass": "GITHUB_TOKEN",
+   "expected": 95861,
+   "found": 85212,
+   "missed": 10649,
+   "recall": 0.888912,
+   "precision": 1.0,
+   "f1": 0.941189,
+   "falsePositives": 0,
+   "runtimeUs": 97.039,
+   "detectors": [
+    "high_entropy"
+   ],
+   "observed": 85212
+  },
+  {
+   "entityClass": "DB_URI",
+   "expected": 52622,
+   "found": 47354,
+   "missed": 5268,
+   "recall": 0.89989,
+   "precision": 1.0,
+   "f1": 0.947307,
+   "falsePositives": 0,
+   "runtimeUs": 43.653,
+   "detectors": [],
+   "observed": 47354
+  },
+  {
+   "entityClass": "ANTHROPIC_KEY",
+   "expected": 100784,
+   "found": 96742,
+   "missed": 4042,
+   "recall": 0.959894,
+   "precision": 1.0,
+   "f1": 0.979537,
+   "falsePositives": 0,
+   "runtimeUs": 127.121,
+   "detectors": [
+    "anthropic_key",
+    "high_entropy"
+   ],
+   "observed": 102054
+  },
+  {
+   "entityClass": "AWS_ACCESS_KEY",
+   "expected": 268404,
+   "found": 257793,
+   "missed": 10611,
+   "recall": 0.960466,
+   "precision": 1.0,
+   "f1": 0.979834,
+   "falsePositives": 0,
+   "runtimeUs": 29.382,
+   "detectors": [],
+   "observed": 285232
+  },
+  {
+   "entityClass": "IFSC",
+   "expected": 155604,
+   "found": 155603,
+   "missed": 1,
+   "recall": 0.999994,
+   "precision": 1.0,
+   "f1": 0.999997,
+   "falsePositives": 0,
+   "runtimeUs": 82.311,
+   "detectors": [
+    "ifsc"
+   ],
+   "observed": 155603
+  },
+  {
+   "entityClass": "AADHAAR",
+   "expected": 63873,
+   "found": 63873,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 0.759715,
+   "f1": 0.863452,
+   "falsePositives": 20202,
+   "runtimeUs": 66.45,
+   "detectors": [
+    "aadhaar"
+   ],
+   "observed": 221000
+  },
+  {
+   "entityClass": "GENERIC_SECRET",
+   "expected": 201939,
+   "found": 201939,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 0.844092,
+   "f1": 0.915455,
+   "falsePositives": 37299,
+   "runtimeUs": null,
+   "detectors": [],
+   "observed": 673451
+  },
+  {
+   "entityClass": "GOOGLE_API_KEY",
+   "expected": 36513,
+   "found": 36513,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 93.171,
+   "detectors": [
+    "high_entropy"
+   ],
+   "observed": 36513
+  },
+  {
+   "entityClass": "GSTIN",
+   "expected": 36682,
+   "found": 36682,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 97.112,
+   "detectors": [
+    "gstin"
+   ],
+   "observed": 36682
+  },
+  {
+   "entityClass": "JWT",
+   "expected": 36910,
+   "found": 36910,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 204.373,
+   "detectors": [
+    "high_entropy"
+   ],
+   "observed": 36910
+  },
+  {
+   "entityClass": "OPENAI_KEY",
+   "expected": 50007,
+   "found": 50007,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 101.236,
+   "detectors": [
+    "high_entropy"
+   ],
+   "observed": 50007
+  },
+  {
+   "entityClass": "PAN",
+   "expected": 283540,
+   "found": 283540,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 0.99982,
+   "f1": 0.99991,
+   "falsePositives": 51,
+   "runtimeUs": 37.921,
+   "detectors": [
+    "pan"
+   ],
+   "observed": 374825
+  },
+  {
+   "entityClass": "PRIVATE_KEY",
+   "expected": 27170,
+   "found": 27170,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 304.19,
+   "detectors": [
+    "high_entropy"
+   ],
+   "observed": 27170
+  },
+  {
+   "entityClass": "QUASI_IDENTIFIER_SET",
+   "expected": 136925,
+   "found": 136925,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": null,
+   "detectors": [],
+   "observed": 136925
+  },
+  {
+   "entityClass": "RAZORPAY_KEY",
+   "expected": 64100,
+   "found": 64100,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 64.328,
+   "detectors": [],
+   "observed": 64100
+  },
+  {
+   "entityClass": "SLACK_TOKEN",
+   "expected": 36800,
+   "found": 36800,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 109.552,
+   "detectors": [
+    "high_entropy"
+   ],
+   "observed": 36800
+  },
+  {
+   "entityClass": "UPI_VPA",
+   "expected": 36959,
+   "found": 36959,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 1.0,
+   "f1": 1.0,
+   "falsePositives": 0,
+   "runtimeUs": 67.929,
+   "detectors": [
+    "upi_vpa"
+   ],
+   "observed": 36959
+  },
+  {
+   "entityClass": "VOTER_ID",
+   "expected": 27495,
+   "found": 27495,
+   "missed": 0,
+   "recall": 1.0,
+   "precision": 0.9996,
+   "f1": 0.9998,
+   "falsePositives": 11,
+   "runtimeUs": 78.391,
+   "detectors": [
+    "voter_id"
+   ],
+   "observed": 27506
+  }
+ ],
+ "evasion": [
+  {
+   "family": "cred_obfuscated",
+   "variant": "spaced",
+   "records": 21300,
+   "detectionRate": 0.060188,
+   "blockRate": 0.060188,
+   "ramp": 0.11
+  },
+  {
+   "family": "cred_obfuscated",
+   "variant": "zerowidth",
+   "records": 21376,
+   "detectionRate": 0.249485,
+   "blockRate": 0.249485,
+   "ramp": 0.22
+  },
+  {
+   "family": "cred_encoded",
+   "variant": "url_encoded",
+   "records": 21246,
+   "detectionRate": 0.752047,
+   "blockRate": 0.752047,
+   "ramp": 0.72
+  },
+  {
+   "family": "cred_encoded",
+   "variant": "k8s_secret",
+   "records": 21488,
+   "detectionRate": 1.0,
+   "blockRate": 1.0,
+   "ramp": 1.0
+  },
+  {
+   "family": "cred_encoded",
+   "variant": "powershell",
+   "records": 21383,
+   "detectionRate": 1.0,
+   "blockRate": 1.0,
+   "ramp": 1.0
+  },
+  {
+   "family": "cred_obfuscated",
+   "variant": "wrapped",
+   "records": 21177,
+   "detectionRate": 1.0,
+   "blockRate": 1.0,
+   "ramp": 1.0
+  }
+ ],
+ "collisions": {
+  "records": 318979,
+  "rate": 0.0637958,
+  "reached_the_splice": 114128,
+  "pairs": {
+   "AWS_ACCESS_KEY+GENERIC_SECRET": 160566,
+   "AADHAAR+QUASI_IDENTIFIER_SET": 136925,
+   "DB_URI+GENERIC_SECRET": 5420,
+   "GENERIC_SECRET+STRIPE_KEY": 5371,
+   "ANTHROPIC_KEY+GENERIC_SECRET": 5368,
+   "GENERIC_SECRET+GITHUB_TOKEN": 5329
+  }
+ },
+ "degraded": {
+  "amber_no_tier3": 42222
+ },
+ "degradedFormats": {
+  "AADHAAR": 110764,
+  "PAN": 100258,
+  "IFSC": 36326,
+  "GSTIN": 18401
+ },
+ "coverage": {
+  "harness": {
+   "claude": 715360,
+   "openai-chat-compatible": 715195,
+   "cursor": 714913,
+   "anthropic-compatible": 713783,
+   "codex": 713727,
+   "openai-responses-compatible": 713708,
+   "unknown": 713314
+  },
+  "route": {
+   "/v1/messages": 2500385,
+   "/v1/chat/completions": 1250296,
+   "/v1/responses": 1249319
+  },
+  "provider": {
+   "anthropic": 2500385,
+   "openai": 2499615
+  },
+  "channel": {
+   "http": 1251153,
+   "cli": 1250284,
+   "mcp": 1249352,
+   "sdk": 1249211
+  },
+  "workload": {
+   "care-assist": 417861,
+   "checkout-api": 417549,
+   "analytics-notebook": 416834,
+   "infra-runbook-agent": 416741,
+   "hr-assist": 416715,
+   "revenue-audit": 416701,
+   "vendor-portal": 416696,
+   "onboarding-bot": 416579,
+   "claims-triage": 416401,
+   "support-copilot": 416260,
+   "batch-exporter": 415942,
+   "grievance-desk": 415721
+  }
+ },
+ "environments": {
+  "production": {
+   "actions": {
+    "allow": 2606123,
+    "block": 1061409,
+    "tokenize": 232238
+   },
+   "records": 3899770,
+   "would_block": 1061409,
+   "would_redact": 232238,
+   "allowed": 2606123,
+   "intervention_rate": 0.331724,
+   "mode": "enforce"
+  },
+  "staging": {
+   "actions": {
+    "allow": 734912,
+    "block": 299545,
+    "tokenize": 65773
+   },
+   "records": 1100230,
+   "would_block": 299545,
+   "would_redact": 65773,
+   "allowed": 734912,
+   "intervention_rate": 0.332038,
+   "mode": "shadow"
+  }
+ },
+ "byActorRole": {
+  "officer:allow": 1337647,
+  "auditor:block": 136267,
+  "auditor:allow": 334594,
+  "support_agent:block": 135989,
+  "unregistered:allow": 333151,
+  "officer:block": 544198,
+  "service:allow": 334308,
+  "director:block": 136292,
+  "director:allow": 333674,
+  "service:block": 135922,
+  "contractor:block": 136066,
+  "unregistered:block": 136220,
+  "support_agent:allow": 333881,
+  "contractor:tokenize": 29937,
+  "contractor:allow": 333780,
+  "officer:tokenize": 118828,
+  "director:tokenize": 29671,
+  "service:tokenize": 29646,
+  "support_agent:tokenize": 30073,
+  "unregistered:tokenize": 29774,
+  "auditor:tokenize": 30082
+ },
+ "scenarios": {
+  "clean_code": 1370327,
+  "clean_prose": 823263,
+  "clean_agent_trace": 409634,
+  "decoy_placeholder": 206100,
+  "decoy_high_entropy": 182948,
+  "decoy_docs_example": 160566,
+  "composite_record": 136925,
+  "decoy_near_miss_id": 136790,
+  "s1_config_assign": 91751,
+  "composite_weak": 91407,
+  "nested_tool_result": 91233,
+  "multi_leak": 82751,
+  "s1_config_yaml": 73459,
+  "cred_encoded": 64117,
+  "india_pan": 63898,
+  "india_aadhaar": 63873,
+  "cred_obfuscated": 63853,
+  "readonly_tool_def": 55110,
+  "readonly_system": 54754,
+  "cred_anthropic": 50495,
+  "cred_openai": 50007,
+  "cred_aws": 45952,
+  "cred_github": 45750,
+  "inbound_customer": 45658,
+  "inbound_medical": 45550,
+  "india_upi": 36959,
+  "cred_jwt": 36910,
+  "cred_slack": 36800,
+  "s1_table": 36729,
+  "india_gstin": 36682,
+  "cred_db_uri": 36607,
+  "cred_razorpay": 36590,
+  "cred_google": 36513,
+  "inbound_financial": 36487,
+  "cred_stripe": 36387,
+  "india_ifsc": 36366,
+  "inbound_hr": 36134,
+  "india_voter": 27495,
+  "cred_private_key": 27170
+ },
+ "scenarioEnforcement": {
+  "clean_code": {
+   "records": 1370327,
+   "enforced": 0,
+   "rate": 0.0
+  },
+  "clean_prose": {
+   "records": 823263,
+   "enforced": 0,
+   "rate": 0.0
+  },
+  "clean_agent_trace": {
+   "records": 409634,
+   "enforced": 0,
+   "rate": 0.0
+  },
+  "decoy_placeholder": {
+   "records": 206100,
+   "enforced": 37299,
+   "rate": 0.180975
+  },
+  "decoy_high_entropy": {
+   "records": 182948,
+   "enforced": 0,
+   "rate": 0.0
+  },
+  "decoy_docs_example": {
+   "records": 160566,
+   "enforced": 160566,
+   "rate": 1.0
+  },
+  "composite_record": {
+   "records": 136925,
+   "enforced": 136925,
+   "rate": 1.0
+  },
+  "decoy_near_miss_id": {
+   "records": 136790,
+   "enforced": 12184,
+   "rate": 0.089071
+  },
+  "s1_config_assign": {
+   "records": 91751,
+   "enforced": 91751,
+   "rate": 1.0
+  },
+  "composite_weak": {
+   "records": 91407,
+   "enforced": 8074,
+   "rate": 0.08833
+  },
+  "nested_tool_result": {
+   "records": 91233,
+   "enforced": 91233,
+   "rate": 1.0
+  },
+  "multi_leak": {
+   "records": 82751,
+   "enforced": 82751,
+   "rate": 1.0
+  },
+  "s1_config_yaml": {
+   "records": 73459,
+   "enforced": 73459,
+   "rate": 1.0
+  },
+  "cred_encoded": {
+   "records": 64117,
+   "enforced": 58849,
+   "rate": 0.917838
+  },
+  "india_pan": {
+   "records": 63898,
+   "enforced": 63898,
+   "rate": 1.0
+  },
+  "india_aadhaar": {
+   "records": 63873,
+   "enforced": 63873,
+   "rate": 1.0
+  },
+  "cred_obfuscated": {
+   "records": 63853,
+   "enforced": 27792,
+   "rate": 0.43525
+  },
+  "readonly_tool_def": {
+   "records": 55110,
+   "enforced": 0,
+   "rate": 0.0
+  },
+  "readonly_system": {
+   "records": 54754,
+   "enforced": 54754,
+   "rate": 1.0
+  },
+  "cred_anthropic": {
+   "records": 50495,
+   "enforced": 50495,
+   "rate": 1.0
+  },
+  "cred_openai": {
+   "records": 50007,
+   "enforced": 50007,
+   "rate": 1.0
+  },
+  "cred_aws": {
+   "records": 45952,
+   "enforced": 45952,
+   "rate": 1.0
+  },
+  "cred_github": {
+   "records": 45750,
+   "enforced": 45750,
+   "rate": 1.0
+  },
+  "inbound_customer": {
+   "records": 45658,
+   "enforced": 45658,
+   "rate": 1.0
+  },
+  "inbound_medical": {
+   "records": 45550,
+   "enforced": 0,
+   "rate": 0.0
+  },
+  "india_upi": {
+   "records": 36959,
+   "enforced": 36959,
+   "rate": 1.0
+  },
+  "cred_jwt": {
+   "records": 36910,
+   "enforced": 36910,
+   "rate": 1.0
+  },
+  "cred_slack": {
+   "records": 36800,
+   "enforced": 36800,
+   "rate": 1.0
+  },
+  "s1_table": {
+   "records": 36729,
+   "enforced": 36729,
+   "rate": 1.0
+  },
+  "india_gstin": {
+   "records": 36682,
+   "enforced": 36682,
+   "rate": 1.0
+  },
+  "cred_db_uri": {
+   "records": 36607,
+   "enforced": 36607,
+   "rate": 1.0
+  },
+  "cred_razorpay": {
+   "records": 36590,
+   "enforced": 36590,
+   "rate": 1.0
+  },
+  "cred_google": {
+   "records": 36513,
+   "enforced": 36513,
+   "rate": 1.0
+  },
+  "inbound_financial": {
+   "records": 36487,
+   "enforced": 36487,
+   "rate": 1.0
+  },
+  "cred_stripe": {
+   "records": 36387,
+   "enforced": 36387,
+   "rate": 1.0
+  },
+  "india_ifsc": {
+   "records": 36366,
+   "enforced": 36366,
+   "rate": 1.0
+  },
+  "inbound_hr": {
+   "records": 36134,
+   "enforced": 0,
+   "rate": 0.0
+  },
+  "india_voter": {
+   "records": 27495,
+   "enforced": 27495,
+   "rate": 1.0
+  },
+  "cred_private_key": {
+   "records": 27170,
+   "enforced": 27170,
+   "rate": 1.0
+  }
+ },
+ "hours": [
+  {
+   "hour": 0,
+   "total": 208358,
+   "blocked": 61510,
+   "redacted": 7649,
+   "share": 0.9956,
+   "clean": 139199
+  },
+  {
+   "hour": 1,
+   "total": 208505,
+   "blocked": 61261,
+   "redacted": 7742,
+   "share": 0.9963,
+   "clean": 139502
+  },
+  {
+   "hour": 2,
+   "total": 208162,
+   "blocked": 61374,
+   "redacted": 7605,
+   "share": 0.9947,
+   "clean": 139183
+  },
+  {
+   "hour": 3,
+   "total": 208196,
+   "blocked": 61511,
+   "redacted": 7723,
+   "share": 0.9948,
+   "clean": 138962
+  },
+  {
+   "hour": 4,
+   "total": 207673,
+   "blocked": 60960,
+   "redacted": 7546,
+   "share": 0.9923,
+   "clean": 139167
+  },
+  {
+   "hour": 5,
+   "total": 208832,
+   "blocked": 61471,
+   "redacted": 7709,
+   "share": 0.9979,
+   "clean": 139652
+  },
+  {
+   "hour": 6,
+   "total": 207971,
+   "blocked": 61559,
+   "redacted": 7630,
+   "share": 0.9938,
+   "clean": 138782
+  },
+  {
+   "hour": 7,
+   "total": 207570,
+   "blocked": 61125,
+   "redacted": 7714,
+   "share": 0.9919,
+   "clean": 138731
+  },
+  {
+   "hour": 8,
+   "total": 207868,
+   "blocked": 61386,
+   "redacted": 7525,
+   "share": 0.9933,
+   "clean": 138957
+  },
+  {
+   "hour": 9,
+   "total": 208638,
+   "blocked": 61604,
+   "redacted": 7717,
+   "share": 0.997,
+   "clean": 139317
+  },
+  {
+   "hour": 10,
+   "total": 208981,
+   "blocked": 61895,
+   "redacted": 7680,
+   "share": 0.9986,
+   "clean": 139406
+  },
+  {
+   "hour": 11,
+   "total": 208026,
+   "blocked": 61246,
+   "redacted": 7623,
+   "share": 0.994,
+   "clean": 139157
+  },
+  {
+   "hour": 12,
+   "total": 208836,
+   "blocked": 61459,
+   "redacted": 7536,
+   "share": 0.9979,
+   "clean": 139841
+  },
+  {
+   "hour": 13,
+   "total": 208136,
+   "blocked": 61850,
+   "redacted": 7649,
+   "share": 0.9946,
+   "clean": 138637
+  },
+  {
+   "hour": 14,
+   "total": 207920,
+   "blocked": 61446,
+   "redacted": 7711,
+   "share": 0.9935,
+   "clean": 138763
+  },
+  {
+   "hour": 15,
+   "total": 208090,
+   "blocked": 61391,
+   "redacted": 7788,
+   "share": 0.9943,
+   "clean": 138911
+  },
+  {
+   "hour": 16,
+   "total": 208650,
+   "blocked": 61381,
+   "redacted": 7685,
+   "share": 0.997,
+   "clean": 139584
+  },
+  {
+   "hour": 17,
+   "total": 208718,
+   "blocked": 62042,
+   "redacted": 7780,
+   "share": 0.9973,
+   "clean": 138896
+  },
+  {
+   "hour": 18,
+   "total": 208588,
+   "blocked": 61495,
+   "redacted": 7604,
+   "share": 0.9967,
+   "clean": 139489
+  },
+  {
+   "hour": 19,
+   "total": 208288,
+   "blocked": 61341,
+   "redacted": 7565,
+   "share": 0.9953,
+   "clean": 139382
+  },
+  {
+   "hour": 20,
+   "total": 208298,
+   "blocked": 61120,
+   "redacted": 7673,
+   "share": 0.9953,
+   "clean": 139505
+  },
+  {
+   "hour": 21,
+   "total": 209275,
+   "blocked": 62081,
+   "redacted": 7644,
+   "share": 1.0,
+   "clean": 139550
+  },
+  {
+   "hour": 22,
+   "total": 208716,
+   "blocked": 61544,
+   "redacted": 7630,
+   "share": 0.9973,
+   "clean": 139542
+  },
+  {
+   "hour": 23,
+   "total": 207705,
+   "blocked": 61030,
+   "redacted": 7755,
+   "share": 0.9925,
+   "clean": 138920
+  }
+ ]
+}

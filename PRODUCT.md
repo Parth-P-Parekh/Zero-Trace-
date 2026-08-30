@@ -97,7 +97,10 @@ Binding, from `app/ZeroTrace Design System/` (the user made this system authorit
 - `docs/00_SSOT_RULES_AND_SCORING.md` — binding rules and evidence IDs.
 - `app/ZeroTrace Design System/` — tokens, 23 components, two UI kits (console and marketing), guidelines.
 
-**Absences that must not be fabricated:** no backend exists — CODE-01 is a plan, not code. No customers, no testimonials, no benchmark results, no press, no real traffic. The seven logo SVGs named in the logo sheet were never supplied; the `Wordmark` component renders live type as a flagged stand-in. All pricing figures in PROD-01 §12 are marked assumed. The frontend runs on fixtures shaped to the PROD-01 §8 / CODE-01 §15 contract, behind one typed client, so a real backend swaps in without touching the views.
+- `gateway/` (~19.5k lines) and `Control-DB/zerotrace/` (~6.9k lines) — the data plane and control plane. **This is real code, not a plan**, and it supersedes the earlier note here that no backend existed.
+- `test_dashboard/` — a 5,000,000-payload benchmark through that pipeline, and the console's entire data source. See its README for what the run found.
+
+**Absences that must not be fabricated:** no customers, no testimonials, no press, no real production traffic — the benchmark corpus is synthetic and says so on every screen that quotes it. The seven logo SVGs named in the logo sheet were never supplied; the `Wordmark` component renders live type as a flagged stand-in. All pricing figures in PROD-01 §12 are marked assumed, and the console shows no price at all because no benchmark can produce one. Not built and labelled as such wherever a screen touches them: the S2 entity model (so `PERSON`, `ADDRESS`, `ORG` never fire), shape-preserving tokens, cloud flow-log connectors (so there is no coverage denominator), OIDC/SCIM, streaming inbound scan, and Loop 2's model-backed adjudicator.
 
 ## Product Principles
 

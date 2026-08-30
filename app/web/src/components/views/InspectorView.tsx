@@ -1,244 +1,245 @@
 'use client';
 
+/**
+ * Inspector - why this payload got this decision.
+ *
+ * The console never renders a sensitive value, so this screen cannot show the
+ * payload. What it shows instead is everything the product actually keeps: the
+ * span path, the class, the offsets, the stage that found it, the origin it sat
+ * in, and whether that origin allowed it to enforce. That is enough to defend a
+ * decision to an auditor and not enough to leak anything, which is the same
+ * property `Finding` has by construction.
+ *
+ * The masked run is drawn at the true character length from `start` and `end`,
+ * because the length is a fact the product holds and the shape of the redaction
+ * is what makes the decision legible.
+ */
 import Link from 'next/link';
-import { useState } from 'react';
-import { Badge, Button, Card, Icon, PayloadView, StatusDot, Tag, Tooltip } from '@/ds';
-import { GridHead, SectionLabel } from '@/components/Chrome';
-import { classToken, count, legLabel, ms, risk, statusLabel } from '@/lib/format';
-import { STAGE_BUDGET_MS, STAGE_LABEL } from '@/lib/types';
-import type { PayloadLeg, RequestRecord, Stage } from '@/lib/types';
+import { Badge, Card, Icon, StatusDot, Tag, Tooltip } from '@/ds';
+import { Column, Headline, Pair, Panel, Provenance, TableHead, columns } from '@/components/console/Frame';
+import { clock, type SampleFinding, type SampleRow } from '@/lib/benchmark';
+import { classToken, exact, micros } from '@/lib/format';
 
-const FINDING_COLUMNS = '84px minmax(0,1fr) 148px 58px 62px 96px';
-const HOT_PATH: Stage[] = ['S0', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6'];
+const COLS: Column[] = [
+  { key: 'path', head: 'Span path', w: 'minmax(0,1.6fr)' },
+  { key: 'class', head: 'Class', w: '164px' },
+  { key: 'span', head: 'Redacted run', w: 'minmax(0,1fr)' },
+  { key: 'offsets', head: 'Offsets', w: '104px' },
+  { key: 'conf', head: 'Conf.', w: '58px', align: 'right' },
+  { key: 'stage', head: 'Stage', w: '48px' },
+  { key: 'enforce', head: 'Enforces', w: '92px' },
+];
 
-export function InspectorView({
-  request,
-  payloads,
-}: {
-  request: RequestRecord;
-  payloads: PayloadLeg[];
-}) {
-  const [leg, setLeg] = useState<'outbound' | 'inbound'>('outbound');
-  const shown = payloads.find((p) => p.leg === leg) ?? payloads[0];
-  const legsPresent = payloads.map((p) => p.leg);
-  const classes = request.findings.map((f) => f.entityClass);
+const ORIGIN_COPY: Record<string, string> = {
+  user: 'user turn',
+  assistant: 'assistant turn',
+  system: 'developer instructions',
+  tool_definition: 'tool schema',
+  tool_result: 'tool result',
+  metadata: 'protocol field',
+};
+
+export function InspectorView({ row }: { row: SampleRow }) {
+  const enforceable = row.findings.filter((f) => !f.advisory && f.origin !== 'tool_definition');
+  const classes = Array.from(new Set(enforceable.map((f) => f.class)));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 'var(--page-max)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Link href="/traffic" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none', color: 'var(--text-quiet)' }}>
-          {/* The working icon set has no chevron-left; this is the same glyph, turned. */}
-          <span style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}>
-            <Icon name="chevron-right" size={14} />
-          </span>
-          <span style={{ font: 'var(--type-body-sm)' }}>Traffic</span>
-        </Link>
-        <span style={{ color: 'var(--text-faint)' }}>·</span>
-        <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{request.id}</span>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 'var(--page-max)' }}>
+      <Link
+        href="/traffic"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none',
+          font: 'var(--type-body-sm)', color: 'var(--text-quiet)', width: 'fit-content',
+        }}
+      >
+        <Icon name="chevron-right" size={13} style={{ transform: 'rotate(180deg)' }} />
+        All traffic
+      </Link>
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap' }}>
+      {/* Grid lives in `.zt-split` in globals.css, not inline: an inline
+          grid-template-columns beats the media query and the two columns never
+          collapsed on a narrow screen. */}
+      <div className="zt-split">
         <div>
-          <h1 style={{ font: 'var(--type-h2)', letterSpacing: 'var(--tr-heading)', margin: 0, maxWidth: '30ch' }}>
-            {request.status === 'blocked'
-              ? 'Blocked before dispatch'
-              : request.status === 'clean'
-                ? 'Clean. Nothing redacted.'
-                : `${count(request.findings.length)} values redacted, dispatched`}
-          </h1>
-          <p style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)', margin: '8px 0 0' }}>
-            {[
-              request.workload,
-              // A service account's label is often its workload name. Saying it twice
-              // reads as a bug rather than as detail.
-              request.actor.unregistered
-                ? 'unregistered workload'
-                : request.actor.label === request.workload
-                  ? null
-                  : request.actor.label,
-              request.ts,
-            ].filter(Boolean).join(' · ')}
-          </p>
+          <Headline
+            sub={
+              row.status === 'blocked'
+                ? 'Nothing was dispatched. The caller received a provider-shaped notice naming what was found, so the tool kept working rather than erroring.'
+                : row.status === 'redacted'
+                  ? 'The payload was rewritten and the rewrite was verified against the bytes about to leave before anything was sent.'
+                  : 'Nothing matched a rule. The payload was dispatched unmodified.'
+            }
+          >
+            {row.status === 'blocked' ? 'Blocked at the boundary.'
+              : row.status === 'redacted' ? 'Redacted, then dispatched.'
+                : 'Clean. Dispatched unmodified.'}
+          </Headline>
+
+          <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginTop: 26 }}>
+            <Pair value={micros(row.latency_us)} of="scan time" />
+            <Pair value={exact(row.findings.length)} of="findings" />
+            <Pair value={String(row.cache_hits)} of={`cache hits of ${row.cache_hits + row.cache_misses} spans`} />
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {request.degraded ? (
-            <Badge status="info" tone="info">{request.degraded} failed open</Badge>
-          ) : null}
-          <Badge status={request.status} tone={request.status}>{statusLabel(request.status)}</Badge>
-        </div>
+
+        <Card tone="dark" pad={24}>
+          <Panel title="The decision" onDark>
+            <dl style={{ margin: 0, display: 'flex', flexDirection: 'column', gap: 11 }}>
+              {[
+                ['request', row.id],
+                ['action', row.action],
+                ['verdict', row.verdict],
+                ['rule', row.rule_index === null ? 'default' : `index ${row.rule_index}`],
+                ['leg', row.leg],
+                ['actor', `${row.actor.id} · ${row.actor.role}`],
+                ['groups', row.actor.groups.length ? row.actor.groups.join(', ') : 'none'],
+                ['channel', `${row.channel} · ${row.harness}`],
+                ['route', `${row.provider} ${row.route}`],
+                ['environment', row.env],
+                ['degraded', row.degraded ?? 'none'],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+                  <dt className="zt-mono-sm" style={{ color: 'rgba(242,242,240,0.36)' }}>{k}</dt>
+                  <dd
+                    className="zt-mono-sm"
+                    style={{
+                      margin: 0, color: 'var(--text-on-dark-quiet)', textAlign: 'right',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {v}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </Panel>
+        </Card>
       </div>
 
-      {/* The payload is the focal object on this screen, so it is the dark card. */}
-      {shown ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {legsPresent.length > 1 ? (
-            <div style={{ display: 'flex', gap: 6 }}>
-              {payloads.map((p) => (
-                <button
-                  key={p.leg}
-                  onClick={() => setLeg(p.leg)}
-                  style={{
-                    font: 'var(--type-label)', padding: '6px 12px', borderRadius: 'var(--r-pill)',
-                    border: '1px solid', cursor: 'pointer',
-                    borderColor: leg === p.leg ? 'var(--ink)' : 'var(--border-line)',
-                    background: leg === p.leg ? 'var(--ink)' : 'transparent',
-                    color: leg === p.leg ? 'var(--ink-inverse)' : 'var(--text-body)',
-                    transition: 'var(--t-hover)',
-                  }}
-                >
-                  {legLabel(p.leg)} leg
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <PayloadView
-            id={request.ledgerId}
-            method={shown.method}
-            path={shown.path}
-            model={shown.model}
-            lines={shown.lines as never}
-            status={shown.status}
-            latency={shown.latency}
-          />
+      {/* -- the findings ---------------------------------------------------------- */}
+      <Card pad={0}>
+        <div style={{ padding: '18px 20px 4px' }}>
+          <Panel
+            title="Findings"
+            note="Span paths, classes and character offsets. There is no field on a finding that can hold the value it found, and no operation anywhere in this console that reveals one."
+            right={
+              row.status !== 'clean' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <StatusDot state={row.status} size={6} />
+                  <span className="zt-mono-sm">{classes.map(classToken).join(', ') || 'policy'}</span>
+                </div>
+              ) : null
+            }
+          >
+            <div />
+          </Panel>
         </div>
-      ) : null}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 12, alignItems: 'start' }}>
-        <Card pad={0}>
-          <div style={{ padding: '16px 16px 12px' }}>
-            <SectionLabel>Findings</SectionLabel>
-            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '58ch' }}>
-              Span paths, classes and offsets. The original values are not stored and are not
-              recoverable from this record.
+        {row.findings.length ? (
+          <div className="zt-table">
+            <div>
+              <TableHead cols={COLS} />
+              {row.findings.map((f, i) => <FindingRow key={i} f={f} />)}
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: '8px 20px 26px' }}>
+            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
+              No findings. Every span was scanned and nothing matched.
             </p>
           </div>
-          <GridHead
-            columns={FINDING_COLUMNS}
-            cells={['Leg', 'Span path', 'Class', 'Conf.', 'Stage', 'Action']}
-          />
-          {request.findings.length === 0 ? (
-            <div style={{ padding: '20px 16px', font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-              Nothing matched. The payload dispatched unmodified.
-            </div>
-          ) : (
-            request.findings.map((f) => (
-              <div
-                key={f.id}
-                style={{
-                  display: 'grid', gridTemplateColumns: FINDING_COLUMNS, gap: 12, alignItems: 'center',
-                  minHeight: 'var(--row-h)', padding: '8px 16px',
-                  boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-                }}
-              >
-                <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>{legLabel(f.leg)}</span>
-                <Tooltip label={f.spanPath} mono>
-                  <span
-                    className="zt-mono-sm"
-                    style={{ color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
-                  >
-                    {f.spanPath}
-                  </span>
-                </Tooltip>
-                <span><Tag mono>{classToken(f.entityClass)}</Tag></span>
-                <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)' }}>{f.confidence.toFixed(2)}</span>
-                <Tooltip label={STAGE_LABEL[f.stage]}>
-                  <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{f.stage}</span>
-                </Tooltip>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <StatusDot state={f.action === 'block' ? 'blocked' : f.action === 'allow' ? 'clean' : 'redacted'} size={6} />
-                  <span style={{ font: 'var(--type-body-sm)' }}>
-                    {f.action === 'tokenize' ? 'Tokenized' : f.action === 'mask' ? 'Masked' : f.action === 'block' ? 'Blocked' : 'Allowed'}
-                  </span>
-                </span>
-              </div>
-            ))
-          )}
-        </Card>
+        )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Card pad={20}>
-            <SectionLabel>Decision</SectionLabel>
-            <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '10px 16px', font: 'var(--type-body-sm)' }}>
-              <Row label="Policy">
-                <span className="zt-mono-sm">v{request.policyVersion}</span>
-                {request.ruleFired !== undefined ? (
-                  <span style={{ color: 'var(--text-quiet)' }}> · rule {request.ruleFired}</span>
-                ) : null}
-              </Row>
-              <Row label="Mode"><span>{request.mode === 'enforce' ? 'Enforce' : 'Shadow'}</span></Row>
-              <Row label="Composite risk">
-                <span className="zt-mono-sm zt-nums">{risk(request.compositeRisk)}</span>
-                {(request.compositeRisk ?? 0) > 0.6 ? (
-                  <span style={{ color: 'var(--text-quiet)' }}> · over threshold</span>
-                ) : null}
-              </Row>
-              <Row label="Escalated"><span>{request.escalated ? 'Yes, to the adjudicator' : 'No'}</span></Row>
-              <Row label="Ledger"><span className="zt-mono-sm">{request.ledgerId}</span></Row>
-            </dl>
-            {classes.length ? (
-              <p style={{ margin: '16px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-                Tokens are derived one way. There is no operation in this system that returns an
-                original value.
-              </p>
-            ) : null}
-          </Card>
-
-          <Card pad={20}>
-            <SectionLabel>Latency by stage</SectionLabel>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {HOT_PATH.map((s) => {
-                const spent = request.latencyByStage[s] ?? 0;
-                const budget = STAGE_BUDGET_MS[s as keyof typeof STAGE_BUDGET_MS];
-                const pct = Math.min(1, spent / budget);
-                const over = spent >= budget;
-                return (
-                  <div key={s} style={{ display: 'grid', gridTemplateColumns: '28px 1fr 56px', gap: 10, alignItems: 'center' }}>
-                    <Tooltip label={STAGE_LABEL[s]}>
-                      <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{s}</span>
-                    </Tooltip>
-                    <span style={{ height: 4, background: 'rgba(17,17,17,0.11)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
-                      <span
-                        style={{
-                          display: 'block', height: '100%', width: `${pct * 100}%`,
-                          background: over ? 'var(--signal-info)' : 'rgba(17,17,17,0.52)',
-                        }}
-                      />
-                    </span>
-                    <span className="zt-mono-sm zt-nums" style={{ color: over ? 'var(--signal-info)' : 'var(--text-quiet)', textAlign: 'right' }}>
-                      {spent ? ms(spent) : '-'}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-            <p style={{ margin: '14px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-              {request.degraded
-                ? `${request.degraded} hit its budget and failed open. The result above is incomplete and the record says so.`
-                : `Total ${ms(request.latencyMs)}, inside the p95 budget of 65 ms across both legs.`}
-            </p>
-          </Card>
-
-          <Card pad={20}>
-            <SectionLabel>False positive</SectionLabel>
-            <p style={{ margin: '0 0 14px', font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-              Raising one drafts a scoped exception and routes it to an approver. The person who
-              raises it cannot approve it.
-            </p>
-            <Button variant="secondary" size="sm" icon="x" full>
-              Raise a false positive
-            </Button>
-          </Card>
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+            padding: '12px 16px', boxShadow: 'inset 0 1px 0 var(--border-hairline)',
+          }}
+        >
+          <span className="zt-eyebrow">
+            {row.readonly_skipped > 0
+              ? `${exact(row.readonly_skipped)} reported, not rewritten`
+              : 'All findings in rewritable origins'}
+          </span>
+          <span className="zt-mono-sm" style={{ color: 'var(--text-quiet)' }}>
+            {clock(row.minute)} · {row.workload}
+          </span>
         </div>
-      </div>
+      </Card>
+
+      <Provenance scope={`Payload ${row.id}`} />
     </div>
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function FindingRow({ f }: { f: SampleFinding }) {
+  const readOnly = f.origin === 'tool_definition';
+  const enforces = !f.advisory && !readOnly;
+
   return (
-    <>
-      <dt style={{ color: 'var(--text-quiet)' }}>{label}</dt>
-      <dd style={{ margin: 0, textAlign: 'right' }}>{children}</dd>
-    </>
+    <div
+      className="zt-row"
+      style={{
+        display: 'grid', gridTemplateColumns: columns(COLS), gap: 12, alignItems: 'center',
+        minHeight: 'var(--row-h)', padding: '11px 16px',
+        boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
+      }}
+    >
+      <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span
+          className="zt-mono-sm"
+          style={{ color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {f.span_path}
+        </span>
+        <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>
+          {ORIGIN_COPY[f.origin] ?? f.origin} · {f.leg}
+        </span>
+      </span>
+
+      <span><Tag mono>{classToken(f.class)}</Tag></span>
+
+      {/* The redaction at true character length. Never the value - the length is a
+          fact the product holds, and the shape is what makes the decision legible. */}
+      <span style={{ minWidth: 0, display: 'flex', alignItems: 'center' }}>
+        <Tooltip label={`${f.length} characters`}>
+          <span
+            aria-label={`${classToken(f.class)}, ${f.length} characters, redacted`}
+            style={{
+              display: 'inline-block', height: 13,
+              width: `${Math.min(f.length, 40)}ch`, maxWidth: '100%',
+              background: 'rgba(17,17,17,0.11)',
+              boxShadow: 'inset 0 0 0 1px rgba(17,17,17,0.22)',
+              borderRadius: 'var(--r-2)',
+            }}
+          />
+        </Tooltip>
+      </span>
+
+      <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)' }}>
+        [{f.start}, {f.end})
+      </span>
+
+      <span
+        className="zt-mono-sm zt-nums"
+        style={{ textAlign: 'right', color: f.confidence >= 0.75 ? 'var(--ink)' : 'var(--text-faint)' }}
+      >
+        {f.confidence.toFixed(2)}
+      </span>
+
+      <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{f.stage}</span>
+
+      <span>
+        {enforces ? (
+          <Badge status="blocked" tone="blocked">Yes</Badge>
+        ) : (
+          <Tooltip label={readOnly
+            ? 'Tool schemas are read-only. Reported, never rewritten.'
+            : 'Advisory class. Corroborates, never enforces alone.'}>
+            <span><Badge tone="neutral">{readOnly ? 'Read-only' : 'Advisory'}</Badge></span>
+          </Tooltip>
+        )}
+      </span>
+    </div>
   );
 }
