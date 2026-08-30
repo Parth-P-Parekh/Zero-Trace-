@@ -1,0 +1,153 @@
+# docker-compose.e2e.yml — the Part A production-mode E2E gate (plan §7).
+#
+# This stack is isolated from the developer stack on purpose:
+#   * fixed project name `zerotrace-e2e` and dedicated volumes — it can run
+#     alongside `docker compose up` (Control-DB/docker-compose.yml) without
+#     touching the dev database, Redis keys, or the dev compose volume;
+#   * no host port bindings; every service talks over the internal network;
+#   * ZT_ENV=prod with a non-placeholder test OIDC secret and the declared
+#     test adapters: detection_test_adapter (tests/e2e/detector.py),
+#     oidc_test_adapter (seeded identity path, ZT_OIDC_STUB_ENABLED=true) and
+#     deterministic_upstream (tests/e2e/upstream_app.py).
+#
+# SCAFFOLD NOTE: the `app` and `runner` services reference tests/e2e/app.py and
+# tests/e2e/runner.py, which land later in plan §7. Until then `docker compose
+# config` validates, but those two containers will exit on import.
+#
+# Orchestration (owned by the Makefile, plan §7):
+#   1. docker compose -f docker-compose.e2e.yml up -d --wait      # base stack
+#   2. per phase, with the service sequences in between (stop redis, restart
+#      the gateway, stop postgres, ...):
+#      docker compose -f docker-compose.e2e.yml --profile gate run --rm runner \
+#        python -m tests.e2e.runner --phase <phase>
+#   3. docker compose -f docker-compose.e2e.yml down -v           # always
+#
+# The runner persists phase state in /artifacts/phase-state.json so separate
+# invocations continue across the service operations, and writes the evidence
+# report to /evidence/04_jtbd/EV-PA-01-part-a-e2e.json (../evidence on the
+# host). Gateway and upstream stdout/stderr are teed into the shared e2e_logs
+# volume for the audit-phase privacy scan; raw logs are never retained.
+#
+# Log preservation: the services write with `tee -a` (append), never a plain
+# `tee`, so restarting a container (e.g. the gateway restarts in the redis-down
+# sequence) appends to the same log file instead of truncating it, and the
+# audit phase scans the complete process output of the whole gate. The volume
+# is isolated and removed with `down -v` at gate end, so the append files
+# start empty at gate start — logs are reset only there, never mid-gate.
+
+name: zerotrace-e2e
+
+x-e2e-env: &e2e-env
+  ZT_ENV: prod
+  ZT_PG_DSN: postgresql+asyncpg://zt:zt@postgres:5432/zerotrace
+  ZT_REDIS_URL: redis://redis:6379/0
+  ZT_OIDC_ISSUER: http://e2e-oidc-stub.invalid
+  ZT_OIDC_CLIENT_ID: zerotrace
+  ZT_OIDC_CLIENT_SECRET: e2e-zt-test-secret-7f3a9c1e4b8d2f6a0c5e9b1d
+  ZT_OIDC_STUB_ENABLED: "true"
+  ZT_UPSTREAM: passthrough
+  ZT_UPSTREAM_BASE_URL: http://upstream:9001
+  ZT_LOG_LEVEL: info
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: zt
+      POSTGRES_PASSWORD: zt
+      POSTGRES_DB: zerotrace
+    volumes:
+      - e2e_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zt -d zerotrace"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    # No persistence: the gate starts from a flushed database 0 and proves
+    # cache repopulation from PostgreSQL after restarts.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  migrate:
+    build: .
+    environment: *e2e-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && python -m scripts.seed_demo"]
+    restart: "no"
+
+  upstream:
+    build: .
+    environment:
+      ZT_ENV: prod
+    command:
+      - bash
+      - -c
+      - set -o pipefail; uvicorn tests.e2e.upstream_app:app --host 0.0.0.0 --port 9001 --workers 1 2>&1 | tee -a /logs/upstream.log
+    volumes:
+      - e2e_logs:/logs
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9001/healthz').status==200 else 1)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    build: .
+    environment: *e2e-env
+    command:
+      - bash
+      - -c
+      - set -o pipefail; uvicorn tests.e2e.app:app --host 0.0.0.0 --port 8000 --workers 1 2>&1 | tee -a /logs/gateway.log
+    volumes:
+      - e2e_logs:/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      upstream:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/readyz').status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
+
+  runner:
+    profiles: ["gate"]
+    build: .
+    environment: *e2e-env
+    command: ["python", "-m", "tests.e2e.runner"]
+    volumes:
+      - e2e_artifacts:/artifacts
+      - e2e_logs:/logs
+      - ../evidence:/evidence
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  e2e_pgdata:
+  e2e_artifacts:
+  e2e_logs:

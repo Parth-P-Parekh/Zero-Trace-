@@ -76,8 +76,15 @@ class Escalation(_Strict):
     sample_rate: float = 0.15
 
 
-class Policy(_Strict):
-    version: int
+class PolicyDraft(_Strict):
+    """What a client may SUBMIT: every policy field except `version`.
+
+    Version is assigned by the server at publish time, after the tenant lock
+    and the expected_active_version conflict check. Because the model forbids
+    extra fields, a draft that carries `version` is rejected outright — the
+    author cannot sneak a version number past the ledger.
+    """
+
     org: str
     business_unit: str | None = None
     mode: Literal["shadow", "enforce"] = "shadow"
@@ -91,6 +98,12 @@ class Policy(_Strict):
     @property
     def is_business_unit(self) -> bool:
         return self.business_unit is not None
+
+
+class Policy(PolicyDraft):
+    """A stored policy: the draft plus the server-assigned version."""
+
+    version: int
 
 
 def parse(yaml_text: str) -> Policy:
@@ -107,6 +120,28 @@ def parse(yaml_text: str) -> Policy:
 
     try:
         return Policy(**data)
+    except ValidationError as exc:
+        raise PolicyValidationError(_readable(exc)) from exc
+
+
+def parse_draft(yaml_text: str) -> PolicyDraft:
+    """YAML text -> PolicyDraft, for the publish input path.
+
+    Same strictness as parse(), plus: a submitted `version` key is an unknown
+    key and therefore a validation error.
+    """
+    try:
+        data = yaml.safe_load(yaml_text)  # safe_load, never load
+    except yaml.YAMLError as exc:
+        raise PolicyValidationError(f"policy YAML did not parse: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise PolicyValidationError(
+            f"policy YAML must be a mapping at the top level, got {type(data).__name__}"
+        )
+
+    try:
+        return PolicyDraft(**data)
     except ValidationError as exc:
         raise PolicyValidationError(_readable(exc)) from exc
 

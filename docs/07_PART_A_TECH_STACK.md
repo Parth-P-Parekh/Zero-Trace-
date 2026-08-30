@@ -6,35 +6,35 @@
 
 ## 1. The whole idea, in one example
 
-Two people work at a hospital company called **acme**.
+Two people work at a technology company called **Acme Technologies** (`acme-tech`).
 
-- **Priya** is a doctor.
-- **Sam** works in sales.
+- **Morgan** is in the marketing department and is cleared for customer PII.
+- **Casey** is a contractor and is not cleared for anything.
 
 Both of them open Claude. Both type **exactly the same thing**:
 
-> *"Summarise the notes for patient file 4471."*
+> *"Show me the customer record for Jordan Example."*
 
-Claude looks in the company's document store. It finds the note. It writes an answer.
+Claude looks in the company's document store. It finds the record. It writes an answer.
 
 **Right now, both people get the same answer.** That is the problem.
 
 **After Part A, they get different answers:**
 
-| | What Priya sees | What Sam sees |
+| | What Morgan sees | What Casey sees |
 |---|---|---|
-| | Patient R. Kumar, born 1979-03-02, has Type 2 diabetes, takes metformin. | Patient ████████, born ██████████, has ████████████████, takes █████████. |
+| | Jordan Example | jordan.example@invalid.example | +1-202-555-0104 | ██████ Example | ██████████@████████.████████ | ████████████████ |
 
 Nobody changed the question. Nobody changed the document store. The only difference is **who
 asked**.
 
 ```mermaid
 flowchart LR
-  P["Priya<br/>a doctor"] --> Q["The same question"]
-  S["Sam<br/>sales"] --> Q
+  P["Morgan<br/>marketing, cleared"] --> Q["The same question"]
+  S["Casey<br/>contractor, not cleared"] --> Q
   Q --> Z["ZeroTrace"]
-  Z --> A1["Priya gets<br/>the full note"]
-  Z --> A2["Sam gets<br/>the note covered up"]
+  Z --> A1["Morgan gets<br/>the full record"]
+  Z --> A2["Casey gets<br/>the record covered up"]
 
   style A1 fill:#0f2b1e,stroke:#3fb27f,color:#e6fff4
   style A2 fill:#12243a,stroke:#5aa0e0,color:#e8f2ff
@@ -46,12 +46,12 @@ flowchart LR
 
 ## 2. Why this matters
 
-Claude can find the document. That is a search problem, and search already works.
+Claude can find the record. That is a search problem, and search already works.
 
-But **finding a document is not the same as being allowed to read it.**
+But **finding a record is not the same as being allowed to read it.**
 
-Sam can ask Claude for a patient note and get one. Sam never opened the medical system. Sam
-never asked for access. Sam just asked a chatbot a question.
+Casey can ask Claude for a customer record and get one. Casey never opened the CRM. Casey
+never asked for access. Casey just asked a chatbot a question.
 
 Part A puts the permission check back in.
 
@@ -63,11 +63,11 @@ We use these five words everywhere. Nothing else is special.
 
 | Word | What it means | In our example |
 |---|---|---|
-| **Tenant** | A company. | `acme` |
-| **Actor** | One person or one program that sends a request. | Priya. Sam. |
-| **Group** | A named set of people. | `clinical_staff` — Priya is in it, Sam is not. |
-| **Policy** | The rulebook. One file per company. | "Cover medical notes, unless the person is clinical staff." |
-| **Ledger** | The logbook. Once we write a line, nobody can change it. | "Sam. Covered up. Rule 2. Rulebook version 1." |
+| **Tenant** | A company, or a department under it. | `acme-tech`, with four department tenants underneath it. |
+| **Actor** | One person or one program that sends a request. | Morgan. Casey. The build bot. |
+| **Group** | A named set of people. | `customer_pii_access` — Morgan is in it, Casey is not. |
+| **Policy** | The rulebook. One file per company. | "Cover customer PII, unless the person is cleared for it." |
+| **Ledger** | The logbook. Once we write a line, nobody can change it. | "Casey. Covered up. Rule 2. Rulebook version 1." |
 
 A group is a **row in a table**, not a word written in the code. So an administrator can add
 a new group without a new build.
@@ -123,17 +123,22 @@ Now each step in detail.
 
 ---
 
-## 6. Step 1 — Who is this?
+First it resolves the **tenant**. In production and demo, every request must name one with
+`X-ZeroTrace-Tenant`. No name → `400 zt.tenant_required`. Unknown name → `404
+zt.tenant_unknown`. Only `dev` falls back to a default tenant.
 
-One file does this: `identity/resolve.py`. It turns a request into an **Actor**.
-
-It tries four things, in order, and stops at the first one that works.
+Then it tries to identify the actor, in order, and stops at the first thing that works.
+Each rung tries the caller's own tenant first, then the root organisation (an
+organisation-scoped actor such as the security admin or the executive can act for any
+department under the root).
 
 ```mermaid
 flowchart TD
-  R["A request arrives"] --> T1{"Does it have a<br/>machine certificate?"}
+  R["A request arrives"] --> T0{"Does it name<br/>a tenant?"}
+  T0 -->|no| E0["400 zt.tenant_required"] --> DONE
+  T0 -->|yes| T1{"Does it have a<br/>machine certificate?"}
   T1 -->|yes| F1["Look up the program"] --> DONE["We know who it is"]
-  T1 -->|no| T2{"Does it have a<br/>login token?"}
+  T1 -->|no| T2{"Does it have a<br/>login token or cookie?"}
   T2 -->|yes| F2["Look up the person.<br/>PART A USES THIS ONE."] --> DONE
   T2 -->|no| T3{"Does it have an<br/>identity header?"}
   T3 -->|yes| F3["Look up the person"] --> DONE
@@ -145,28 +150,31 @@ flowchart TD
   style SERVE fill:#0f2b1e,stroke:#3fb27f,color:#e6fff4
 ```
 
-Once we know the actor, we know two things about them: their **role** (their job title) and
-their **groups**. Both come from the company's own staff directory. We do not invent either
-one.
+Once we know the actor, we know three things about them: their **role** (their job title),
+their **groups**, and their **scope** (`tenant` or `organisation`). All come from the
+company's own staff directory. We do not invent any of them.
+
+A request may also name a prior session with `X-ZeroTrace-Session`; it must belong to the
+same tenant and actor, or it is rejected. If bearer and cookie credentials are both present
+and disagree, the request is rejected — we never silently pick one.
 
 ### Why we answer people we do not recognise
 
 Refusing them looks safer. It is not.
 
-If we refuse Sam, Sam's tool stops working. Sam still has a job to do. So Sam finds a way
-around us — a personal account, a phone, anything. Now we cannot see Sam at all.
+If we refuse Casey, Casey's tool stops working. Casey still has a job to do. So Casey finds
+a way around us — a personal account, a phone, anything. Now we cannot see Casey at all.
 
-So we answer. We cover up anything sensitive. And we put Sam on a list so somebody can set
-him up properly.
+So we answer. We cover up anything sensitive. And we put Casey on a list so somebody can set
+them up properly.
 
 **A person going around us is the exact failure we exist to stop.**
 
 ### One weakness we say out loud
 
-The third method trusts a header. Somebody could fake that header.
+The header rung trusts a header. Somebody could fake that header.
 
 We do not hide this. It goes in the README, in the scope notes, and in the demo — **in the
-same words every time.** It is a real limit, not small print.
 
 ---
 
@@ -176,7 +184,7 @@ This is Part B's job. Part B reads the text and reports what it found.
 
 One report is called a **finding**. A finding says two things:
 
-- **What kind** of sensitive thing it is. Example: `MEDICAL`, `API_KEY`, `EMAIL`.
+- **What kind** of sensitive thing it is. Example: `CUSTOMER_PII`, `SOURCE_SECRET`, `API_KEY`.
 - **Where** it is in the message. Example: `messages[2].content`.
 
 **A finding never holds the actual text.** If it held the credit card number, then our own
@@ -191,27 +199,43 @@ finding by hand.
 
 ### 8.1 The rulebook
 
-One file per company. Three rules. These three rules show the whole idea.
+One file per company. Five org rules plus one child policy for the security department —
+`policies/acme-tech.yaml` and `policies/acme-tech-security.yaml`. Together they show the
+whole idea:
 
 ```yaml
 version: 1
-org: acme
+org: acme-tech
+mode: enforce            # root policy owns mode; children omit it
 default: allow
+unregistered_workload: mask
+fail: closed             # Part A fixes fail: closed
 
 rules:
-  # Rule 0 — a password or key must never leave.
-  - match: { direction: outbound, class: [API_KEY, PRIVATE_KEY, JWT, DB_URI] }
+  # Rule 0 — a credential or a source secret must never leave.
+  - match: { direction: outbound, class: [API_KEY, PRIVATE_KEY, JWT, DB_URI, SOURCE_SECRET] }
     action: block
 
-  # Rule 1 — personal data leaves as a fake of the same shape.
-  - match: { direction: outbound, class: [PAN, AADHAAR, EMAIL, PHONE, CREDIT_CARD] }
+  # Rule 1 — customer/employee PII and financial records leave only as a token.
+  #          Part A cannot honour tokenize yet: the vault is Part B, so redact.py
+  #          applies mask and reports tokenize_needs_vault. It never fakes a token.
+  - match: { direction: outbound, class: [CUSTOMER_PII, EMPLOYEE_PII, FINANCIAL_RECORD] }
     action: tokenize
 
   # Rule 2 — THIS IS THE PART A RULE.
-  - match: { direction: inbound, class: [MEDICAL, HR_RECORD] }
+  #          Customer PII coming back from the model is masked unless the person
+  #          asking is cleared for it. Retrieval is not access control.
+  - match: { direction: inbound, class: [CUSTOMER_PII] }
     action: mask
     unless:
-      - actor_group: [clinical_staff]
+      - actor_group: [customer_pii_access]
+      - actor_role: [executive]       # organisation-scoped executive exception
+
+  # Rule 3 — employee PII, same shape, clearance group employee_pii_access.
+  # Rule 4 — financial records, same shape, clearance group financial_record_access.
+  # Rule 5 — source secrets never come back to anyone.
+  - match: { direction: inbound, class: [SOURCE_SECRET] }
+    action: block
 ```
 
 **"outbound"** means text going **to** Claude. **"inbound"** means text coming **back** from
@@ -219,11 +243,13 @@ Claude.
 
 Read rule 2 in English:
 
-> Cover up medical notes and HR records coming back from Claude — **unless** the person
-> asking is in the group `clinical_staff`.
+> Cover up customer PII coming back from Claude — **unless** the person asking is cleared
+> for it.
 
-Priya is in `clinical_staff`, so the `unless` applies and she sees the note.
-Sam is not, so the rule applies and his copy is covered.
+Morgan is in `customer_pii_access`, so the `unless` applies and Morgan sees the record.
+Casey is not, so the rule applies and Casey's copy is covered. The security child policy
+raises rules 2–4 from `mask` to `block` and keeps source secrets blocked; only the executive
+role has an exception there.
 
 Rules 0 and 1 are written now. They start working at M3, when Part B can find keys and
 personal data.
@@ -240,11 +266,9 @@ Six steps, in this order:
 5. Apply any approved one-off exception for this person. Part A has none set up.
 6. If a rule asks for a human to review it, mark it. Part A does not have that stage yet.
 
-The answer we produce is called a **Decision**. It holds three things:
-
-- the **action** — `mask`
-- the **rule number** — `2`
-- the **rulebook version** — `1`
+The answer we produce is called a **Decision**. It holds the **action**, the **rule
+number**, the **org rulebook version**, and — when a business-unit rule wins — the **BU
+rulebook version**.
 
 ### Why we keep the rule number and the version
 
@@ -259,10 +283,10 @@ A company sets rules. A business unit inside the company can also set rules.
 
 > **A business unit can move an action further right on the ladder. Never further left.**
 
-The company says `mask` medical notes.
+The company says `mask` customer PII.
 
-- The `support` unit changes it to `block`. That is stronger. **We accept it.**
-- The `support` unit changes it to `allow`. That is weaker. **We refuse it.**
+- The `security` unit changes it to `block`. That is stronger. **We accept it.**
+- The `security` unit changes it to `allow`. That is weaker. **We refuse it.**
 
 We refuse it **when somebody saves the rulebook**, not later when a request arrives. The
 error message quotes the exact rule that is wrong. The administrator fixes it before it goes
@@ -285,14 +309,14 @@ fingerprint of the line before it.**
 ```mermaid
 flowchart LR
   L0["Line 0<br/>the start"] --> L1["Line 1<br/>rulebook published"]
-  L1 --> L2["Line 2<br/>Priya · allow · rule 2 · v1"]
-  L2 --> L3["Line 3<br/>Sam · mask · rule 2 · v1"]
+  L1 --> L2["Line 2<br/>Morgan · allow · rule 2 · v1"]
+  L2 --> L3["Line 3<br/>Casey · mask · rule 2 · v1"]
   L3 --> V["make verify<br/>recheck every fingerprint"]
 
   style V fill:#12243a,stroke:#5aa0e0,color:#e8f2ff
 ```
 
-Now say somebody edits line 2 to hide what happened to Priya. Line 2's fingerprint changes.
+Now say somebody edits line 2 to hide what happened to Morgan. Line 2's fingerprint changes.
 Line 3 was built from the **old** fingerprint. So line 3 no longer matches. The edit shows up
 immediately.
 
@@ -407,7 +431,7 @@ flowchart LR
   G0 --> M1["<b>M1</b><br/>The database<br/>and 'who is this'"]
   M1 --> G1{"resolve() returns<br/>the right person"}
   G1 --> M2["<b>M2</b><br/>The rulebook<br/>and the logbook"]
-  M2 --> G2{"Priya and Sam get<br/>different answers.<br/>Both in the logbook."}
+  M2 --> G2{"Morgan and Casey get<br/>different answers.<br/>Both in the logbook."}
   G2 --> M3["<b>M3</b><br/>Part B starts"]
 
   style G2 fill:#0f2b1e,stroke:#3fb27f,color:#e6fff4
@@ -416,14 +440,20 @@ flowchart LR
 
 ### Part A is finished when this test passes
 
-> Make two people. Put one in `clinical_staff`. Do not put the other one in it.
+> Make two people. Put one in `customer_pii_access`. Do not put the other one in it.
 > Send the **same** request for both.
 > They get **different** answers.
 > The logbook has a line for each, and each line says the action, the rule number and the
-> rulebook version.
+> policy version.
 
 That test is the finish line. "The tables exist" is not the finish line. "The code looks
 right" is not the finish line.
+
+**The production gate is the completion command.** `make part-a-e2e` runs the same claim
+over real HTTP with PostgreSQL 16 and Redis 7 — restart persistence, concurrent conditional
+publishes, a 100-request load at concurrency 20, and the privacy sweep — and writes
+`EV-PA-01` to `evidence/04_jtbd/EV-PA-01-part-a-e2e.json`. It declares exactly three stubs:
+`detection_test_adapter`, `oidc_test_adapter`, and `deterministic_upstream`.
 
 ---
 
@@ -451,19 +481,15 @@ identity/workload.py       M1   program identity, does nothing on a laptop
 
 policy/schema.py           M2   reads the rulebook, rejects unknown words
 policy/engine.py           M2   step 3 — the six steps and the five actions
-policy/store.py            M2   loads and saves versions, clears the Redis copy
-policy/exceptions.py       M2   the one-off exceptions
+db/migrations/003_...py    M2   Part A production: actor scope, request/finding actions,
+                                policy versions, tenants.mode removed
 
-ledger/chain.py            M1   step 4 — add a line, check the chain
-ledger/records.py          M1   the shape of each kind of line
-
-db/session.py              M0   the database connection
-db/models.py               M1   the table definitions
-db/migrations/001_...py    M1   creates tenants, actors, groups, sessions, ledger
-db/migrations/002_...py    M2   creates policies and the exceptions table
-
-scripts/seed_demo.py       M1   makes acme, the groups, and three people
+scripts/seed_demo.py       M1   makes acme-tech, the four clearance groups, seven actors
 scripts/verify_ledger.py   M1   checks the logbook, runs on its own
+
+docker-compose.e2e.yml     M2   the isolated production-mode E2E stack (ZT_ENV=prod)
+tests/e2e/                 M2   the E2E adapters and runner: detection_test_adapter,
+                                deterministic_upstream, the seven phases, EV-PA-01
 ```
 
 Settings Part A actually reads. Leave the rest in the file marked `TODO`:
@@ -471,20 +497,23 @@ Settings Part A actually reads. Leave the rest in the file marked `TODO`:
 ```
 ZT_ENV                 dev, demo or prod
 ZT_LOG_LEVEL           how much detail in the logs
-ZT_MODE_DEFAULT        shadow or enforce
-ZT_FAIL                closed or open
 ZT_PG_DSN              where Postgres is
 ZT_REDIS_URL           where Redis is
-ZT_OIDC_*              the dev login settings
+ZT_OIDC_*              the dev login settings; ZT_OIDC_STUB_ENABLED=true declares
+                       oidc_test_adapter in the E2E gate
+ZT_UPSTREAM            stub or passthrough (the E2E gate uses deterministic_upstream)
 ZT_BUDGET_S4_MS=2      time limit for one decision
 ```
+
+Mode and fail are **not** settings. The active root policy owns `mode` (`shadow` or
+`enforce`), and Part A fixes `fail: closed`.
 
 ---
 
 ## 14. Four things that will trip you up
 
 **1. The M2 test needs a finding, but findings arrive at M3.**
-Rule 2 only works when something reports "there is a medical note here". That reporter is
+Rule 2 only works when something reports "there is customer PII here". That reporter is
 Part B. So the M2 test must build the finding itself and hand it to the decision function.
 That is fine — it is a test. **What is not fine is putting a fake finding in the live
 request path.** That is a canned demo, and it scores zero. Write the test so the finding is a

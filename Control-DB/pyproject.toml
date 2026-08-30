@@ -1,8 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "zerotrace-control-db"
-version = "0.1.0-part-a"
+version = "0.1.0a1"
 description = "ZeroTrace Part A — the control-group DB"
 requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite==0.22.1",
+    "alembic==1.19.1",
+    "asyncpg==0.31.0",
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "PyYAML==6.0.3",
+    "redis==8.1.0",
+    "sqlalchemy==2.0.52",
+    "structlog==26.1.0",
+    "uvicorn[standard]==0.52.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["zerotrace*"]
+
+[tool.setuptools.package-data]
+"zerotrace.db" = ["migrations/*.py", "migrations/versions/*.py"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -24,9 +24,7 @@ class Settings(BaseSettings):
     # --- core ---
     env: Literal["dev", "demo", "prod"] = "dev"
     log_level: str = "info"
-    mode_default: Literal["shadow", "enforce"] = "shadow"
-    fail: Literal["closed", "open"] = "closed"
-    default_tenant: str = "acme"
+    default_tenant: str = "acme-tech"  # dev-only fallback; demo/prod require X-ZeroTrace-Tenant
 
     # --- datastores ---
     pg_dsn: str = Field(default="postgresql+asyncpg://zt:zt@postgres:5432/zerotrace")

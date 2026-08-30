@@ -16,10 +16,10 @@ from zerotrace.policy.engine import LATTICE, check_bu_may_only_raise, is_weaker,
 
 ORG = """
 version: 1
-org: acme
+org: acme-tech
 default: allow
 rules:
-  - match: {direction: inbound, class: [MEDICAL]}
+  - match: {direction: inbound, class: [CUSTOMER_DATA]}
     action: mask
 """
 
@@ -27,11 +27,11 @@ rules:
 def _bu(action: str, extra: str = "") -> str:
     return f"""
 version: 1
-org: acme
-business_unit: support
+org: acme-tech
+business_unit: acme-tech-security
 default: allow
 rules:
-  - match: {{direction: inbound, class: [MEDICAL]}}
+  - match: {{direction: inbound, class: [CUSTOMER_DATA]}}
     action: {action}
 {extra}
 """
@@ -74,7 +74,7 @@ def test_a_business_unit_may_not_lower(weaker):
     error = excinfo.value
     assert error.rule_index == 0
     # The error quotes the offending rule back, so the author can act on it.
-    assert "MEDICAL" in error.rule_yaml
+    assert "CUSTOMER_DATA" in error.rule_yaml
     assert weaker in error.rule_yaml
     assert "may raise an action, never lower it" in str(error)
 
@@ -83,13 +83,13 @@ def test_a_scoped_clearance_is_still_allowed_to_lower():
     """`unless` is the one construct that may lower, and it is scoped."""
     check_bu_may_only_raise(
         schema.parse(ORG),
-        schema.parse(_bu("allow", "    unless:\n      - actor_group: [clinical_staff]\n")),
+        schema.parse(_bu("allow", "    unless:\n      - actor_group: [support]\n")),
     )
 
 
 def test_non_overlapping_rules_do_not_conflict():
     """A BU rule about a different class is not a weakening of an org rule."""
-    other = _bu("allow").replace("MEDICAL", "HR_RECORD")
+    other = _bu("allow").replace("CUSTOMER_DATA", "HR_RECORD")
     check_bu_may_only_raise(schema.parse(ORG), schema.parse(other))
 
 
@@ -102,20 +102,29 @@ def test_opposite_directions_do_not_conflict():
 
 
 async def test_publish_refuses_a_weakening_business_unit_policy(session, seeded):
-    """Refused at PUBLISH time, before it is ever live."""
+    """Refused at PUBLISH time, before it is ever live.
+
+    The seeded org policy masks inbound CUSTOMER_DATA (policies/acme-tech.yaml,
+    rule 0); this business unit tries to weaken it to allow.
+    """
     with pytest.raises(BusinessUnitWeakensOrgRule) as excinfo:
         await store.publish(
             session,
-            "acme-support",
-            _bu("allow"),
+            "acme-tech-security",
+            store.strip_version(_bu("allow")),
             published_by="someone@acme.test",
+            expected_active_version=1,
         )
     assert "weaker than org" in str(excinfo.value)
 
 
 async def test_publish_accepts_a_strengthening_business_unit_policy(session, seeded):
     row = await store.publish(
-        session, "acme-support", _bu("block"), published_by="someone@acme.test"
+        session,
+        "acme-tech-security",
+        store.strip_version(_bu("block")),
+        published_by="someone@acme.test",
+        expected_active_version=1,
     )
     assert row.active is True
     assert row.version == 2  # the seed published version 1
@@ -128,16 +137,22 @@ async def test_a_rejected_publish_leaves_no_trace(session, seeded):
     from zerotrace.db.models import Policy as PolicyRow
 
     before = (
-        (await session.execute(select(PolicyRow).where(PolicyRow.tenant_id == "acme-support")))
+        (await session.execute(select(PolicyRow).where(PolicyRow.tenant_id == "acme-tech-security")))
         .scalars()
         .all()
     )
     with pytest.raises(BusinessUnitWeakensOrgRule):
-        await store.publish(session, "acme-support", _bu("allow"), published_by="x@acme.test")
+        await store.publish(
+            session,
+            "acme-tech-security",
+            store.strip_version(_bu("allow")),
+            published_by="x@acme.test",
+            expected_active_version=1,
+        )
     await session.rollback()
 
     after = (
-        (await session.execute(select(PolicyRow).where(PolicyRow.tenant_id == "acme-support")))
+        (await session.execute(select(PolicyRow).where(PolicyRow.tenant_id == "acme-tech-security")))
         .scalars()
         .all()
     )

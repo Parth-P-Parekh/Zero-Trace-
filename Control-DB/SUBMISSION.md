@@ -4,9 +4,11 @@ Every cut, every stub and every deviation, written down as it happened rather th
 retroactively (SKEL-01 standing rules). If something in this build is not what CODE-01
 describes, it is in this file.
 
-**Scope built:** SKEL-01 Part A — milestones M0, M1, M2.
+**Scope built:** SKEL-01 Part A — milestones M0, M1, M2, plus the production-mode E2E gate.
 **Branch:** `PA`. **Directory:** `Control-DB/`.
-**Status:** the A.5 acceptance test passes. 124 tests green.
+**Status:** the A.5 acceptance test passes and the production-mode E2E gate writes
+`EV-PA-01` (`make part-a-e2e`, evidence at `../evidence/04_jtbd/EV-PA-01-part-a-e2e.json`).
+OIDC, real detection, and the real provider upstream remain later milestones.
 
 ---
 
@@ -45,10 +47,13 @@ intercepts real tools.
 **What we built:** neither, yet. Part A ends at M2; Part C starts at M5. `StubUpstream`
 returns a fixed reply so the inbound leg has something to decide about.
 `PassthroughUpstream` is written and works — set `ZT_UPSTREAM=passthrough` plus a base URL
-and it makes a real `httpx` call.
+and it makes a real `httpx` call. The E2E gate runs a **deterministic test upstream**
+(`tests/e2e/upstream_app.py`, declared name `deterministic_upstream`) that returns fixed
+provider-shaped replies keyed by non-sensitive scenario IDs.
 
 **How it is honest:** every response carries `X-ZeroTrace-Degraded: upstream_stub`, the
-ledger row records it, and `/readyz` names it. The stub is never presented as a model call.
+ledger row records it, and `/readyz` names it. The E2E report lists `deterministic_upstream`
+under `declared_stubs`. The stub is never presented as a model call.
 
 **Reverts at:** M5.
 
@@ -70,21 +75,76 @@ and that is exactly the trust we cannot spend. `zerotrace/gateway/redact.py`.
 **CODE-01 §12:** OIDC login plus SCIM 2.0 `/Users` and `/Groups`.
 **SKEL-01 §1.1** already declares this deviation for the skeleton.
 
-**What we built:** `scripts/seed_demo.py` creates the actors and groups. One dev token shape
-is accepted: `Authorization: Bearer dev:<idp_subject>`. `identity/scim.py` is **not created**.
+**What we built:** `scripts/seed_demo.py` creates the Acme Technologies organisation: the
+root tenant `acme-tech`, four child tenants (`acme-tech-engineering`, `acme-tech-finance`,
+`acme-tech-marketing`, `acme-tech-security`), four clearance groups
+(`customer_pii_access`, `employee_pii_access`, `financial_record_access`,
+`source_secret_access`), and seven actors, including an organisation-scoped `security_admin`
+and an organisation-scoped `executive`. One dev token shape is accepted:
+`Authorization: Bearer dev:<idp_subject>`. `identity/scim.py` is **not created**. The E2E
+gate runs with `ZT_OIDC_STUB_ENABLED=true` and declares `oidc_test_adapter` in the report.
 
 **Why:** Part A must prove that a *group changes the answer*. Where the group came from is a
 separate problem.
 
 **Reverts at:** M8.
 
-### 1.5 No streaming
+### 1.6 Detection in the E2E gate is a declared test adapter
 
-**SKEL-01 §1.1** calls this "the skeleton's single biggest honesty risk". Part A does not
-reach it: there is no real upstream to stream from yet. When Part C lands, streamed requests
-must pass through with `X-ZeroTrace-Degraded: stream_unscanned` until M6.
+**CODE-01 §6.1:** S0 deterministic detectors, `google-re2`.
 
-**Reverts at:** M6.
+**What we built:** the production app keeps the declared no-op `detection_stub`. The
+production-mode E2E gate needs deterministic findings, so `tests/e2e/app.py` calls
+`create_app(detector=SyntheticFixtureDetector())` — a test-only factory override in
+`tests/e2e/detector.py` (declared name `detection_test_adapter`) that emits fixed findings
+for exact fixture spans. **No environment variable can select it**, and
+`test_m0_bootstrap.py` asserts the exported production app uses the safe production detector
+and exposes no E2E probe route.
+
+**How it is honest:** the E2E report lists `detection_test_adapter` under `declared_stubs`
+and `test_m0_bootstrap.py` fails if production can select the adapter.
+
+**Reverts at:** M3 (real S0 registry takes the seam unchanged).
+
+### 1.7 Effective mode and fail come from the policy, not the tenant row
+
+**CODE-01 §4.1/§20.3:** `tenants.mode` per tenant; fail-open/fail-closed per environment.
+
+**What we built:** migration 003 removes `tenants.mode`. The active **root** policy owns
+`mode` (`shadow` | `enforce`) and Part A fixes `fail: closed`; child policies carry neither
+field. `ZT_MODE_DEFAULT` and `ZT_FAIL` are removed from `.env.example`. Part A root policies
+are rejected at publish time if they set `fail: open` — safe fail-open is a later-stage
+design (CODE-01 §20.3). The billing-driven `tenants.mode` flip (C18) lands with billing.
+
+**Reverts at:** C18 (billing) / the later stage that defines fail-open.
+
+### 1.8 The control plane is tenant-scoped and publish is conditional
+
+**CODE-01 §15.2:** `PUT /api/policies` publishes a new version.
+
+**What we built:** the control router mounts under `/api` and every route requires the
+`security_admin` role with target-tenant authorization (an organisation-scoped admin may
+manage only its root tenant and descendants). Publish is
+`PUT /api/policies/{tenant_id}` with a `PolicyDraft` (no client-supplied `version` or
+`published_by`) plus `expected_active_version`: `None` for the first policy, the exact active
+version afterwards. A stale publish returns `409 zt.policy_version_conflict` and writes no
+policy row and no ledger row. The tenant-wide advisory lock (`zerotrace/db/locks.py`,
+`pg_advisory_xact_lock`) serialises publish and ledger appends.
+
+**Reverts at:** never — this is the Part A contract; later stages extend it.
+
+### 1.9 Caches hold immutable policy data; PostgreSQL alone selects the active version
+
+**CODE-01 §6.5:** the resolved rule set is cached in Redis with the policy version in the key.
+
+**What we built:** Redis and the process cache store immutable serialized policy data keyed
+by `(tenant_id, version)` only. Every `load_active` call selects the active row from
+PostgreSQL; neither cache can select an active version. When Redis is unavailable the
+selected row loads from PostgreSQL with `policy_cache_local` in the response and ledger —
+degradation is visible, correctness is unchanged. `test_m3_production_schema.py` and the E2E
+`postgres-down` phase prove that cached data cannot select an active policy.
+
+**Reverts at:** never — the active version is a database fact.
 
 ---
 
@@ -102,6 +162,15 @@ Table shapes are CODE-01 §4.1 unchanged. Only the column set is narrowed.
 
 `detectors`, `vault_tokens`, `coverage_events`, `usage` and `billing` are not created at all.
 
+**Migration 003 also reshapes the Part A columns** (this is an extension, not a cut):
+
+| Table | Change |
+|---|---|
+| `tenants` | `mode` removed — effective mode and fail come from the active root policy (§1.7). |
+| `actors` | `scope` added, `tenant` or `organisation` (CHECK-constrained). Legacy rows migrate to `tenant`. |
+| `requests` | `action` becomes `decision_action` + `applied_action`; adds `status`, `mode`, `org_policy_version`, and nullable `bu_policy_version`. Legacy rows migrate to `status=completed`, `mode=enforce`, old version copied to `org_policy_version`, and `tokenize` mapped to applied `mask`. |
+| `findings` | `action` becomes `decision_action` + `applied_action`. |
+
 ---
 
 ## 3. Paths added to CODE-01 §2
@@ -117,7 +186,15 @@ commit that creates it."* These paths are new. `docs/CODE.md` is updated in the 
 | `zerotrace/gateway/redact.py` | Part A's subset of S5. `gateway/denormalise.py` supersedes it at M3. |
 | `zerotrace/detect/stub.py` | The detection seam plus its declared no-op. Replaced by the real registry at M3. |
 | `scripts/demo_two_actors.py` | The Part A claim, runnable on a terminal. |
-| `policies/acme.yaml`, `policies/acme-support.yaml` | Seed policies as files rather than strings in the seed script. |
+| `policies/acme-tech.yaml`, `policies/acme-tech-security.yaml` | Seed policies as files rather than strings in the seed script: the Acme Technologies org policy and the security business unit that raises inbound actions. |
+| `zerotrace/db/locks.py` | The tenant-wide advisory lock (`pg_advisory_xact_lock`) that serialises conditional publish and ledger appends (§1.8). |
+| `db/migrations/versions/003_part_a_production.py` | The third Alembic migration: actor scope, request/finding action columns, policy versions, `tenants.mode` removal (§1.7). |
+| `docker-compose.e2e.yml` | The isolated production-mode E2E stack (fixed project `zerotrace-e2e`, `ZT_ENV=prod`). |
+| `tests/e2e/fixtures.py` | The fixed Acme fixture values and their protected atoms for the privacy oracle. |
+| `tests/e2e/detector.py` | `SyntheticFixtureDetector` — the declared test detection adapter (§1.6). |
+| `tests/e2e/upstream_app.py` | The deterministic test upstream (declared name `deterministic_upstream`). |
+| `tests/e2e/app.py` | Test-only app factory calling `create_app(detector=SyntheticFixtureDetector())`; the exported production app cannot select it. |
+| `tests/e2e/runner.py` | The seven E2E phases (`before-restart`, `redis-down`, `after-restart`, `postgres-down`, `recovered`, `load`, `audit`), the load gate, and the privacy sweep; writes `EV-PA-01`. |
 | `Dockerfile` | Referenced by `docker-compose.yml`, never listed in §2. |
 | `pyproject.toml` | pytest and ruff configuration. |
 
@@ -141,16 +218,22 @@ The answer is rung 1: mTLS peer certificate → SPIFFE ID. That rung is already 
 sits above rung 3 in the order. It is inert only because a dev machine issues no peer
 certificates.
 
-### 4.2 The M2 test supplies its own finding
+### 4.2 The M2 test and the E2E gate supply their own findings
 
 M2 lands before M3, so nothing produces findings yet. `tests/test_part_a_acceptance.py`
-constructs the `MEDICAL` finding and injects it through FastAPI's `dependency_overrides` on
-the same seam the real S0 detector will use.
+constructs the finding and injects it through FastAPI's `dependency_overrides` on the same
+seam the real S0 detector will use.
 
-**The live path always returns `StubDetector`**, which finds nothing and announces
-`detection_stub`. A fixed finding on the live path would be a canned response on the happy
-path — SSOT §6 anti-pattern A1 — which scores zero rather than losing a point.
-`test_live_path_announces_its_stubs` asserts the live path stays honest.
+**The live path always returns the no-op production detector**, which finds nothing and
+announces `detection_stub`. A fixed finding on the live path would be a canned response on
+the happy path — SSOT §6 anti-pattern A1 — which scores zero rather than losing a point.
+`test_live_path_announces_its_stubs` asserts the live path stays honest, and
+`test_m0_bootstrap.py` asserts the exported production app cannot select the E2E adapter.
+
+The E2E gate extends this seam: `tests/e2e/app.py` passes `SyntheticFixtureDetector`
+(declared `detection_test_adapter`) to the app factory so real HTTP can prove decisions and
+redaction. It is test-only, cannot be selected by the production app or any environment
+variable, and the E2E report declares it under `declared_stubs` (§1.6).
 
 At M4 the override is deleted and the real detector takes the seam unchanged.
 
@@ -159,12 +242,15 @@ At M4 the override is deleted and the real detector takes the seam unchanged.
 `requirements.txt` is pinned by `pip-compile` from `requirements.in`, without
 `--generate-hashes`. Adding hashes is one flag and should happen before any judge clones this.
 
-### 4.4 The privacy invariant does not yet cover Redis
+### 4.4 The unit privacy sweep does not cover Redis; the E2E sweep does
 
-`tests/test_privacy_invariant.py` sweeps every SQL table and every log line. Redis currently
-holds only policy YAML, which is not sensitive. **When M3b adds the span cache, Redis must be
-added to that sweep in the same commit** — SKEL-01's risk register calls out the span cache
-becoming a confirmation oracle.
+`tests/test_privacy_invariant.py` sweeps every SQL table and every log line on the SQLite
+dialect. Redis is out of the local path (`ZT_REDIS_URL=""`), so the E2E gate owns the Redis
+half of the invariant: the `audit` phase scans all PostgreSQL tables, all Redis database 0
+keys and values with type-aware readers, the finalized gateway and upstream logs, and the
+final report itself, and fails the gate on any sensitive literal. **When M3b adds the span
+cache, the local unit sweep must read Redis too** — SKEL-01's risk register calls out the
+span cache becoming a confirmation oracle.
 
 ---
 
@@ -180,6 +266,8 @@ becoming a confirmation oracle.
 | No `virtual_key_hash` column | done — `test_there_is_no_column_for_a_developer_key` |
 | `groups` reflected into CODE-01 §4.1 | done, same commit |
 | All work on `PA`, nothing on `main` | done |
+| E2E declared stubs (`detection_test_adapter`, `oidc_test_adapter`, `deterministic_upstream`) listed in the report and in this file | done — report `declared_stubs`, §1.2/§1.4/§1.6 |
+| `EV-PA-01` mapped in `evidence/EVIDENCE.md` and SSOT-01 §5.1 | done, same change as the gate |
 
 ---
 
@@ -187,7 +275,7 @@ becoming a confirmation oracle.
 
 **M3 (Part B — detection)** is the next milestone and it starts with `google-re2`, an
 Aho-Corasick prefilter, and a real captured Claude Code payload as the round-trip fixture.
-Do not start it before `make part-a` is green on a clean clone.
+Do not start it before `make part-a` and `make part-a-e2e` are green on a clean clone.
 
 The seam is already there: replace the default of `get_detector()` in
 `zerotrace/gateway/deps.py`. Nothing else in the request path changes.

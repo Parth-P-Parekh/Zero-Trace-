@@ -1,11 +1,16 @@
 """PART A IS DONE WHEN THIS PASSES.  SKEL-01 A.5:
 
-    A single test seeds two actors — one in clinical_staff, one not — sends the
-    SAME request, and gets two different responses, with the decision, the rule
-    index and the policy version recorded in the ledger for both.
+    A single test seeds two actors — one in support, one not —
+    sends the SAME request, and gets two different responses, with the
+    decision, the rule index and the policy version recorded in the ledger for
+    both.
 
 Every clause of that sentence is asserted below. Nothing else in this repository
 counts as the finish line.
+
+The two actors are both in the MARKETING business unit of Acme Technologies:
+Morgan (act_marketer, groups=[support]) and Casey (act_contractor,
+groups=[]). They differ in exactly one way: group membership.
 
 On the fixture detector: Part A does not build detectors — that is Part B (M3),
 and M2 lands before M3. So this test supplies the finding itself, as an explicit
@@ -28,25 +33,32 @@ from zerotrace.gateway.upstream import STUB_NOTE, STUB_SPAN
 from zerotrace.identity import oidc
 from zerotrace.spans.model import Finding
 
+TENANT = "acme-tech-marketing"
+
 # The one request both people send. Identical, byte for byte.
 THE_REQUEST = {
     "model": "claude-opus-5",
     "max_tokens": 512,
     "messages": [
-        {"role": "user", "content": "Summarise the notes for patient file 4471."}
+        {
+            "role": "user",
+            "content": "Summarise what we know about customer Jordan Example.",
+        }
     ],
 }
 
 # What Part B's S0 will report at M4. Supplied here as a fixture.
-MEDICAL_FINDING = Finding(
-    entity_class="MEDICAL", span_path=STUB_SPAN, leg="inbound", confidence=0.97
+CUSTOMER_DATA_FINDING = Finding(
+    entity_class="CUSTOMER_DATA", span_path=STUB_SPAN, leg="inbound", confidence=0.97
 )
 
 
 @pytest.fixture()
 def detecting_app(app):
     """The app, with the detection seam supplied by a fixture instead of a stub."""
-    app.dependency_overrides[get_detector] = lambda: FixtureDetector([MEDICAL_FINDING])
+    app.dependency_overrides[get_detector] = lambda: FixtureDetector(
+        [CUSTOMER_DATA_FINDING]
+    )
     return app
 
 
@@ -60,7 +72,10 @@ async def send(detecting_app):
             return await c.post(
                 "/v1/messages",
                 json=THE_REQUEST,
-                headers={"Authorization": f"Bearer {oidc.mint_dev_token(idp_subject)}"},
+                headers={
+                    "X-ZeroTrace-Tenant": TENANT,
+                    "Authorization": f"Bearer {oidc.mint_dev_token(idp_subject)}",
+                },
             )
 
     return _send
@@ -68,43 +83,42 @@ async def send(detecting_app):
 
 async def test_two_actors_one_request_two_answers(send, seeded):
     # --- the same request, sent by two people ---------------------------
-    priya = await send("dr_priya")  # groups = [clinical_staff]
-    sam = await send("sam_sales")  # groups = [finance]
+    morgan = await send("morgan_marketing")  # groups = [support]
+    casey = await send("casey_contractor")  # groups = []
 
-    assert priya.status_code == 200
-    assert sam.status_code == 200
+    assert morgan.status_code == 200
+    assert casey.status_code == 200
 
-    priya_text = priya.json()["content"][0]["text"]
-    sam_text = sam.json()["content"][0]["text"]
+    morgan_text = morgan.json()["content"][0]["text"]
+    casey_text = casey.json()["content"][0]["text"]
 
     # --- 1. THE ANSWERS DIFFER -----------------------------------------
-    assert priya_text != sam_text, "same request, same answer — Part A does nothing"
+    assert morgan_text != casey_text, "same request, same answer — Part A does nothing"
 
-    # Priya is clinical staff: the `unless` clears the rule, she sees the note.
-    assert priya_text == STUB_NOTE
-    assert "R. Kumar" in priya_text
+    # Morgan is cleared: the `unless` clears the rule, she sees the reply.
+    assert morgan_text == STUB_NOTE
 
-    # Sam is not: the rule applies and the note is covered.
-    assert "█" in sam_text
-    assert "R. Kumar" not in sam_text
-    assert "metformin" not in sam_text
+    # Casey is not: the rule applies and the reply is covered.
+    assert "█" in casey_text
+    assert STUB_NOTE not in casey_text
 
     # --- 2. the decision is on the response ----------------------------
-    assert priya.headers["X-ZeroTrace-Action"] == "allow"
-    assert sam.headers["X-ZeroTrace-Action"] == "mask"
-    assert priya.headers["X-ZeroTrace-Inbound-Findings"] == "1"
-    assert sam.headers["X-ZeroTrace-Inbound-Findings"] == "1"
-    assert sam.headers["X-ZeroTrace-Inbound-Classes"] == "MEDICAL"
+    assert morgan.headers["X-ZeroTrace-Action"] == "allow"
+    assert casey.headers["X-ZeroTrace-Action"] == "mask"
+    assert morgan.headers["X-ZeroTrace-Inbound-Findings"] == "1"
+    assert casey.headers["X-ZeroTrace-Inbound-Findings"] == "1"
+    assert casey.headers["X-ZeroTrace-Inbound-Classes"] == "CUSTOMER_DATA"
 
-    # rule index 2 = the third rule in policies/acme.yaml, the inbound one
-    assert sam.headers["X-ZeroTrace-Rule-Index"] == "2"
-    assert sam.headers["X-ZeroTrace-Policy-Version"] == "1"
-    assert priya.headers["X-ZeroTrace-Policy-Version"] == "1"
+    # rule index 0 = the first rule in policies/acme-tech.yaml, the inbound one
+    assert casey.headers["X-ZeroTrace-Rule-Index"] == "0"
+    assert casey.headers["X-ZeroTrace-Org-Policy-Version"] == "1"
+    assert morgan.headers["X-ZeroTrace-Org-Policy-Version"] == "1"
+    assert "X-ZeroTrace-BU-Policy-Version" not in morgan.headers  # marketing has no BU policy
 
     # the actors really were resolved, and differently
-    assert priya.headers["X-ZeroTrace-Actor"] == "act_priya"
-    assert sam.headers["X-ZeroTrace-Actor"] == "act_sam"
-    assert priya.headers["X-ZeroTrace-Actor-Source"] == "session"
+    assert morgan.headers["X-ZeroTrace-Actor"] == "act_marketer"
+    assert casey.headers["X-ZeroTrace-Actor"] == "act_contractor"
+    assert morgan.headers["X-ZeroTrace-Actor-Source"] == "session"
 
     # --- 3. THE LEDGER RECORDED BOTH -----------------------------------
     factory = get_sessionmaker()
@@ -113,7 +127,10 @@ async def test_two_actors_one_request_two_answers(send, seeded):
             (
                 await s.execute(
                     select(Ledger)
-                    .where(Ledger.tenant_id == "acme", Ledger.event_type == "request.decided")
+                    .where(
+                        Ledger.tenant_id == TENANT,
+                        Ledger.event_type == "request.decided",
+                    )
                     .order_by(Ledger.id)
                 )
             )
@@ -125,33 +142,62 @@ async def test_two_actors_one_request_two_answers(send, seeded):
     assert len(inbound) == 2, "one inbound decision per request, for each actor"
 
     by_actor = {r["actor_id"]: r for r in inbound}
-    assert set(by_actor) == {"act_priya", "act_sam"}
+    assert set(by_actor) == {"act_marketer", "act_contractor"}
 
-    for actor_id, expected_action in (("act_priya", "allow"), ("act_sam", "mask")):
+    for actor_id, expected_action in (
+        ("act_marketer", "allow"),
+        ("act_contractor", "mask"),
+    ):
         record = by_actor[actor_id]
         # the decision ...
-        assert record["action"] == expected_action
+        assert record["decision_action"] == expected_action
         # ... the rule index ...
-        assert record["rule_index"] == 2
-        # ... and the policy version.
-        assert record["policy_version"] == 1
-        assert record["finding_classes"] == ["MEDICAL"]
+        assert record["rule_index"] == 0
+        # ... and the policy versions.
+        assert record["org_policy_version"] == 1
+        assert record["bu_policy_version"] is None
+        assert record["finding_classes"] == ["CUSTOMER_DATA"]
+        # ... and what the mode actually applied. Morgan and Casey both ran
+        # under the seeded enforce policy: applied equals decision.
+        assert record["applied_action"] == expected_action
+        assert record["mode"] == "enforce"
+        # degradation reasons are sorted and name the declared stubs
+        assert record["degraded_reasons"] == sorted(set(record["degraded_reasons"]))
+        assert {"detection_fixture", "upstream_stub"} <= set(record["degraded_reasons"])
 
-    # Priya's allow came from the clearance block, not from the rule not matching.
-    assert by_actor["act_priya"]["exception_applied"] is True
-    assert by_actor["act_sam"]["exception_applied"] is False
+    from zerotrace.db.models import Request as RequestRow
+    from zerotrace.db.models import Session as SessionRow
+
+    async with factory() as s:
+        req_rows = (await s.execute(select(RequestRow))).scalars().all()
+        sessions = {
+            sess.id: sess
+            for sess in (await s.execute(select(SessionRow))).scalars().all()
+        }
+    req_by_actor = {sessions[r.session_id].actor_id: r for r in req_rows}
+    assert req_by_actor["act_marketer"].status == "completed"
+    assert req_by_actor["act_marketer"].decision_action == "allow"
+    assert req_by_actor["act_marketer"].applied_action == "allow"
+    assert req_by_actor["act_contractor"].status == "completed"
+    assert req_by_actor["act_contractor"].decision_action == "mask"
+    assert req_by_actor["act_contractor"].applied_action == "mask"
+    for row in req_by_actor.values():
+        assert row.mode == "enforce"
+        assert row.org_policy_version == 1
+        assert row.bu_policy_version is None
+        assert row.degraded is not None and "detection_fixture" in row.degraded
 
     # --- 4. the ledger still verifies ----------------------------------
     from zerotrace.ledger import chain
 
     async with factory() as s:
-        result = await chain.verify(s, "acme")
+        result = await chain.verify(s, TENANT)
     assert result.ok, result.detail
 
 
 async def test_the_findings_table_never_holds_the_note(send, seeded):
-    """The decision is recorded. The clinical text is not."""
-    await send("sam_sales")
+    """The decision is recorded. The customer text is not."""
+    await send("casey_contractor")
 
     from zerotrace.db.models import Finding as FindingRow
 
@@ -161,12 +207,21 @@ async def test_the_findings_table_never_holds_the_note(send, seeded):
 
     assert rows, "the inbound finding should have been recorded"
     for row in rows:
-        assert row.entity_class == "MEDICAL"
+        assert row.entity_class == "CUSTOMER_DATA"
         assert row.span_path == STUB_SPAN
+        # the decision evidence is recorded: what policy said, and what the
+        # mode actually applied — never the note itself
+        assert row.decision_action == "mask"
+        assert row.applied_action == "mask"
         # every text column on the row, checked against the actual note
-        for value in (row.span_path, row.entity_class, row.leg, row.action):
-            assert "R. Kumar" not in value
-            assert "metformin" not in value
+        for value in (
+            row.span_path,
+            row.entity_class,
+            row.leg,
+            row.decision_action,
+            row.applied_action,
+        ):
+            assert STUB_NOTE not in value
 
 
 async def test_live_path_announces_its_stubs(client, seeded):
@@ -174,7 +229,10 @@ async def test_live_path_announces_its_stubs(client, seeded):
     response = await client.post(
         "/v1/messages",
         json=THE_REQUEST,
-        headers={"Authorization": f"Bearer {oidc.mint_dev_token('sam_sales')}"},
+        headers={
+            "X-ZeroTrace-Tenant": TENANT,
+            "Authorization": f"Bearer {oidc.mint_dev_token('casey_contractor')}",
+        },
     )
     assert response.status_code == 200
     degraded = response.headers["X-ZeroTrace-Degraded"]

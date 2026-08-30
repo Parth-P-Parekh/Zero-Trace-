@@ -31,8 +31,9 @@ from zerotrace.spans.model import Finding
 # Literals planted in the traffic. If any of these survives anywhere, we fail.
 SECRETS = [
     "sk-ant-api03-9fK2xRq7Lm4pZ8vN3wT6yB1cD5eF0gH2jK4lM6nP8qR",
-    "R. Kumar",
-    "metformin",
+    "Jordan Example",
+    "jordan.example@invalid.example",
+    "+1-202-555-0104",
     "4111111111111111",
     "hunter2-the-password",
 ]
@@ -45,7 +46,8 @@ REQUEST = {
             "content": (
                 "My key is sk-ant-api03-9fK2xRq7Lm4pZ8vN3wT6yB1cD5eF0gH2jK4lM6nP8qR "
                 "and my card is 4111111111111111, password hunter2-the-password. "
-                "Summarise the notes for patient R. Kumar who takes metformin."
+                "Summarise the account for customer Jordan Example at "
+                "jordan.example@invalid.example, phone +1-202-555-0104."
             ),
         }
     ],
@@ -89,14 +91,14 @@ async def test_no_table_and_no_log_holds_a_sensitive_literal(app, seeded, captur
     # Findings for both legs, naming spans that really exist in the payloads.
     app.dependency_overrides[get_detector] = lambda: FixtureDetector(
         [
-            Finding(entity_class="API_KEY", span_path="messages[0].content", leg="outbound"),
-            Finding(entity_class="MEDICAL", span_path="content[0].text", leg="inbound"),
+            Finding(entity_class="ANTHROPIC_KEY", span_path="messages[0].content", leg="outbound"),
+            Finding(entity_class="CUSTOMER_DATA", span_path="content[0].text", leg="inbound"),
         ]
     )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://gateway") as client:
-        for subject in ("dr_priya", "sam_sales"):
+        for subject in ("morgan_marketing", "casey_contractor"):
             await client.post(
                 "/v1/messages",
                 json=json.loads(json.dumps(REQUEST)),  # a fresh copy per call
@@ -125,10 +127,51 @@ async def test_the_findings_table_has_no_column_that_could_hold_a_value(db):
         "span_path",
         "entity_class",
         "confidence",
-        "action",
+        "decision_action",
+        "applied_action",
     }
-    for forbidden in ("value", "matched_text", "snippet", "raw", "sample", "context"):
+    # Finding.token lives in the in-memory model (a derived, one-way C8 token),
+    # never in this table: findings stay address + class + evidence only.
+    for forbidden in (
+        "value",
+        "matched_text",
+        "snippet",
+        "raw",
+        "sample",
+        "context",
+        "token",
+        "family",
+    ):
         assert forbidden not in columns
+
+
+async def test_requests_carry_decision_and_applied_evidence_not_legacy_actions(db):
+    """003 contract: lifecycle status, decision/applied actions, both versions."""
+    engine = get_engine()
+    async with engine.connect() as conn:
+        columns = await conn.run_sync(
+            lambda sync: {c["name"] for c in inspect(sync).get_columns("requests")}
+        )
+    assert {
+        "status",
+        "decision_action",
+        "applied_action",
+        "mode",
+        "org_policy_version",
+        "bu_policy_version",
+    } <= columns
+    assert "action" not in columns
+    assert "policy_version" not in columns
+
+
+async def test_tenants_no_longer_carry_a_mode_column(db):
+    """The active policy YAML owns shadow or enforce (003)."""
+    engine = get_engine()
+    async with engine.connect() as conn:
+        columns = await conn.run_sync(
+            lambda sync: {c["name"] for c in inspect(sync).get_columns("tenants")}
+        )
+    assert "mode" not in columns
 
 
 async def test_no_table_anywhere_has_a_value_shaped_column(db):
@@ -160,20 +203,23 @@ async def test_there_is_no_decrypt_path_in_the_codebase():
 async def test_masking_actually_removes_the_text_not_just_flags_it(app, seeded):
     """A decision that says 'mask' but leaves the text is the worst outcome."""
     app.dependency_overrides[get_detector] = lambda: FixtureDetector(
-        [Finding(entity_class="MEDICAL", span_path="content[0].text", leg="inbound")]
+        [Finding(entity_class="CUSTOMER_DATA", span_path="content[0].text", leg="inbound")]
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://gateway") as client:
         response = await client.post(
             "/v1/messages",
             json=json.loads(json.dumps(REQUEST)),
-            headers={"Authorization": f"Bearer {oidc.mint_dev_token('sam_sales')}"},
+            headers={"Authorization": f"Bearer {oidc.mint_dev_token('casey_contractor')}"},
         )
 
-    body = json.dumps(response.json())
+    body = response.text
     assert response.headers["X-ZeroTrace-Action"] == "mask"
-    assert "R. Kumar" not in body
-    assert "metformin" not in body
+    # the masked span really is block characters, with no trace of the note
+    assert "█" in body
+    from zerotrace.gateway.upstream import STUB_NOTE
+
+    assert STUB_NOTE not in body
 
 
 async def test_requests_and_sessions_hold_no_message_content(app, seeded):
@@ -184,7 +230,7 @@ async def test_requests_and_sessions_hold_no_message_content(app, seeded):
         await client.post(
             "/v1/messages",
             json=json.loads(json.dumps(REQUEST)),
-            headers={"Authorization": f"Bearer {oidc.mint_dev_token('sam_sales')}"},
+            headers={"Authorization": f"Bearer {oidc.mint_dev_token('casey_contractor')}"},
         )
 
     factory = get_sessionmaker()

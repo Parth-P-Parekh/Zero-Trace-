@@ -12,11 +12,22 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
  && rm -rf /var/lib/apt/lists/*
 
-COPY gateway/requirements.txt /app/gateway/requirements.txt
-RUN pip install --no-cache-dir -r gateway/requirements.txt
-
+COPY pyproject.toml /app/pyproject.toml
 COPY gateway/ /app/gateway/
+COPY hooks/ /app/hooks/
+COPY Control-DB/pyproject.toml /app/Control-DB/pyproject.toml
+COPY Control-DB/zerotrace/ /app/Control-DB/zerotrace/
+COPY Control-DB/alembic.ini /app/Control-DB/alembic.ini
+COPY Control-DB/policies/ /app/Control-DB/policies/
 
+# Install both distributions in one resolver transaction.  Part A's pinned
+# runtime dependencies are the authoritative versions for the shared service
+# stack; install Track B's production engines explicitly without re-installing
+# its older gateway requirements.
+RUN pip install --no-cache-dir . /app/Control-DB \
+    pyahocorasick==2.1.0 \
+    google-re2==1.1.20240702 \
+    anthropic==0.75.0
 ENV ZT_ENV=prod
 EXPOSE 8080
 

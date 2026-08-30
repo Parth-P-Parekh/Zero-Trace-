@@ -53,6 +53,9 @@ class Tenant(Base):
 
     parent_id NULL = the org row that business-unit policies inherit from.
     Cut for Part A: licence_tier, licensed_tokens, tokens_used (billing, C18).
+
+    NOTE: there is no `mode` column. The active policy YAML owns shadow or
+    enforce; migration 003 removed the column so the two can never disagree.
     """
 
     __tablename__ = "tenants"
@@ -60,7 +63,6 @@ class Tenant(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     parent_id: Mapped[str | None] = mapped_column(Text, ForeignKey("tenants.id"))
-    mode: Mapped[str] = mapped_column(Text, nullable=False, server_default="shadow")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -70,6 +72,11 @@ class Actor(Base):
     """A human or a workload. Carries role and groups[].
 
     NOTE: no virtual_key_hash column, deliberately and permanently.
+
+    scope is tenant or organisation. A tenant-scoped actor belongs to one
+    tenant; an organisation-scoped actor (security_admin, executive) resolves
+    from every tenant under the org row. Legacy rows are tenant-scoped, which
+    is what the server default preserves.
     """
 
     __tablename__ = "actors"
@@ -77,6 +84,10 @@ class Actor(Base):
         CheckConstraint(
             "idp_subject IS NOT NULL OR workload_id IS NOT NULL",
             name="actor_has_identity",
+        ),
+        CheckConstraint(
+            "scope IN ('tenant', 'organisation')",
+            name="actor_scope_valid",
         ),
         Index(
             "actors_idp",
@@ -98,6 +109,9 @@ class Actor(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(Text, ForeignKey("tenants.id"), nullable=False)
+    scope: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="tenant"
+    )  # tenant | organisation
     idp_subject: Mapped[str | None] = mapped_column(Text)  # OIDC/SAML sub — humans
     workload_id: Mapped[str | None] = mapped_column(Text)  # SPIFFE ID — services
     label: Mapped[str] = mapped_column(Text, nullable=False)
@@ -143,14 +157,15 @@ class Session(Base):
     )
 
 
-# ============ policy (C7) ============
-
-
 class Policy(Base):
     """Immutable rows. Publishing writes a new version and flips active.
 
     Cut for Part A: created_by. The publisher is carried in the policy.updated
     ledger payload instead, so the audit answer survives the cut.
+
+    content_hash is the canonical SHA-256 of (tenant_id, version, stored YAML).
+    Every policy.updated and request.decided ledger record carries it, so
+    verification can reject a policy row edited after publish (004).
     """
 
     __tablename__ = "policies"
@@ -169,6 +184,7 @@ class Policy(Base):
     tenant_id: Mapped[str] = mapped_column(Text, ForeignKey("tenants.id"), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     yaml: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(Text, nullable=False)
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
@@ -210,9 +226,33 @@ class Request(Base):
     """One row per AI request we handled.
 
     Cut for Part A: latency_by_stage, composite_risk (both need Part B stages).
+
+    status is the lifecycle status: outbound_decided, completed, or
+    upstream_failed. decision_action is what policy said; applied_action is
+    what actually reached the client (tokenize applies as mask until the vault
+    exists, so tokenize is never an applied action). mode records whether the
+    request ran under shadow or enforce.
     """
 
     __tablename__ = "requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('outbound_decided', 'completed', 'upstream_failed')",
+            name="request_status_valid",
+        ),
+        CheckConstraint(
+            "mode IN ('shadow', 'enforce')",
+            name="request_mode_valid",
+        ),
+        CheckConstraint(
+            "decision_action IN ('allow', 'warn', 'tokenize', 'mask', 'block')",
+            name="request_decision_action_valid",
+        ),
+        CheckConstraint(
+            "applied_action IN ('allow', 'warn', 'mask', 'block')",
+            name="request_applied_action_valid",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)  # req_<ulid>
     session_id: Mapped[str] = mapped_column(Text, ForeignKey("sessions.id"), nullable=False)
@@ -225,8 +265,12 @@ class Request(Base):
     escalated: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
-    action: Mapped[str] = mapped_column(Text, nullable=False)
-    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_action: Mapped[str] = mapped_column(Text, nullable=False)
+    applied_action: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)  # shadow | enforce
+    org_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    bu_policy_version: Mapped[int | None] = mapped_column(Integer)
     degraded: Mapped[str | None] = mapped_column(Text)  # NULL, or the stage that failed open
 
 
@@ -240,7 +284,17 @@ class Finding(Base):
     """
 
     __tablename__ = "findings"
-    __table_args__ = (Index("findings_req", "request_id"),)
+    __table_args__ = (
+        Index("findings_req", "request_id"),
+        CheckConstraint(
+            "decision_action IN ('allow', 'warn', 'tokenize', 'mask', 'block')",
+            name="finding_decision_action_valid",
+        ),
+        CheckConstraint(
+            "applied_action IN ('allow', 'warn', 'mask', 'block')",
+            name="finding_applied_action_valid",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigPK, primary_key=True, autoincrement=True)
     request_id: Mapped[str] = mapped_column(Text, ForeignKey("requests.id"), nullable=False)
@@ -248,24 +302,34 @@ class Finding(Base):
     span_path: Mapped[str] = mapped_column(Text, nullable=False)
     entity_class: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
-    action: Mapped[str] = mapped_column(Text, nullable=False)
-
-
-# ============ evidence (C13) ============
+    decision_action: Mapped[str] = mapped_column(Text, nullable=False)
+    applied_action: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class Ledger(Base):
     """Append-only hash chain. No cuts, ever.
 
-    event_type covers decisions AND administrative acts. Part A writes
-    policy.updated and request.decided.
+    Two logical chains per tenant (004), each hashing from its own genesis:
+
+      chain 'ctl' — control-plane evidence: policy.updated, chain.cross_anchor
+      chain 'dp'  — data-plane evidence: request.decided, request.failed,
+                    chain.cross_anchor
+
+    The chains are tied together by chain.cross_anchor records, each carrying
+    the other chain's head. event_type covers decisions AND administrative
+    acts.
     """
 
     __tablename__ = "ledger"
-    __table_args__ = (Index("ledger_chain", "tenant_id", "id", unique=True),)
+    __table_args__ = (
+        Index("ledger_chain", "tenant_id", "id", unique=True),
+        Index("ledger_chain_dual", "tenant_id", "chain", "id", unique=True),
+        CheckConstraint("chain IN ('ctl', 'dp')", name="ledger_chain_valid"),
+    )
 
     id: Mapped[int] = mapped_column(BigPK, primary_key=True, autoincrement=True)
     tenant_id: Mapped[str] = mapped_column(Text, ForeignKey("tenants.id"), nullable=False)
+    chain: Mapped[str] = mapped_column(Text, nullable=False)  # ctl | dp
     prev_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     record_hash: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)

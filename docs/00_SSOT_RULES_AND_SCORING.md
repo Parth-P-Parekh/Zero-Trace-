@@ -138,6 +138,7 @@ Every claim we make to a judge maps to a file in `/evidence/`. Build the pack **
   03_virality/       post_t3.png, post_t20.png, metrics_screenshot.png
   04_jtbd/           benchmark_corpus.jsonl, run_1.json, run_2.json, run_3.json,
                      scorecard.md
+                     EV-PA-01-part-a-e2e.json
   05_memory/         restart_continuity.mp4, vault_trace.json, policy_versions.json
   06_creativity/     architecture.md, design_decisions.md
   07_impact/         baseline_measurement.json, post_measurement.json, impact.md
@@ -170,6 +171,7 @@ Every claim we make to a judge maps to a file in `/evidence/`. Build the pack **
 | `EV-IMP-02` | Post-run with ZeroTrace enabled; delta computed | Impact L5 | QA | T+20 |
 | `EV-DEL-01` | Recording of false-positive override → scoped exception written → same request now clean | Delight L4 | Frontend | T+19 |
 | `EV-DEL-02` | Diff view showing exactly what changed and why | Delight L3/L4 | Frontend | T+19 |
+| `EV-PA-01` | Part A production-mode E2E gate (`make part-a-e2e`): real HTTP through PostgreSQL 16 + Redis 7, restart persistence, concurrency, policy conflict safety, and the full privacy sweep. Approved scope: production-mode Part A E2E only — OIDC, real detection, and the real provider upstream are later milestones. Written to `evidence/04_jtbd/EV-PA-01-part-a-e2e.json`. Not part of the later 60-case full-product evidence IDs. | JTBD L5 foundation (one-command end-to-end gate, no builder intervention); restart persistence feeds Memory & Context | Backend / QA | Part A complete |
 
 ### 5.2 Definition of Done
 

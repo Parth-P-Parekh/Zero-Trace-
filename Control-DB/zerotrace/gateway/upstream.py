@@ -13,6 +13,13 @@ Two implementations:
   PassthroughUpstream  a real httpx call to ZT_UPSTREAM_BASE_URL. Selected with
                        ZT_UPSTREAM=passthrough, which config.py refuses to
                        accept without a base URL.
+
+Both send() implementations take the ALREADY-SERIALIZED request bytes: the
+gateway serializes the outbound body once, verifies those exact bytes against
+its edits, and hands the same bytes over. Nothing here re-serializes a dict,
+so the bytes verified are the bytes dispatched. The passthrough client is one
+pooled httpx.AsyncClient per instance, created lazily and closed by the app
+lifespan shutdown.
 """
 
 from __future__ import annotations
@@ -40,14 +47,16 @@ class Upstream(Protocol):
     name: str
     degrade_reason: str | None
 
-    async def send(self, payload: dict, *, model: str) -> dict: ...
+    async def send(self, serialized: bytes, *, model: str) -> dict: ...
+
+    async def aclose(self) -> None: ...
 
 
 class StubUpstream:
     name = "stub"
     degrade_reason = "upstream_stub"
 
-    async def send(self, payload: dict, *, model: str) -> dict:
+    async def send(self, serialized: bytes, *, model: str) -> dict:
         return {
             "id": "msg_stub",
             "type": "message",
@@ -57,6 +66,9 @@ class StubUpstream:
             "stop_reason": "end_turn",
         }
 
+    async def aclose(self) -> None:
+        """Nothing to close; the stub owns no connection."""
+
 
 class PassthroughUpstream:
     name = "passthrough"
@@ -65,17 +77,36 @@ class PassthroughUpstream:
     def __init__(self, base_url: str, timeout_s: int) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_s
+        self._client: httpx.AsyncClient | None = None
 
-    async def send(self, payload: dict, *, model: str) -> dict:
+    async def _pooled_client(self) -> httpx.AsyncClient:
+        # One pooled client per instance; the app lifespan closes it. Created
+        # lazily so tests that never dispatch do not leak connections.
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self._timeout)
+        return self._client
+
+    async def send(self, serialized: bytes, *, model: str) -> dict:
         url = f"{self._base_url}/v1/messages"
+        client = await self._pooled_client()
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                return response.json()
+            response = await client.post(
+                url, content=serialized, headers={"Content-Type": "application/json"}
+            )
+            response.raise_for_status()
+            return response.json()
         except httpx.HTTPError as exc:
             log.error("upstream.failed", url=url, error=str(exc))
             raise UpstreamError(f"upstream call to {url} failed: {exc}") from exc
+        except ValueError as exc:
+            # response.json() raised on a non-JSON body: not a valid reply.
+            log.error("upstream.invalid_json", url=url, error=str(exc))
+            raise UpstreamError(f"upstream call to {url} returned invalid JSON: {exc}") from exc
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
 
 def build() -> Upstream:

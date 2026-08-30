@@ -1,13 +1,16 @@
 """Standalone ledger verification. CODE-01 §14.2.
 
-Takes a --tenant and nothing else. Runs WITHOUT the app: it opens the database,
-walks the chain from genesis, recomputes every hash, and prints the first
-divergence if there is one.
+Takes a --tenant and optionally a --chain (ctl, dp, or all). Runs WITHOUT the
+app: it opens the database, walks the chain from genesis, recomputes every
+hash, and prints the first divergence if there is one. With --chain all (the
+default) each tenant's two logical chains are reported separately, including
+the cross-anchor and policy-row bindings that tie them together.
 
 A judge can run this against the database themselves. That is worth more than
 any claim in a slide.
 
-    python -m scripts.verify_ledger --tenant acme
+    python -m scripts.verify_ledger --tenant acme-tech
+    python -m scripts.verify_ledger --tenant acme-tech --chain dp
 
 Exit code 0 = the chain verifies. Exit code 1 = it does not.
 """
@@ -22,10 +25,10 @@ from sqlalchemy import select
 
 from zerotrace.db.models import Tenant
 from zerotrace.db.session import dispose_engine, get_sessionmaker
-from zerotrace.ledger import chain
+from zerotrace.ledger import chain as ledger_chain
 
 
-async def run(tenant_id: str | None, quiet: bool) -> int:
+async def run(tenant_id: str | None, quiet: bool, chain: str = "all") -> int:
     factory = get_sessionmaker()
     async with factory() as session:
         if tenant_id:
@@ -37,26 +40,38 @@ async def run(tenant_id: str | None, quiet: bool) -> int:
             print("no tenants found", file=sys.stderr)
             return 1
 
+        chains = ("ctl", "dp") if chain == "all" else (chain,)
         failed = False
         for tid in tenants:
-            result = await chain.verify(session, tid)
-            if result.ok:
-                if not quiet:
-                    print(f"OK    {tid}: {result.checked} records, chain intact")
-            else:
-                failed = True
-                print(f"BROKEN {tid}: at ledger id {result.broken_at}", file=sys.stderr)
-                print(f"       {result.detail}", file=sys.stderr)
+            for name in chains:
+                result = await ledger_chain.verify(session, tid, chain_name=name)
+                label = f"{tid} [{name}]"
+                if result.ok:
+                    if not quiet:
+                        print(f"OK    {label}: {result.checked} records, chain intact")
+                else:
+                    failed = True
+                    print(
+                        f"BROKEN {label}: at ledger id {result.broken_at}",
+                        file=sys.stderr,
+                    )
+                    print(f"       {result.detail}", file=sys.stderr)
         return 1 if failed else 0
 
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Verify the ZeroTrace evidence ledger.")
     parser.add_argument("--tenant", help="tenant id; omit to check every tenant")
+    parser.add_argument(
+        "--chain",
+        choices=["ctl", "dp", "all"],
+        default="all",
+        help="which logical chain to verify (default: all)",
+    )
     parser.add_argument("--quiet", action="store_true", help="print only failures")
     args = parser.parse_args()
     try:
-        return await run(args.tenant, args.quiet)
+        return await run(args.tenant, args.quiet, args.chain)
     finally:
         await dispose_engine()
 

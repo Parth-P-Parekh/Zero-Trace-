@@ -205,7 +205,8 @@ def decide(
 
     return Decision(
         action=action,
-        policy_version=org.version,
+        org_policy_version=org.version,
+        bu_policy_version=bu.version if bu is not None else None,
         rule_index=rule_index,
         rule_scope=rule_scope,  # type: ignore[arg-type]
         exception_applied=exception_applied,

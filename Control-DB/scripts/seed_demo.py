@@ -1,15 +1,20 @@
-"""M1 — seed the demo tenant, groups, actors and policy.
+"""M1 — seed the demo organisation, groups, actors and policies.
 
-Creates exactly what SKEL-01 M1 asks for:
+Creates exactly what SKEL-01 M1 / plan section 6 asks for:
 
-    tenant   acme, with business units payments and support
-    groups   clinical_staff, finance, contractors
-    actors   3 — two people and one workload
+    tenants  acme-tech (Acme Technologies) with four business units:
+             engineering, finance, marketing, security
+    groups   support, hr, finance, security  — on the root only
+    actors   7 — two organisation-scoped people on the root, five
+             tenant-scoped people and workloads
 
-The two people are the whole point. They differ in ONE way: group membership.
+The two people who carry the Part A claim are both in MARKETING:
 
-    dr_priya    role=clinician  groups=[clinical_staff]
-    sam_sales   role=sales      groups=[finance]
+    act_marketer   role=marketer    groups=[support]
+    act_contractor role=contractor  groups=[]
+
+They differ in ONE way: group membership. Send both the same customer-data
+request and the answers differ. That is Part A.
 
 Run:  python -m scripts.seed_demo
 """
@@ -30,43 +35,94 @@ from zerotrace.policy import store
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 POLICIES = ROOT / "policies"
 
+ROOT_TENANT = "acme-tech"
+
 TENANTS = [
-    ("acme", "Acme Health", None),
-    ("acme-payments", "Acme Health · Payments", "acme"),
-    ("acme-support", "Acme Health · Support", "acme"),
+    (ROOT_TENANT, "Acme Technologies", None),
+    ("acme-tech-engineering", "Acme Technologies · Engineering", ROOT_TENANT),
+    ("acme-tech-finance", "Acme Technologies · Finance", ROOT_TENANT),
+    ("acme-tech-marketing", "Acme Technologies · Marketing", ROOT_TENANT),
+    ("acme-tech-security", "Acme Technologies · Security", ROOT_TENANT),
 ]
 
 GROUPS = [
-    ("clinical_staff", "May receive clinical content on the inbound leg"),
-    ("finance", "Finance and billing"),
-    ("contractors", "Third parties — never cleared for clinical content"),
+    ("support", "May receive customer data on the inbound leg"),
+    ("hr", "May receive HR records on the inbound leg"),
+    ("finance", "May receive financial records on the inbound leg"),
+    ("security", "May receive infrastructure secrets on the inbound leg"),
 ]
 
+# id, tenant, scope, idp_subject, workload_id, label, role, groups
 ACTORS = [
-    # id, idp_subject, workload_id, label, role, groups
     (
-        "act_priya",
-        "dr_priya",
+        "act_security_admin",
+        ROOT_TENANT,
+        "organisation",
+        "avery_admin",
         None,
-        "Dr Priya Nair",
-        "clinician",
-        ["clinical_staff"],
-    ),
-    (
-        "act_sam",
-        "sam_sales",
-        None,
-        "Sam Okonkwo",
-        "sales",
-        ["finance"],
-    ),
-    (
-        "act_nightly",
-        None,
-        "spiffe://acme.internal/ns/payments/sa/nightly-export",
-        "nightly export job",
-        "workload",
+        "Avery Chen",
+        "security_admin",
         [],
+    ),
+    (
+        "act_executive",
+        ROOT_TENANT,
+        "organisation",
+        "maya_executive",
+        None,
+        "Maya Patel",
+        "executive",
+        [],
+    ),
+    (
+        "act_engineer",
+        "acme-tech-engineering",
+        "tenant",
+        "erin_engineer",
+        None,
+        "Erin Okafor",
+        "engineer",
+        ["security"],
+    ),
+    (
+        "act_finance",
+        "acme-tech-finance",
+        "tenant",
+        "finn_finance",
+        None,
+        "Finn Müller",
+        "finance_analyst",
+        ["finance", "hr"],
+    ),
+    (
+        "act_marketer",
+        "acme-tech-marketing",
+        "tenant",
+        "morgan_marketing",
+        None,
+        "Morgan Lee",
+        "marketer",
+        ["support"],
+    ),
+    (
+        "act_contractor",
+        "acme-tech-marketing",
+        "tenant",
+        "casey_contractor",
+        None,
+        "Casey Rivera",
+        "contractor",
+        [],
+    ),
+    (
+        "act_buildbot",
+        "acme-tech-engineering",
+        "tenant",
+        None,
+        "spiffe://acme-tech.internal/ns/engineering/sa/buildbot",
+        "buildbot release job",
+        "workload",
+        ["security"],
     ),
 ]
 
@@ -75,32 +131,33 @@ async def seed() -> None:
     async with session_scope() as session:
         for tenant_id, name, parent in TENANTS:
             if await session.get(Tenant, tenant_id) is None:
-                session.add(Tenant(id=tenant_id, name=name, parent_id=parent, mode="enforce"))
+                session.add(Tenant(id=tenant_id, name=name, parent_id=parent))
         await session.flush()
 
         for name, description in GROUPS:
             exists = (
                 await session.execute(
-                    select(Group).where(Group.tenant_id == "acme", Group.name == name)
+                    select(Group).where(Group.tenant_id == ROOT_TENANT, Group.name == name)
                 )
             ).scalar_one_or_none()
             if exists is None:
                 session.add(
                     Group(
                         id=f"grp_{name}",
-                        tenant_id="acme",
+                        tenant_id=ROOT_TENANT,
                         name=name,
                         description=description,
                     )
                 )
         await session.flush()
 
-        for actor_id, subject, workload, label, role, groups in ACTORS:
+        for actor_id, tenant, scope, subject, workload, label, role, groups in ACTORS:
             if await session.get(Actor, actor_id) is None:
                 session.add(
                     Actor(
                         id=actor_id,
-                        tenant_id="acme",
+                        tenant_id=tenant,
+                        scope=scope,
                         idp_subject=subject,
                         workload_id=workload,
                         label=label,
@@ -111,19 +168,23 @@ async def seed() -> None:
         await session.flush()
 
         # Policies. The org first — the BU publish validates against it.
-        await _publish_if_new(session, "acme", POLICIES / "acme.yaml")
-        await _publish_if_new(session, "acme-support", POLICIES / "acme-support.yaml")
+        await _publish_if_new(session, ROOT_TENANT, POLICIES / "acme-tech.yaml")
+        await _publish_if_new(
+            session, "acme-tech-security", POLICIES / "acme-tech-security.yaml"
+        )
 
     print("seeded:")
-    print("  tenant   acme  (business units: acme-payments, acme-support)")
-    print("  groups   clinical_staff, finance, contractors")
-    print("  actors   act_priya, act_sam, act_nightly")
+    print("  tenant   acme-tech  (business units: engineering, finance, marketing, security)")
+    print("  groups   support, hr, finance, security")
+    print("  actors   act_security_admin, act_executive, act_engineer, act_finance,")
+    print("           act_marketer, act_contractor, act_buildbot")
     print()
-    print("Two people, one difference — group membership:")
-    print(f"  Dr Priya   token: {oidc.mint_dev_token('dr_priya')}   groups=[clinical_staff]")
-    print(f"  Sam        token: {oidc.mint_dev_token('sam_sales')}   groups=[finance]")
+    print("Two people, one difference — group membership in marketing:")
+    print(f"  Morgan (marketer)   token: {oidc.mint_dev_token('morgan_marketing')}   groups=[support]")
+    print(f"  Casey  (contractor) token: {oidc.mint_dev_token('casey_contractor')}   groups=[]")
     print()
-    print("Send both the same request and compare. That is Part A.")
+    print("Send both the same customer-data request and compare. That is Part A.")
+    print(f"  python -m scripts.demo_two_actors")
 
 
 async def _publish_if_new(session, tenant_id: str, path: pathlib.Path) -> None:
@@ -138,7 +199,11 @@ async def _publish_if_new(session, tenant_id: str, path: pathlib.Path) -> None:
         print(f"  ! policy file missing: {path}", file=sys.stderr)
         return
     await store.publish(
-        session, tenant_id, path.read_text(encoding="utf-8"), published_by="seed_demo"
+        session,
+        tenant_id,
+        store.strip_version(path.read_text(encoding="utf-8")),
+        published_by="seed_demo",
+        expected_active_version=None,  # seed only publishes tenants with no policy yet
     )
 
 

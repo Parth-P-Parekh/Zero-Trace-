@@ -44,7 +44,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("ZT_ENV", "dev")
     monkeypatch.setenv("ZT_REDIS_URL", "")  # in-process policy cache for tests
     monkeypatch.setenv("ZT_UPSTREAM", "stub")
-    monkeypatch.setenv("ZT_DEFAULT_TENANT", "acme")
+    monkeypatch.setenv("ZT_DEFAULT_TENANT", "acme-tech")
     monkeypatch.chdir(ROOT)
     reset_settings_cache()
 

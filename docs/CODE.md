@@ -91,13 +91,17 @@ Decided once, here, so nobody relitigates them at T+9 on three hours of sleep.
 Every path here is a file somebody creates. If a path is not in this tree, it does not exist yet — add it here in the same commit that creates it.
 
 > **Built so far.** SKEL-01 Part A (M0–M2) lives in `Control-DB/` on the `PA` branch and
-> creates the subset marked **[A]** below. Paths marked **[A+]** are additions this document
-> did not previously carry; each is justified in `Control-DB/SUBMISSION.md` §3.
+> creates the subset marked **[A]** below, plus the production-mode E2E gate
+> `make part-a-e2e` (evidence `EV-PA-01` →
+> `../evidence/04_jtbd/EV-PA-01-part-a-e2e.json`) and the deterministic test stack under
+> `tests/e2e/`. Paths marked **[A+]** are additions this document did not previously carry;
+> each is justified in `Control-DB/SUBMISSION.md` §3.
 
 ```
 zerotrace/
   Makefile                       dev · test · judge · evidence · verify · gate-G1..G8   [A]
   docker-compose.yml             gateway, api, worker, postgres, redis, dnsmasq, demo-app, web  [A: postgres/redis/gateway only]
+  docker-compose.e2e.yml         the isolated production-mode E2E stack (ZT_ENV=prod)    [A+]
   docker-compose.demo.yml        overlay: internal network + boundary deny (§11.1, §13)
   Dockerfile                     the image docker-compose builds                        [A+]
   pyproject.toml                 pytest + ruff configuration                            [A+]
@@ -210,7 +214,8 @@ zerotrace/
       session.py                 async engine, session factory                              [A]
       models.py                  SQLAlchemy 2.0 ORM                                         [A]
       types.py                   dialect-aware column types (TEXT[]/JSONB)                  [A+]
-      migrations/                alembic versions                          [A: 001_identity_ledger, 002_policy]
+      locks.py                   tenant-wide advisory lock: publish + ledger appends        [A+]
+      migrations/                alembic versions          [A: 001_identity_ledger, 002_policy, 003_part_a_production]
 
     worker/
       main.py                    async worker: escalation, synthesis, coverage, metering
@@ -245,14 +250,21 @@ zerotrace/
     01_admin/ 02_novelty/ 03_memory/ 04_jtbd/ 05_impact/ 06_revenue/ 07_delight/
 
   policies/                      seed policy YAML, one file per tenant                     [A+]
-    acme.yaml                    the org policy: three rules
-    acme-support.yaml            a business unit that RAISES an action
+    acme-tech.yaml               the Acme Technologies org policy: five rules               [A+]
+    acme-tech-security.yaml      a business unit that RAISES inbound actions                [A+]
 
   scripts/
     seed_demo.py                 tenants, actors, groups, policies, demo data               [A]
     demo_two_actors.py           Part A's claim, runnable on a terminal                      [A+]
     make_ca.sh                   mkcert CA for the transparent gateway
     verify_ledger.py             standalone chain verification a judge can run              [A]
+
+  tests/e2e/                     the production-mode E2E gate (plan §7)                     [A+]
+    fixtures.py                  fixed Acme fixture values + protected atoms for the privacy oracle
+    detector.py                  SyntheticFixtureDetector — declared `detection_test_adapter`
+    upstream_app.py              deterministic test upstream — declared `deterministic_upstream`
+    app.py                       test-only app factory; the production app cannot select it
+    runner.py                    the seven phases, load gate, privacy sweep → EV-PA-01
 ```
 
 ---
@@ -344,7 +356,10 @@ make gate-G1    # ... one target per gate; each prints PASS/FAIL and writes its 
 2. `scripts/make_ca.sh` — generate the mkcert CA, mount it into the gateway and the demo app
 3. `docker compose up -d postgres redis` then wait for health
 4. `alembic upgrade head`
-5. `python scripts/seed_demo.py` — tenants (`acme` with BUs `payments`, `support`), actors, groups, seed policy v1, seed detector pack
+5. `python scripts/seed_demo.py` — tenants (`acme-tech` with BUs `acme-tech-engineering`,
+   `acme-tech-finance`, `acme-tech-marketing`, `acme-tech-security`), 7 actors (including
+   organisation-scoped `security_admin` and `executive`), 4 clearance groups, root + security
+   policy v1, seed detector pack
 6. `docker compose up -d gateway api worker web dnsmasq demo-app`
 7. print: console `http://localhost:3000`, gateway `https://localhost:8443`, demo app `http://localhost:8080`
 
@@ -399,7 +414,7 @@ CREATE UNIQUE INDEX actors_wl    ON actors(tenant_id, workload_id) WHERE workloa
 CREATE TABLE groups (
   id          TEXT PRIMARY KEY,
   tenant_id   TEXT NOT NULL REFERENCES tenants(id),
-  name        TEXT NOT NULL,                       -- clinical_staff, finance, contractors
+  name        TEXT NOT NULL,                       -- customer_pii_access, employee_pii_access, ...
   description TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, name)
@@ -1368,24 +1383,45 @@ Replay the ledger's `request.decided` records with the policy forced to `allow` 
 
 ```
 X-ZeroTrace-Action: masked
-X-ZeroTrace-Findings: 3
+X-ZeroTrace-Applied-Action: masked
 X-ZeroTrace-Classes: API_KEY,PERSON,PAN
 X-ZeroTrace-Inbound-Findings: 1
 X-ZeroTrace-Inbound-Classes: SECURITY_FINDING
 X-ZeroTrace-Composite-Risk: 0.71
 X-ZeroTrace-Latency-Ms: 21
-X-ZeroTrace-Ledger-Id: led_01J...
 X-ZeroTrace-Mode: shadow
 X-ZeroTrace-Degraded: s2_timeout        # only when a stage failed open
 ```
 
-**Error contract.** Every error is JSON with `{"error": {"code", "message", "ledger_id"}}` and an honest code: `zt.blocked_by_policy` (403), `zt.dispatch_verification_failed` (500 — we could not prove the redaction, so we did not send), `zt.upstream_unavailable` (502), `zt.licence_exceeded` (402). Never a 200 with a fabricated body.
+Part A also emits on every call: `X-ZeroTrace-Org-Policy-Version` (required), optional
+`X-ZeroTrace-BU-Policy-Version`, `X-ZeroTrace-Outbound-Ledger-Id`, optional
+`X-ZeroTrace-Inbound-Ledger-Id`, `X-ZeroTrace-Request-Id`, `X-ZeroTrace-Session`,
+`X-ZeroTrace-Actor-Registered`, and sorted comma-joined `X-ZeroTrace-Degraded` reasons
+(`policy_cache_local` when Redis is down). `X-ZeroTrace-Policy-Version` is removed;
+version metadata is org/BU-scoped.
+
+**Error contract.** Every error is JSON with `{"error": {"code", "message"}}`, plus
+`request_id` and an optional relevant `ledger_id`: `zt.blocked_by_policy` (403),
+`zt.dispatch_verification_failed` (500 — we could not prove the redaction, so we did not
+send), `zt.upstream_unavailable` (502), `zt.detector_unavailable` / `zt.ledger_unavailable`
+/ `zt.security_core_unavailable` (503), `zt.policy_version_conflict` (409),
+`zt.internal_error` (500). Never a 200 with a fabricated body, never a raw exception.
 
 ### 15.2 Control plane
 
+Part A mounts the control router under `/api` (the old `/v1` control routes are removed).
+Every route requires the `security_admin` role and target-tenant authorization; an
+organisation-scoped admin may manage only the root tenant and its descendants.
+
 ```
-GET    /api/policies                     GET  /api/policies/:version
-PUT    /api/policies                     → publishes a new version, ledger event
+GET    /api/policies/{tenant_id}            active policy          GET  /api/policies/{tenant_id}/versions
+PUT    /api/policies/{tenant_id}            → conditional publish: PolicyDraft (no client
+                                            version/published_by) + expected_active_version
+                                            (None for the first policy); stale = 409, no rows
+GET    /api/groups/{tenant_id}              GET  /api/actors/{tenant_id}
+GET    /api/ledger/{tenant_id}              GET  /api/ledger/{tenant_id}/verify
+GET    /api/policies                        GET  /api/policies/:version
+PUT    /api/policies                        → publishes a new version, ledger event
 GET    /api/detectors                    POST /api/detectors/:id/rollback
 GET    /api/requests                     GET  /api/requests/:id/diff      → EV-DEL-02
 POST   /api/findings/:id/false-positive  → A7 drafts a scoped exception

@@ -32,6 +32,35 @@ async def test_readyz_reports_every_stub_by_name(client):
     assert body["stubs"]["detection"] == "detection_stub"
     assert body["stubs"]["upstream"] == "upstream_stub"
     assert body["stubs"]["oidc"] is True
+    # The stable metadata keys the ops surface depends on.
+    assert body["detector"] == "stub"
+    assert body["upstream"] == "stub"
+    assert body["oidc_stub"] is True
+    assert body["redis_backend"] in ("none", "redis", "local")
+    assert isinstance(body["degraded"], list)
+    assert "detection_stub" in body["degraded"]
+    assert "upstream_stub" in body["degraded"]
+
+
+def test_the_exported_production_app_uses_the_safe_default_detector():
+    """No environment variable can select the tests/e2e adapter (plan §5).
+
+    The exported `app` is create_app() with no overrides, so it always runs
+    the safe StubDetector and the configured upstream, and it exposes no E2E
+    probe route. The synthetic fixture detector lives under tests/e2e/ and is
+    unreachable from production code.
+    """
+    import sys
+
+    from zerotrace.gateway.app import app
+
+    assert app.state.detector.name == "stub"
+    assert app.state.detector.degrade_reason == "detection_stub"
+    assert app.state.upstream.name in ("stub", "passthrough")
+    assert "tests.e2e" not in sys.modules
+    assert not any(
+        "__e2e" in getattr(route, "path", "") for route in app.routes
+    ), "the production app must not expose E2E probe routes"
 
 
 def test_config_refuses_a_passthrough_upstream_with_no_url(monkeypatch):
