@@ -188,3 +188,99 @@ def test_pieces_going_to_different_files_are_not_joined(check_tool):
 
 def test_a_tool_with_nothing_to_scan_is_allowed(check_tool):
     assert check_tool("Read", {"file_path": "/etc/hosts"}, "s")["allow"]
+
+
+# ------------------------------------------------------- stale code must not serve --
+
+def test_the_build_stamp_changes_when_a_detector_changes(tmp_path, monkeypatch):
+    """A daemon holds its pack for as long as it lives.
+
+    Without this, editing a detector leaves the fix inert until the idle timeout fifteen
+    minutes later -- and for a security control the stale answer is the permissive one,
+    with nobody told.
+    """
+    from pathlib import Path
+
+    from hooks.daemon_client import build_stamp
+
+    before = build_stamp()
+    Path("gateway/detectors/india_id.py").touch()
+    assert build_stamp() != before
+
+
+def test_the_stamp_is_cheap_enough_for_the_fast_path():
+    """It runs before every prompt, so it has to cost a few hundred stats, not a hash of
+    the source."""
+    import time
+
+    from hooks.daemon_client import build_stamp
+
+    build_stamp()                       # warm the directory cache
+    start = time.perf_counter()
+    for _ in range(5):
+        build_stamp()
+    per_call = (time.perf_counter() - start) * 1000 / 5
+    assert per_call < 25, f"{per_call:.1f} ms is too much before every prompt"
+
+
+def test_a_daemon_from_different_source_is_not_trusted(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from hooks import daemon_client
+
+    (tmp_path / "daemon.json").write_text(
+        json.dumps({"port": 9, "token": "x", "pid": 1, "build": "not-this-build"}),
+        encoding="utf-8",
+    )
+    assert daemon_client._endpoint() is None      # noqa: SLF001
+    assert not (tmp_path / "daemon.json").exists(), "a stale endpoint should be retired"
+
+
+def test_an_endpoint_without_a_build_is_treated_as_stale(tmp_path, monkeypatch):
+    """Written by a daemon that predates the stamp, so it predates whatever else changed."""
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from hooks import daemon_client
+
+    (tmp_path / "daemon.json").write_text(
+        json.dumps({"port": 9, "token": "x", "pid": 1}), encoding="utf-8")
+    assert daemon_client._endpoint() is None      # noqa: SLF001
+
+
+def test_repeated_failures_do_not_spawn_a_process_per_call(tmp_path, monkeypatch):
+    """"It got stuck in a loop", from the outside.
+
+    Every call that finds no daemon would otherwise spawn one. When starting fails -- a
+    blocked port, a broken interpreter, a daemon that dies on boot -- each prompt and each
+    tool call spawns another process that dies, and the machine fills with them while
+    checking silently falls back to in-process every time.
+    """
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from hooks import daemon_client
+
+    spawned = []
+    monkeypatch.setattr(daemon_client.subprocess, "Popen",
+                        lambda *a, **k: spawned.append(1))
+
+    for _ in range(6):
+        daemon_client.start()
+
+    assert len(spawned) == 1, f"{len(spawned)} spawns for 6 calls"
+
+
+def test_the_backoff_expires(tmp_path, monkeypatch):
+    """A daemon that legitimately died must be replaceable, just not instantly."""
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    from hooks import daemon_client
+
+    spawned = []
+    monkeypatch.setattr(daemon_client.subprocess, "Popen",
+                        lambda *a, **k: spawned.append(1))
+
+    daemon_client.start()
+    # Age the marker past the backoff rather than sleeping through it.
+    marker = tmp_path / "daemon-start.stamp"
+    import os
+    old = __import__("time").time() - daemon_client.START_BACKOFF_S - 1
+    os.utime(marker, (old, old))
+    daemon_client.start()
+
+    assert len(spawned) == 2

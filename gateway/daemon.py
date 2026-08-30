@@ -232,16 +232,29 @@ def serve(port: int = 0) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump({"port": actual, "token": _Handler.token, "pid": os.getpid()}, fh)
+        from hooks.daemon_client import build_stamp
+
+        json.dump({"port": actual, "token": _Handler.token, "pid": os.getpid(),
+                   # What the client compares against: a daemon running different source
+                   # than the caller must not answer for it.
+                   "build": build_stamp()}, fh)
 
     _Handler.last_seen = time.monotonic()
     threading.Thread(target=_reap, args=(server,), daemon=True).start()
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        # Only remove the file if it still describes *this* daemon. A retiring daemon that
+        # unlinks unconditionally deletes its replacement's endpoint: the client shuts the
+        # old one down, starts a new one, and the new one publishes while the old one is
+        # still winding down -- so the survivor ends up unreachable and every later call
+        # falls back to a 300 ms in-process check with nothing to explain why.
+        #
+        # Same reasoning as releasing a lock only when you still hold it.
         try:
-            path.unlink(missing_ok=True)
-        except OSError:
+            if json.loads(path.read_text(encoding="utf-8")).get("pid") == os.getpid():
+                path.unlink(missing_ok=True)
+        except (OSError, ValueError):
             pass
 
 

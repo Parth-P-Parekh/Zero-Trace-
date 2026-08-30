@@ -57,31 +57,56 @@ def verhoeff_ok(digits: str) -> bool:
 
 
 class AadhaarDetector(Detector):
-    """A 12-digit Aadhaar, spaced or not.
+    """A 12-digit Aadhaar: valid by checksum, or claimed as one by the writer.
+
+    **One detector, two ways to be sure, on purpose.** An earlier version split these into
+    two classes and they shadowed each other: both matched the same span, the stricter
+    pattern won the candidate, its `confirm()` rejected the checksum, and the second
+    detector never saw the span at all. `1234 5678 9012` was caught and `9876 5432 1098`
+    was not -- for no reason a user could ever have guessed. Overlapping candidate patterns
+    across detectors are a trap; deciding once is the fix.
+
+    The two paths:
+
+    * **Verhoeff-valid**, first digit 2-9. UIDAI's own checksum, so this is near-certain
+      and takes the high confidence. A bare twelve-digit run that fails it is far more
+      often an order number, a millisecond timestamp or a build id, and claiming those
+      would get the class switched off within a week.
+
+    * **Labelled.** "my aadhaar is 1234 5678 9012" is a disclosure whatever the digits do.
+      The person has said what they think it is, and a control that waves it through
+      because the checksum fails is technically right and practically useless -- it would
+      also miss a real Aadhaar mistyped by one digit, which is the likeliest way a genuine
+      one gets pasted. Here the *label* is the evidence, not the shape.
 
     Written as `2234 5678 9012` far more often than as a bare run, so the pattern allows
-    the separators and `confirm` strips them before checking. Matching only the compact
-    form would miss the way people actually paste it.
+    the separators and the digits are extracted before either check.
     """
 
     name = "aadhaar"
     entity_class = EntityClass.AADHAAR
     tier = Tier.DETERMINISTIC
-    candidate_pattern = r"[2-9][0-9]{3}[ -]?[0-9]{4}[ -]?[0-9]{4}"
+    candidate_pattern = r"[0-9]{4}[ -]?[0-9]{4}[ -]?[0-9]{4}"
+
+    #: How far back to look for a label. A sentence, not a document -- "aadhaar" in a
+    #: heading two paragraphs up says nothing about this particular number.
+    _WINDOW = 48
+    _LABELS = ("aadhaar", "aadhar", "adhaar", "uidai", "आधार")
 
     def confirm(self, text: str, start: int, end: int, deadline: Deadline) -> Match | None:
         digits = "".join(c for c in text[start:end] if c.isdigit())
-        if len(digits) != 12:
+        if len(digits) != 12 or _touching_alnum(text, start, end):
             return None
+
         # UIDAI never issues a number beginning 0 or 1, which removes a large class of
-        # ordinary 12-digit runs before the checksum is even reached.
-        if digits[0] in "01":
-            return None
-        if not verhoeff_ok(digits):
-            return None
-        if _touching_alnum(text, start, end):
-            return None
-        return Match(start=start, end=end, confidence=0.97)
+        # ordinary twelve-digit runs before the checksum is even reached.
+        if digits[0] not in "01" and verhoeff_ok(digits):
+            return Match(start=start, end=end, confidence=0.97)
+
+        before = text[max(0, start - self._WINDOW):start].lower()
+        if any(label in before for label in self._LABELS):
+            return Match(start=start, end=end, confidence=0.82)
+        return None
 
 
 # ------------------------------------------------------------------------ GSTIN --

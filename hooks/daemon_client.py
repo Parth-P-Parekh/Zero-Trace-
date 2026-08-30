@@ -21,11 +21,13 @@ Three outcomes, in order of preference:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 #: Long enough for a cold pack build the client did not know was happening; short enough
@@ -41,12 +43,73 @@ def _home() -> Path:
     return Path(os.environ.get("ZT_HOME") or (Path.home() / ".zerotrace"))
 
 
+def build_stamp() -> str:
+    """A fingerprint of the code this process would run.
+
+    A daemon holds its detector pack for as long as it lives, so without this it serves
+    whatever it was started with -- edit a detector, and the fix does not take effect
+    until the idle timeout fifteen minutes later. For a security control that is the wrong
+    way round: the stale answer is the permissive one, and nobody is told.
+
+    Stat rather than read: this runs before every prompt, so the cost has to be a few
+    hundred `stat` calls and not hashing the source. mtime and size together catch every
+    edit that matters here.
+    """
+    root = Path(__file__).resolve().parent.parent
+    newest = 0
+    count = 0
+
+    # os.scandir rather than Path.rglob: rglob builds a Path object per entry and stats
+    # it again, which measured at 9 ms here -- most of the fast path's whole budget, paid
+    # before every prompt. This is under 2 ms for the same answer.
+    stack = [str(root / "gateway"), str(root / "hooks")]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name in ("__pycache__", ".pytest_cache"):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                    elif name.endswith(".py"):
+                        info = entry.stat()
+                        count += 1
+                        if info.st_mtime_ns > newest:
+                            newest = info.st_mtime_ns
+        except OSError:
+            continue
+
+    # Count catches an added or deleted module; newest mtime catches an edited one.
+    return hashlib.sha256(f"{count}:{newest}".encode()).hexdigest()[:16]
+
+
 def _endpoint() -> tuple[int, str] | None:
+    """The listening daemon, if it is running *this* code."""
     try:
         raw = json.loads((_home() / "daemon.json").read_text(encoding="utf-8"))
-        return int(raw["port"]), str(raw["token"])
+        port, token = int(raw["port"]), str(raw["token"])
     except (OSError, ValueError, KeyError):
         return None
+
+    if raw.get("build") != build_stamp():
+        # Stale: it was started from different source. Retire it rather than trust it --
+        # a daemon answering with last week's detectors looks exactly like a working one.
+        _retire(port, token)
+        return None
+    return port, token
+
+
+def _retire(port: int, token: str) -> None:
+    try:
+        _post(port, token, "/shutdown", {})
+    except (OSError, ValueError):
+        pass
+    try:
+        (_home() / "daemon.json").unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def ask(text: str, session_id: str = "") -> dict | None:
@@ -128,14 +191,41 @@ def ask_tool(tool: str, args: dict, session_id: str = "") -> dict | None:
         return None
 
 
+#: Minimum gap between spawn attempts. A daemon takes ~1s to build its pack and publish,
+#: so several prompts can arrive before the first one is ready.
+START_BACKOFF_S = 15.0
+
+
 def start() -> None:
     """Spawn a daemon and return immediately. Best effort, never fatal.
 
     Detached on purpose: it must outlive this hook process, which exits in milliseconds,
     and it must not hold the hook's stdout -- anything written there becomes context the
     agent can see.
+
+    **Rate-limited, and that is not a nicety.** Every call that finds no daemon would
+    otherwise spawn one. If starting fails -- a blocked port, a broken interpreter, a
+    daemon that dies on boot -- each prompt and each tool call spawns another process that
+    dies, and the machine fills with them while checking silently falls back to in-process
+    every time. A storm of short-lived processes is exactly what "it got stuck in a loop"
+    looks like from the outside.
     """
     if disabled():
+        return
+
+    marker = _home() / "daemon-start.stamp"
+    now = time.time()
+    try:
+        if now - marker.stat().st_mtime < START_BACKOFF_S:
+            return
+    except OSError:
+        pass
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(now), encoding="utf-8")
+    except OSError:
+        # Cannot record the attempt, so cannot rate-limit it. Not spawning is the safer
+        # side: the checker still runs in-process.
         return
     root = Path(__file__).resolve().parent.parent
     try:

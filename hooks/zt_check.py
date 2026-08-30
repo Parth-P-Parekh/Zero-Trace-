@@ -184,7 +184,7 @@ def check_service(text: str, session_id: str, cwd: str | None) -> dict:
         # default is to stop. The message names the fix and the escape hatch, because a
         # control that blocks work without saying how to proceed gets uninstalled.
         if FAIL == "open":
-            print(f"zerotrace: checker unreachable ({exc}); allowing (ZT_FAIL=open)",
+            print(f"zerotrace: checker unreachable ({type(exc).__name__}); allowing",
                   file=sys.stderr)
             allow()
         deny(
@@ -244,13 +244,13 @@ def run(event: dict) -> None:
         # "ZeroTrace crashed so we sent your prompt anyway" is not a defensible
         # sentence -- but we say plainly that it was our fault, not the prompt's.
         if FAIL == "open":
-            print(f"zerotrace: check failed ({exc}); allowing (ZT_FAIL=open)",
+            print(f"zerotrace: check failed ({type(exc).__name__}); allowing",
                   file=sys.stderr)
             allow()
         deny(
-            f"ZeroTrace failed to check this prompt ({type(exc).__name__}: {exc}), so "
-            f"it was not sent. This is a ZeroTrace bug, not a problem with your prompt. "
-            f"Set ZT_FAIL=open to proceed unprotected."
+            f"ZeroTrace failed to check this prompt ({type(exc).__name__}), so it was "
+            f"not sent. This is a ZeroTrace bug, not a problem with your prompt. Set "
+            f"ZT_FAIL=open to proceed unprotected."
         )
 
     # Who is authoritative.

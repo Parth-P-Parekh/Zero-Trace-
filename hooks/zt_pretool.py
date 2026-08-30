@@ -145,7 +145,7 @@ def check(text: str, session_id: str) -> dict:
                 allow()
             deny(f"ZeroTrace could not reach its checker at {CHECKER}, so this tool "
                  f"call was not run. Unset ZT_CHECKER to check in-process, or set "
-                 f"ZT_FAIL=open to proceed unprotected. ({exc})")
+                 f"ZT_FAIL=open to proceed unprotected. ({type(exc).__name__})")
 
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
@@ -277,11 +277,12 @@ def run(event: dict) -> None:
         raise
     except Exception as exc:  # noqa: BLE001
         if FAIL == "open":
-            print(f"zerotrace: check failed ({exc}); allowing", file=sys.stderr)
+            print(f"zerotrace: check failed ({type(exc).__name__}); allowing",
+                  file=sys.stderr)
             allow()
-        deny(f"ZeroTrace failed to check this tool call ({type(exc).__name__}: {exc}), "
-             f"so it was not run. This is a ZeroTrace bug, not a problem with the "
-             f"command. Set ZT_FAIL=open to proceed unprotected.")
+        deny(f"ZeroTrace failed to check this tool call ({type(exc).__name__}), so it "
+             f"was not run. This is a ZeroTrace bug, not a problem with the command. "
+             f"Set ZT_FAIL=open to proceed unprotected.")
 
     if not result.get("allow", False):
         classes = ", ".join(result.get("classes") or []) or "sensitive data"

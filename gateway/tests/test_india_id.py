@@ -179,3 +179,45 @@ def test_the_registry_is_the_single_source_of_detectors():
 
     names = {d.name for d in ALL_DETECTORS}
     assert {d.name for d in INDIA_ID_DETECTORS} <= names
+
+
+# --------------------------------------------------- labelled, but not valid --
+
+def test_a_labelled_aadhaar_is_caught_even_when_the_checksum_fails():
+    """"my aadhaar is 1234 5678 9012" is a disclosure whatever the digits do.
+
+    A control that waves it through because the checksum fails is technically right and
+    practically useless -- it would also miss a real Aadhaar mistyped by one digit, which
+    is the likeliest way a genuine one gets pasted.
+    """
+    assert "AADHAAR" in _classes("my aadhaar is 1234 5678 9012")
+    assert "AADHAAR" in _classes("aadhar number 9876 5432 1098 please verify")
+    assert "AADHAAR" in _classes("UIDAI ref 9876 5432 1098")
+
+
+def test_the_label_may_be_in_hindi():
+    assert "AADHAAR" in _classes("मेरा आधार 9876 5432 1098 है")
+
+
+def test_an_unlabelled_invalid_number_is_still_not_an_aadhaar():
+    """The label is the evidence in that path. Without it, the checksum is."""
+    assert "AADHAAR" not in _classes("reference 1234 5678 9012 for the shipment")
+
+
+def test_a_distant_mention_does_not_label_a_number():
+    """"aadhaar" in a heading two paragraphs up says nothing about this number."""
+    text = "aadhaar verification service\n" + "\n".join("filler line" for _ in range(6))
+    text += "\ninvoice total 1234 5678 9012"
+    assert "AADHAAR" not in _classes(text)
+
+
+def test_overlapping_detectors_do_not_shadow_each_other():
+    """The bug this merge fixed, kept as a regression.
+
+    Two detectors matching the same span meant the stricter pattern won the candidate,
+    its confirm() rejected the checksum, and the second never saw the span --
+    `1234 5678 9012` was caught and `9876 5432 1098` was not, for no reason a user could
+    have guessed.
+    """
+    for number in ("1234 5678 9012", "9876 5432 1098", "2234 5678 9012"):
+        assert "AADHAAR" in _classes(f"my aadhaar is {number}"), number
