@@ -33,7 +33,7 @@ const LINE: Part[] = [
   { text: '{ "role": "user", "content": "Refund for ' },
   { block: 12, type: 'person' },
   { text: ', PAN ' },
-  { block: 10, type: 'pan', breach: true },
+  { block: 10, type: 'pan' },
   { text: ', key ' },
   { block: 23, type: 'razorpay key', breach: true },
   { text: '" }' },
@@ -159,7 +159,13 @@ export function BreachHero() {
             className="zt-mono-sm"
             style={{ margin: '10px 0 0', color: 'var(--text-on-dark-quiet)' }}
           >
-            (2) values matched a rule with no redaction strategy - pan, razorpay_key.
+            (1) credential matched a rule with no redaction strategy - razorpay_key.
+          </p>
+          <p
+            className="zt-mono-sm"
+            style={{ margin: '6px 0 0', color: 'rgba(242,242,240,0.36)' }}
+          >
+            (2) values would have been tokenized and restored - person, pan.
           </p>
           <p
             className="zt-mono-sm"
