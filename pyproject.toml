@@ -41,9 +41,12 @@ dev = [
 
 [project.scripts]
 zerotrace = "gateway.cli:main"
+# A real executable, which is the point: VS Code's `chatgpt.cliExecutable` must be
+# something the extension can spawn directly, and a .py file or a shell function is not.
+zerotrace-codex-proxy = "gateway.attach.proxy:main"
 
 [tool.setuptools]
-packages = ["gateway", "gateway.base", "gateway.contracts", "gateway.detect",
+packages = ["gateway", "gateway.attach", "gateway.base", "gateway.contracts", "gateway.detect",
             "gateway.detectors", "gateway.intel", "gateway.ledger", "gateway.spans",
             "gateway.vault", "hooks"]
 

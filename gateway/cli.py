@@ -75,6 +75,11 @@ def _install(args: argparse.Namespace) -> int:
         else:
             print("  codex    command   no shell profile found; run `zerotrace codex`")
 
+    if args.vscode and not args.claude_only:
+        _enable_side_panel()
+    elif not args.claude_only:
+        print("  vscode   panel     not covered (opt in with `zerotrace on --vscode`)")
+
     print()
     print("  Claude Code: restart running sessions -- they keep the config they started")
     print("  with. Codex: `codex` in a NEW shell is mediated; the VS Code side panel is")
@@ -87,6 +92,95 @@ def _install(args: argparse.Namespace) -> int:
     return 0
 
 
+def _proxy_executable() -> str | None:
+    """The installed proxy console script.
+
+    VS Code spawns `chatgpt.cliExecutable` directly, so it has to be a real executable.
+    A `.py` file or a shell function will not do, which is why this is a console script
+    and why the side panel needs `pip install -e .` when the terminal route does not.
+    """
+    return shutil.which("zerotrace-codex-proxy")
+
+
+def _enable_side_panel() -> None:
+    from gateway import vscode
+    from gateway.attach.proxy import record_real_codex
+    from gateway.attach.session import find_codex
+
+    targets = vscode.existing_settings()
+    if not targets:
+        print("  vscode   panel     no VS Code settings found; side panel not covered")
+        return
+
+    proxy = _proxy_executable()
+    if not proxy:
+        print("  vscode   panel     NOT covered -- needs `pip install -e .`")
+        print("  " + " " * 17 + "the extension spawns a binary, so the proxy must be")
+        print("  " + " " * 17 + "an installed executable, not a module")
+        return
+
+    real = find_codex()
+    if not real or "zerotrace" in real.lower():
+        print("  vscode   panel     NOT covered -- could not find the real codex binary")
+        return
+
+    # Recorded now so the proxy never searches at run time and can never find itself.
+    record_real_codex(real)
+    changed = vscode.apply(proxy)
+    if not changed:
+        print("  vscode   panel     already pointed at ZeroTrace")
+        return
+    for path, previous in changed:
+        _remember_previous(path, previous)
+        print(f"  vscode   panel     `codex` in the side panel now runs mediated")
+        print(f"  {'':17} {path}")
+    print("  " + " " * 17 + "restart VS Code for this to take effect")
+    print("  " + " " * 17 + "! " + vscode.VENDOR_WARNING)
+
+
+def _previous_file():
+    from gateway.attach.proxy import state_dir
+
+    return state_dir() / "vscode-previous.json"
+
+
+def _remember_previous(path, previous) -> None:
+    """Record what the setting held, so `off` restores it rather than guessing."""
+    from gateway.attach.proxy import state_dir
+
+    state_dir().mkdir(parents=True, exist_ok=True)
+    try:
+        saved = json.loads(_previous_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    saved.setdefault(str(path), previous)
+    _previous_file().write_text(json.dumps(saved, indent=2), encoding="utf-8")
+
+
+def _disable_side_panel() -> list:
+    from gateway import vscode
+
+    try:
+        saved = json.loads(_previous_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+
+    restored = []
+    for path in vscode.existing_settings():
+        if not vscode.points_at_zerotrace(path):
+            continue
+        previous = saved.get(str(path))
+        # Restoring "absent" means removing the key, not writing null -- the extension
+        # treats the two differently and we must leave exactly what we found.
+        vscode.apply(previous, paths=[path])
+        restored.append(path)
+    try:
+        _previous_file().unlink(missing_ok=True)
+    except OSError:
+        pass
+    return restored
+
+
 def _uninstall(args: argparse.Namespace) -> int:
     """Deactivate everything this tool installed, and nothing else."""
     from gateway import shim
@@ -95,6 +189,7 @@ def _uninstall(args: argparse.Namespace) -> int:
     changed = installer.apply(hosts=("claude", "codex"), user_scope=not args.project,
                               remove=True)
     profiles = shim.apply(remove=True)
+    panels = _disable_side_panel()
 
     if changed:
         print(f"ZeroTrace off: hooks removed for {', '.join(changed)}")
@@ -102,7 +197,11 @@ def _uninstall(args: argparse.Namespace) -> int:
         print("ZeroTrace off: `codex` shim removed from")
         for path in profiles:
             print(f"  {path}")
-    if not changed and not profiles:
+    if panels:
+        print("ZeroTrace off: VS Code side panel restored in")
+        for path in panels:
+            print(f"  {path}")
+    if not changed and not profiles and not panels:
         print("ZeroTrace was not active here; nothing to remove.")
     print("Running sessions and open shells keep it until they are restarted.")
     return 0
@@ -153,7 +252,14 @@ def _status(args: argparse.Namespace) -> int:
             print(f"    shell    `codex` runs mediated  ({path})")
     else:
         print("    not active -- run `zerotrace on`, or `zerotrace codex` directly")
-    print("    note     the VS Code side panel is its own client and is NOT covered")
+    from gateway import vscode
+    panels = [q for q in vscode.existing_settings() if vscode.points_at_zerotrace(q)]
+    if panels:
+        for q in panels:
+            print(f"    panel    side panel runs mediated  ({q})")
+    elif vscode.existing_settings():
+        print("    panel    side panel NOT covered -- `zerotrace on` after")
+        print("             `pip install -e .`, which provides the proxy executable")
 
     stale = [(scope, installer.config_paths(user_scope=u)["codex"])
              for scope, u in (("machine", True), ("project", False))
@@ -305,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="this directory only (default: whole machine)")
         p.add_argument("--claude-only", action="store_true")
         p.add_argument("--codex-only", action="store_true")
+        p.add_argument("--vscode", action="store_true",
+                       help="also point the VS Code side panel at ZeroTrace; the vendor "
+                            "marks that setting DEVELOPMENT ONLY, so it is opt-in")
         p.add_argument("--codex-hooks", action="store_true",
                        help="also write Codex hooks (only useful if you trusted them)")
         return p
