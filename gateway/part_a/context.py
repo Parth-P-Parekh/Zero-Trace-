@@ -30,11 +30,15 @@ from gateway.part_a.store import PartAStore
 class Outcome:
     """What Part A decided, and everything the ledger needs to prove it."""
 
+    #: What was actually applied -- the enforceable action.
     action: str
     actor: Any
     pairs: tuple[tuple[Any, Any], ...]
     policies: Any
     leg: str
+    #: What the policy asked for, which can differ when we cannot honour it (tokenize
+    #: without a vault) or are not enforcing (shadow mode). Both go on the record.
+    intended: str = ""
     degraded_reasons: tuple[str, ...] = ()
 
     @property
@@ -55,17 +59,21 @@ class Outcome:
 
         "We blocked it" is not an answer to an auditor; "rule 2 of org version 1 blocked
         it" is. When several findings decide differently, the one that produced the
-        strongest action is the one that explains the request.
+        strongest action is the one that explains the request. Matched against the
+        *intended* action, because a degraded or shadowed decision was still made by a
+        rule and that rule is what an auditor needs.
         """
+        target = self.intended or self.action
         for _f, d in self.pairs:
-            if d.action == self.action:
+            if d.action == target:
                 return d.rule_index
         return None
 
     @property
     def rule_scope(self) -> str:
+        target = self.intended or self.action
         for _f, d in self.pairs:
-            if d.action == self.action:
+            if d.action == target:
                 return d.rule_scope
         return "default"
 
@@ -134,7 +142,19 @@ class PartAContext:
         self.mode = mode
 
         applied = action
-        if mode == "shadow" and action in ("block", "mask", "tokenize"):
+        degraded: list[str] = list(self._degraded)
+
+        if applied == "tokenize":
+            # Tokenize needs the vault (C8), which is not wired yet. Part A's rule is to
+            # apply the next-strongest action and SAY SO rather than fake a token -- a
+            # value that looks tokenised but is not would be worse than a masked one,
+            # because everything downstream would trust it. The intended action stays on
+            # the record, so "the policy asked for a token and could not have one" is
+            # answerable later.
+            applied = "mask"
+            degraded.append("tokenize_needs_vault")
+
+        if mode == "shadow" and applied in ("block", "mask"):
             # Shadow mode still decides and still records; it just does not enforce. The
             # ledger keeps both, because "what would have happened" is the entire point
             # of running in shadow.
@@ -142,11 +162,12 @@ class PartAContext:
 
         return Outcome(
             action=applied,
+            intended=action,
             actor=actor,
             pairs=tuple(pairs),
             policies=policies,
             leg=leg,
-            degraded_reasons=tuple(self._degraded) + tuple(policies.degraded_reasons),
+            degraded_reasons=tuple(degraded) + tuple(policies.degraded_reasons),
         )
 
     # -- proof --
@@ -166,7 +187,7 @@ class PartAContext:
             "actor_id": outcome.actor.id,
             "actor_registered": bool(outcome.actor.registered),
             "leg": outcome.leg,
-            "decision_action": intended_action or outcome.action,
+            "decision_action": intended_action or outcome.intended or outcome.action,
             "applied_action": outcome.action,
             "mode": self.mode,
             "rule_index": outcome.rule_index,

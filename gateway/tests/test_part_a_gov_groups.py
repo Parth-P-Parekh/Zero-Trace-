@@ -170,3 +170,41 @@ async def test_citizen_identifiers_leave_only_as_a_token():
     so rather than faking a token.
     """
     assert await _action("s.iyer", "AADHAAR", leg="outbound") in ("tokenize", "mask")
+
+async def test_tokenize_degrades_to_mask_and_says_so():
+    """Without the vault a token cannot be minted, so the next-strongest action applies.
+
+    Faking one would be worse than masking: a value that looks tokenised but is not would
+    be trusted by everything downstream. The intended action stays on the record, so
+    "the policy asked for a token and could not have one" is answerable later.
+    """
+    from zerotrace.spans.model import Finding
+
+    ctx = await _ctx()
+    actor = await ctx.resolve(DEMO_TENANT, "s.iyer")
+    outcome = await ctx.decide(
+        [Finding(entity_class="PAN", span_path="messages[0].content", leg="outbound")],
+        actor, leg="outbound",
+    )
+
+    assert outcome.intended == "tokenize"
+    assert outcome.action == "mask"
+    assert "tokenize_needs_vault" in outcome.degraded_reasons
+
+    row = await ctx.record(outcome, request_id="req-tok", model="m")
+    assert row.payload["decision_action"] == "tokenize"
+    assert row.payload["applied_action"] == "mask"
+    assert "tokenize_needs_vault" in row.payload["degraded_reasons"]
+
+
+async def test_a_degraded_decision_still_names_its_rule():
+    """The rule that asked for a token is what an auditor needs, not the fallback."""
+    from zerotrace.spans.model import Finding
+
+    ctx = await _ctx()
+    actor = await ctx.resolve(DEMO_TENANT, "s.iyer")
+    outcome = await ctx.decide(
+        [Finding(entity_class="PAN", span_path="messages[0].content", leg="outbound")],
+        actor, leg="outbound",
+    )
+    assert outcome.rule_index is not None

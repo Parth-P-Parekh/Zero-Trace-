@@ -205,3 +205,4 @@ async def test_no_credential_reaches_the_store():
         blob += str(await kv.get(key) or "") + str(await kv.smembers(key))
     assert _key() not in blob
     assert "AbC9dEf2GhI4jKl6MnO8pQr0StU1vWx3Yz5" not in blob
+

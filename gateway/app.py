@@ -204,7 +204,8 @@ async def prompt_check(request: Request) -> Response:
         matching = tuple(f for f in check.findings if f.span_path == span.path)
         if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
             request.app.state.intel.maybe_escalate(
-                features_of(span, matching, request.app.state.checker._tenant_key)
+                features_of(span, matching, request.app.state.checker._tenant_key,
+                            neighbours=_neighbours(check, span))
             )
 
     verdict: CheckVerdict = to_verdict(check, actor)
@@ -304,7 +305,7 @@ async def _proxy(request: Request, *, provider: str, path: str) -> Response:
     # auditor, exactly like a request nobody checked -- and a request the root blocks is
     # still a request the control plane must be able to account for.
     gate = await _part_a_gate(
-        request, check, provider=provider, root_blocked=dispatched is None
+        request, check, tree, provider=provider, root_blocked=dispatched is None
     )
     if isinstance(gate, Response):
         _record_coverage(request, actor, provider=provider, outcome="blocked")
@@ -350,7 +351,8 @@ async def _run(request: Request, tree: SpanTree, actor: Actor):
         matching = tuple(f for f in check.findings if f.span_path == span.path)
         if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
             app.state.intel.maybe_escalate(
-                features_of(span, matching, app.state.checker._tenant_key)
+                features_of(span, matching, app.state.checker._tenant_key,
+                            neighbours=_neighbours(check, span))
             )
 
     if decision.action is Action.BLOCK:
@@ -514,7 +516,8 @@ async def _dispatch(
 
 # ---------------------------------------------------------------- helpers --
 
-async def _part_a_gate(request: Request, check, *, provider: str, root_blocked: bool):
+async def _part_a_gate(request: Request, check, tree, *, provider: str,
+                       root_blocked: bool):
     """Ask Part A, and record what it said. Returns a Response to refuse, else None.
 
     `root_blocked` says the root's own policy already stopped this request. Part A still
@@ -533,6 +536,7 @@ async def _part_a_gate(request: Request, check, *, provider: str, root_blocked: 
         return None
 
     from .part_a.context import EvidenceWriteFailed, UnknownTenant
+    from .part_a.detector import convert as convert_findings
     from .part_a.store import PolicyMissing
     from .part_a.wiring import identity_of
 
@@ -540,7 +544,13 @@ async def _part_a_gate(request: Request, check, *, provider: str, root_blocked: 
     ctx = await plane.context()
     try:
         pa_actor = await ctx.resolve(tenant, actor_id)
-        findings = _to_part_a_findings(check)
+        root_findings = list(getattr(check, "findings", ()) or ())
+        # Advisory findings are withheld from policy because Part A's Finding cannot mark
+        # a signal as unenforceable. They are NOT lost: `_run` above already escalates
+        # every span carrying a 0.35-0.75 finding to the blind agent, which is exactly
+        # this case. Escalating again here would queue the same span twice and double
+        # Loop 2's volume for no new information.
+        findings, _withheld = convert_findings(root_findings, "outbound")
         outcome = await ctx.decide(findings, pa_actor, leg="outbound",
                                    destination=provider)
         await ctx.record(
@@ -564,29 +574,6 @@ async def _part_a_gate(request: Request, check, *, provider: str, root_blocked: 
     return None
 
 
-def _to_part_a_findings(check) -> list:
-    """Root findings in Part A's shape, using the one conversion we have."""
-    from zerotrace.spans.model import Finding as PartAFinding
-
-    out = []
-    for f in getattr(check, "findings", ()) or ():
-        if getattr(f, "advisory_only", False):
-            continue
-        out.append(
-            PartAFinding(
-                entity_class=getattr(f.entity_class, "value", str(f.entity_class)),
-                span_path=f.span_path,
-                leg="outbound",
-                confidence=float(f.confidence),
-                detector_id=getattr(f, "detector_id", None),
-                stage=getattr(f, "stage", "S0"),
-                start=int(getattr(f, "start", 0) or 0),
-                end=int(getattr(f, "end", 0) or 0),
-            )
-        )
-    return out
-
-
 def _resolve_actor(request: Request, *, default_channel: str) -> Actor:
     """Placeholder for Track A's ``identity.resolve``.
 
@@ -604,6 +591,20 @@ def _resolve_actor(request: Request, *, default_channel: str) -> Actor:
         channel=request.headers.get("x-zerotrace-channel", default_channel),  # type: ignore[arg-type]
         session_id=request.headers.get("x-zerotrace-session"),
     )
+
+
+def _neighbours(check, span) -> tuple:
+    """Classes found elsewhere in this request.
+
+    A high-entropy run means little alone and a great deal beside an `ANTHROPIC_KEY` on
+    another span -- that is what tells Loop 2 whether it is looking at a novel credential
+    or at a base64 blob nobody cares about.
+    """
+    return tuple(f.entity_class for f in check.findings if f.span_path != span.path)
+
+
+def _tenant_key() -> bytes:
+    return os.getenv("ZT_VAULT_MASTER_KEY", "dev-key-not-a-secret").encode()
 
 
 def _request_id(request: Request) -> str:

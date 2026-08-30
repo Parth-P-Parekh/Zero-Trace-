@@ -76,60 +76,16 @@ class RootDetector:
     # -- the seam --
 
     async def scan(self, payload: dict, leg: str) -> list[Any]:
-        from zerotrace.spans.model import Finding as PartAFinding
-
         findings, spans = await self._scan_root(payload, leg)
-        out: list[Any] = []
-        withheld: list[Any] = []
-        for f in findings:
-            if f.confidence < self._min_confidence:
-                continue
-            if getattr(f, "advisory_only", False) and not self._include_advisory:
-                withheld.append(f)
-                continue
-            out.append(
-                PartAFinding(
-                    entity_class=_class_value(f.entity_class),
-                    span_path=f.span_path,
-                    leg=leg,
-                    confidence=float(f.confidence),
-                    detector_id=getattr(f, "detector_id", None),
-                    stage=getattr(f, "stage", "S0"),
-                    start=int(getattr(f, "start", 0) or 0),
-                    end=int(getattr(f, "end", 0) or 0),
-                )
-            )
-        self._escalate(withheld, spans, findings)
-        return out
+        kept, withheld = convert(
+            findings, leg,
+            include_advisory=self._include_advisory,
+            min_confidence=self._min_confidence,
+        )
+        escalate(self._intel, withheld, spans, findings, self._tenant_key())
+        return kept
 
     # -- loop 2 --
-
-    def _escalate(self, withheld: list[Any], spans: list[Any], all_findings: list[Any]) -> None:
-        """Hand the shape of a withheld finding to the blind agent.
-
-        Never awaited and never on the decision path: `maybe_escalate` enqueues and
-        returns, and Loop 2 proposes checks for *later* calls. A model round trip is
-        300-2000ms, and this sits in front of every request.
-        """
-        if not withheld or self._intel is None:
-            return
-        try:
-            from gateway.intel.features import features_of
-
-            by_path = {s.path: s for s in spans}
-            for f in withheld:
-                span = by_path.get(f.span_path)
-                if span is None:
-                    continue
-                self._intel.maybe_escalate(
-                    features_of(span, (f,), self._tenant_key(),
-                                neighbours=tuple(
-                                    o.entity_class for o in all_findings if o is not f
-                                ))
-                )
-        except Exception:  # noqa: BLE001
-            # Losing an escalation costs a future improvement, never this request.
-            pass
 
     def _tenant_key(self) -> bytes:
         import os
@@ -155,6 +111,72 @@ class RootDetector:
         tree = _tree(raw, spans, leg)
         result = await checker.check(tree, "part-a")
         return list(getattr(result, "findings", ()) or ()), spans
+
+
+def convert(
+    findings: list[Any], leg: str, *, include_advisory: bool = False,
+    min_confidence: float = 0.0,
+) -> tuple[list[Any], list[Any]]:
+    """Root findings -> Part A findings, plus the ones withheld.
+
+    **The single conversion.** `RootDetector.scan` and the HTTP gate both call this,
+    because two copies of these rules would be two answers to "is this enforceable", and
+    the one that mattered would be whichever path the request happened to take. An earlier
+    version had exactly that: a duplicate in `app.py` that dropped advisory findings and
+    forgot to escalate them, so the intel plane saw nothing from real traffic.
+    """
+    from zerotrace.spans.model import Finding as PartAFinding
+
+    kept: list[Any] = []
+    withheld: list[Any] = []
+    for f in findings:
+        if f.confidence < min_confidence:
+            continue
+        if getattr(f, "advisory_only", False) and not include_advisory:
+            withheld.append(f)
+            continue
+        kept.append(
+            PartAFinding(
+                entity_class=_class_value(f.entity_class),
+                span_path=f.span_path,
+                leg=leg,  # type: ignore[arg-type]
+                confidence=float(f.confidence),
+                detector_id=getattr(f, "detector_id", None),
+                stage=getattr(f, "stage", "S0"),
+                start=int(getattr(f, "start", 0) or 0),
+                end=int(getattr(f, "end", 0) or 0),
+            )
+        )
+    return kept, withheld
+
+
+def escalate(intel: Any, withheld: list[Any], spans: list[Any], all_findings: list[Any],
+             tenant_key: bytes) -> None:
+    """Hand the shape of each withheld finding to the blind agent.
+
+    Never awaited and never on the decision path: `maybe_escalate` enqueues and returns,
+    and Loop 2 proposes checks for *later* calls. A model round trip is 300-2000ms and
+    this sits in front of every request.
+    """
+    if not withheld or intel is None:
+        return
+    try:
+        from gateway.intel.features import features_of
+
+        by_path = {s.path: s for s in spans}
+        for f in withheld:
+            span = by_path.get(f.span_path)
+            if span is None:
+                continue
+            intel.maybe_escalate(
+                features_of(span, (f,), tenant_key,
+                            neighbours=tuple(
+                                o.entity_class for o in all_findings if o is not f
+                            ))
+            )
+    except Exception:  # noqa: BLE001
+        # Losing an escalation costs a future improvement, never this request.
+        pass
 
 
 def _class_value(entity_class: Any) -> str:

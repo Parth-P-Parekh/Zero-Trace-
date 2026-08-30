@@ -185,3 +185,61 @@ def test_the_gate_is_absent_unless_it_is_switched_on():
         assert getattr(app.state, "part_a", None) is None
         resp = c.post("/v1/messages", json=_body("refactor this"), headers=_headers())
         assert resp.status_code != 403
+
+
+# --------------------------------------------------- one conversion, one escalation --
+
+def test_the_high_entropy_signal_reaches_the_intel_plane_over_http(client):
+    """Withheld from policy, not lost: the blind agent still gets the shape.
+
+    This is what guards the prompt on its way to the model. Loop 2 sees a shape, a length,
+    a charset and an entropy score, proposes checks for *later* calls, and never gates
+    this one.
+    """
+    app = client.app
+    app.state.intel.queue.drain()          # ignore anything from earlier requests
+
+    client.post("/v1/messages", json=_body("my key is " + _key()), headers=_headers())
+
+    queued = app.state.intel.queue.drain()
+    assert queued, "a high-entropy run was withheld from policy and then lost"
+    fired = {d.entity_class for f in queued for d in f.detectors_fired}
+    assert "HIGH_ENTROPY_STRING" in fired
+    assert all(f.entropy > 3.0 for f in queued)
+
+
+def test_a_span_is_escalated_once_not_twice(client):
+    """`_run` already escalates a 0.35-0.75 span; the Part A gate must not repeat it.
+
+    Two vectors for one span would double Loop 2's volume for no new information.
+    """
+    app = client.app
+    app.state.intel.queue.drain()
+    client.post("/v1/messages", json=_body("my key is " + _key()), headers=_headers())
+
+    paths = [f.span_path_safe for f in app.state.intel.queue.drain()]
+    assert len(paths) == len(set(paths)), f"the same span was escalated twice: {paths}"
+
+
+def test_the_escalation_carries_no_text_over_http(client):
+    app = client.app
+    app.state.intel.queue.drain()
+    client.post("/v1/messages", json=_body("my key is " + _key()), headers=_headers())
+
+    flat = str([f.to_payload() for f in app.state.intel.queue.drain()])
+    assert _key() not in flat
+    assert "AbC9dEf2GhI4jKl6MnO8pQr0StU1vWx3Yz5" not in flat
+    assert "sk-ant" not in flat
+
+
+def test_there_is_exactly_one_finding_conversion():
+    """Two copies would be two answers to "is this enforceable"."""
+    import inspect
+
+    from gateway import app as app_module
+    from gateway.part_a import detector
+
+    assert not hasattr(app_module, "_to_part_a_findings")
+    source = inspect.getsource(app_module)
+    assert "PartAFinding(" not in source, "app.py grew its own conversion again"
+    assert "PartAFinding(" in inspect.getsource(detector)
