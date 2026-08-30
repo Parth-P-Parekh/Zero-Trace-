@@ -76,6 +76,48 @@ Credentials were never tokenised. 13 of 19 classes at recall 1.0.
    random twelve-digit strings, so a corpus of order numbers produces false Aadhaars by
    construction. It is why the checksum is a filter and co-occurrence is the decision.
 
+## Reading the prompts themselves
+
+Generating rather than storing is what makes the run reproducible from a seed. It is
+also what makes it unverifiable by eye — "trust me, shard 47 contains an Aadhaar
+number" is not something anyone can check. So the corpus can be written out in full,
+in plain English:
+
+```bash
+python test_dashboard/export_prompts.py                 # all 5,000,000 → prompts.json
+python test_dashboard/export_prompts.py --records 5000  # a readable sample
+```
+
+Same seed, same shard layout, same order as the benchmark, so record *N* here is
+record *N* there. One entry:
+
+```json
+{
+  "id": 34,
+  "case": "A live key broken up, so it no longer looks like one at a glance.",
+  "case_id": "cred_obfuscated",
+  "direction": "Going to the model",
+  "sent_by": { "who": "s.iyer", "role": "Case officer", "teams": ["citizen-services"] },
+  "app": "batch-exporter",
+  "ai_tool": "claude",
+  "environment": "Test",
+  "text": ["[user] pasting the token across lines because the form truncates it:\nASIA0SHRX13EGYTGSMM1"],
+  "should_find": ["AWS key"],
+  "should_do": "Stop the request",
+  "evasion": "The key was split across several lines."
+}
+```
+
+The full file is **2.53 GB** — 5,000,000 records, all of which parse, ids 0 through
+4,999,999. It is gitignored, because git will not take it and because the generator
+reproduces it exactly. `prompts.sample.5000.json` is committed instead: 2.5 MB, and
+all 39 scenario families appear in it, because the mix is drawn the same way at any
+size.
+
+Every value in it is synthetic. The keys match the shape of real credentials so the
+detector is exercised honestly and the character bodies are random, so the file can be
+read, shared and attached to a report.
+
 ## Files
 
 | File | What |
@@ -83,8 +125,11 @@ Credentials were never tokenised. 13 of 19 classes at recall 1.0.
 | `corpus.py` | The generator. Scenario families, ground truth, evasion variants. |
 | `benchmark.py` | The multiprocess sweep, the async latency pass, the per-detector micro-bench. |
 | `publish.py` | Derives the console dataset into `app/web/src/data/`. |
+| `export_prompts.py` | Writes the corpus out as readable JSON. |
 | `results/metrics.json` | The full aggregate. |
 | `results/samples.json` | 600 real request rows — span paths, classes and offsets only. |
+| `prompts.sample.5000.json` | 5,000 prompts in plain English. |
+| `prompts.json` | All 5,000,000. Generated on demand, not committed. |
 
 ## The privacy invariant holds here too
 

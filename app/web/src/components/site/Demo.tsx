@@ -14,7 +14,9 @@ const BEATS: Array<[string, string]> = [
   ['The install', 'One dependency added to an app. The next prompt it sends is already inspected.'],
   ['The catch', 'A transcript with a name, a PAN and a live key. The name and PAN go upstream tokenized. The key never leaves.'],
   ['The invisible leak', 'A record with no name and no ID. Every entity filter passes it. ZeroTrace names the combination that identifies the person.'],
-  ['It teaches itself', 'A leak class absent from the rule pack, caught, written into a detector, promoted. Send it again: 3ms, no model call.'],
+  // The self-teaching beat used to promise "3ms, no model call" - a figure for a
+  // loop this run never exercised. What replaces it is the part that was measured.
+  ['The speed', 'The same prompts again, timed. A quarter of a millisecond in front of a model call that takes a thousand times longer.'],
   ['The evidence', 'Kill the process, restart, the token still resolves and the ledger verifies. Then the counterfactual.'],
 ];
 
@@ -34,9 +36,10 @@ export function Demo() {
           <span style={{ color: 'var(--text-faint)' }}>Seven minutes, live, on real traffic.</span>
         </h2>
 
-        <p style={{ font: 'var(--type-body)', color: 'var(--text-body)', margin: '26px 0 0', maxWidth: '50ch' }}>
+        <p style={{ font: 'var(--type-body)', color: 'var(--text-body)', margin: '26px 0 0', maxWidth: '52ch' }}>
           The demo runs off this page, on request, against a live gateway. You send the prompts.
-          Every number quoted here is reproducible in the room.
+          The five million test requests behind every figure on this page are generated from a
+          seed, so you can regenerate them and re-run the whole thing yourself.
         </p>
 
         {/* One action left, so it takes the primary weight - a lone secondary

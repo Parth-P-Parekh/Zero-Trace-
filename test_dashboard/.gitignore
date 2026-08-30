@@ -1,0 +1,7 @@
+# The full 5,000,000-prompt export: ~2.5 GB, well past what git will take.
+#
+# It is not lost by being ignored. `export_prompts.py` regenerates it byte for
+# byte from the seed in `corpus.py`, and the sample beside it is the same data at
+# a size a reviewer can open. Committing the generator rather than the artefact is
+# what makes the run checkable without making the repository unusable.
+prompts.json
