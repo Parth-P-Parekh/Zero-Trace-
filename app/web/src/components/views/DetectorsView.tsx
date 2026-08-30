@@ -1,37 +1,34 @@
 'use client';
 
 /**
- * Detectors - can the matching be trusted?
+ * Detectors - what it catches, and what gets past it.
  *
- * A detector registry that lists rules and their patterns answers "what do we
- * have". The question an operator actually has is "what does it miss", and that is
- * only answerable against a corpus where the answer was known in advance. This
- * screen is that answer: nineteen classes, planted a known number of times, and
- * the rate at which each one came back.
+ * The old version of this screen was correct and unreadable: `recall`, `precision`,
+ * `false positives on quiet`, runtime in microseconds, and nineteen rows of
+ * SCREAMING_SNAKE class names. Every one of those is the right word for an engineer
+ * and the wrong word for the person who has to decide whether to trust the thing.
  *
- * The dark card is spent on the evasion matrix, because it carries the single most
- * consequential thing the run found - a credential broken up with spaces walks past
- * the scanner about nineteen times in twenty. Everything else on the page is quiet
- * so that one block can be loud.
+ * So the columns say what they mean - we planted this many, it found this share,
+ * it cried wolf this many times - and the runtime column is gone entirely, because
+ * nobody choosing whether to deploy a guardrail is deciding on 78 microseconds.
  *
- * Rows are ordered weakest recall first. An alphabetical registry buries the row
- * that needs a decision behind eighteen that do not.
+ * The evasion grid stays exactly as it was. It is the most important thing on the
+ * screen and it was already legible without a glossary.
  */
 import { useMemo, useState } from 'react';
-import { Badge, Card, EmptyState, Input, SegmentedControl, Tag, Tooltip } from '@/ds';
-import { BarSeries, EvasionMatrix, Meter } from '@/components/console/Draw';
+import { Badge, Card, EmptyState, Input, SegmentedControl } from '@/ds';
+import { BarSeries, EvasionMatrix } from '@/components/console/Draw';
 import { Caveat, Column, Figure, Headline, Pair, Panel, Provenance, TableHead, columns } from '@/components/console/Frame';
-import { run, weakestDetectors, type DetectorRow } from '@/lib/benchmark';
-import { classToken, compact, exact, micros, percent, score } from '@/lib/format';
+import { run, type DetectorRow } from '@/lib/benchmark';
+import { compact, exact, percent } from '@/lib/format';
+import { thing } from '@/lib/words';
 
 const COLS: Column[] = [
-  { key: 'class', head: 'Entity class', w: 'minmax(0,1.2fr)' },
-  { key: 'planted', head: 'Planted', w: '84px', align: 'right' },
-  { key: 'recall', head: 'Recall', w: '116px' },
-  { key: 'precision', head: 'Precision', w: '116px' },
-  { key: 'fp', head: 'False pos.', w: '82px', align: 'right' },
-  { key: 'runtime', head: 'Runtime', w: '78px', align: 'right' },
-  { key: 'status', head: 'Status', w: '104px' },
+  { key: 'thing', head: 'What it looks for', w: 'minmax(0,1.3fr)' },
+  { key: 'tested', head: 'Times planted', w: '104px', align: 'right' },
+  { key: 'found', head: 'Share it found', w: '132px' },
+  { key: 'wrong', head: 'False alarms', w: '110px', align: 'right' },
+  { key: 'verdict', head: '', w: '124px' },
 ];
 
 export function DetectorsView() {
@@ -39,111 +36,103 @@ export function DetectorsView() {
   const [q, setQ] = useState('');
 
   const rows = useMemo(() => {
-    const list = [...run.detectors].filter((d) =>
-      !q || d.entityClass.toLowerCase().includes(q.toLowerCase()));
-    if (sort === 'noisiest') {
-      return list.sort((a, b) => (a.precision ?? 1) - (b.precision ?? 1));
-    }
-    if (sort === 'volume') return list.sort((a, b) => b.observed - a.observed);
-    if (sort === 'slowest') return list.sort((a, b) => (b.runtimeUs ?? 0) - (a.runtimeUs ?? 0));
-    return list.sort((a, b) => (a.recall ?? 2) - (b.recall ?? 2));
+    const list = run.detectors.filter((d) =>
+      !q || thing(d.entityClass).toLowerCase().includes(q.toLowerCase()));
+    if (sort === 'noisiest') return [...list].sort((a, b) => b.falsePositives - a.falsePositives);
+    if (sort === 'volume') return [...list].sort((a, b) => b.observed - a.observed);
+    return [...list].sort((a, b) => (a.recall ?? 2) - (b.recall ?? 2));
   }, [sort, q]);
 
-  const clean = run.detectors.filter((d) => d.recall === 1 && d.precision === 1).length;
+  const perfect = run.detectors.filter((d) => d.recall === 1 && d.precision === 1).length;
   const worst = run.evasion[0];
-  const weak = weakestDetectors(4);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 'var(--page-max)' }}>
       <Headline
-        sub={`Nineteen entity classes were planted a known number of times across five
-              million payloads, so recall is counted rather than estimated. Precision is
-              measured only against the payloads generated with nothing in them - the one
-              place a finding has no defence.`}
+        sub="We hid a known number of keys, ID numbers and personal records in the test
+             traffic, then counted how many came back. Nothing here is estimated."
       >
-        <Figure>{clean}</Figure> of <Figure>{run.detectors.length}</Figure> classes came back
-        exact. The rest are named below.
+        It found <Figure>{perfect}</Figure> of <Figure>{run.detectors.length}</Figure> kinds
+        of sensitive data every single time.
       </Headline>
 
       {/* -- the signature: what gets past ------------------------------------- */}
       <Card tone="dark" pad={26}>
         <Panel
-          title="Evasion"
+          title="Ways around it"
           onDark
-          note="The same credentials, rewritten the way people actually paste them. Each cell is the share the detector still caught."
+          note="The same keys, retyped the way people actually paste them. Each block is how often it still caught them."
         >
           <EvasionMatrix rows={run.evasion} />
           <p
             style={{
-              margin: '22px 0 0', maxWidth: '68ch', font: 'var(--type-body-sm)',
+              margin: '22px 0 0', maxWidth: '66ch', font: 'var(--type-body-sm)',
               color: 'var(--text-on-dark-body)',
             }}
           >
-            Line wrapping and base64 are handled - the obfuscation and encoding scanners
-            were built for them and they hold at 100%. Spacing is not:{' '}
+            Keys split across lines, or scrambled the way a config file stores them, are
+            caught every time. Keys typed with spaces in them are not:{' '}
             <span style={{ color: 'var(--ink-inverse)' }}>
-              a key broken every six characters was caught {percent(worst.detectionRate, 1)} of
-              the time
+              a key broken up every few characters slipped through{' '}
+              {percent(1 - worst.detectionRate, 0)} of the time
             </span>
-            , and zero-width padding only slightly better. Both are one line of code for
-            anyone trying, and neither is exotic - a form that truncates long values
-            produces the first by accident.
+            . That is not an exotic attack - a form that cuts off long values produces it
+            by accident.
           </p>
         </Panel>
       </Card>
 
-      {/* -- the two failure shapes, side by side -------------------------------- */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 20 }}>
+      {/* -- the two ways it can be wrong, in one block ------------------------- */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 20 }}>
         <Card pad={22}>
-          <Panel title="What it misses" note="Recall below 1.0. Every one of these is at 1.0 on a plain value and drops only when the value is obfuscated.">
+          <Panel
+            title="What it missed"
+            note="Every one of these is caught every time when the value is typed normally. They only slip when the value is broken up."
+          >
             <BarSeries
-              rows={weak.map((d) => ({
-                label: classToken(d.entityClass),
-                value: d.missed,
-                note: `${percent(d.recall ?? 0, 1)} recall`,
-                mono: true,
-              }))}
+              rows={run.detectors
+                .filter((d) => d.recall !== null && d.recall < 1)
+                .slice(0, 5)
+                .map((d) => ({
+                  label: thing(d.entityClass),
+                  value: d.missed,
+                  note: `missed ${percent(1 - (d.recall ?? 1), 1)}`,
+                }))}
               format={exact}
             />
           </Panel>
         </Card>
 
         <Card pad={22}>
-          <Panel title="What it over-claims" note="Enforceable findings raised on payloads generated with no leak in them.">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              <Meter
-                value={run.integrity.false_positive_rate}
-                label="False-positive rate, all classes"
-                caption={`${exact(run.integrity.quiet_false_positive_records)} of ${exact(run.integrity.quiet_records)} clean payloads raised something`}
-                invert
-              />
-              <BarSeries
-                rows={run.detectors
-                  .filter((d) => d.falsePositives > 0)
-                  .sort((a, b) => b.falsePositives - a.falsePositives)
-                  .map((d) => ({
-                    label: classToken(d.entityClass),
-                    value: d.falsePositives,
-                    note: `${percent(d.precision ?? 1, 1)} precision`,
-                    mono: true,
-                  }))}
-                format={exact}
+          <Panel
+            title="When it cried wolf"
+            note="Alerts raised on test traffic that had nothing sensitive in it at all."
+          >
+            <div style={{ marginBottom: 18 }}>
+              <Pair
+                value={percent(run.integrity.false_positive_rate, 1)}
+                of={`of clean requests raised something - ${exact(run.integrity.quiet_false_positive_records)} of ${exact(run.integrity.quiet_records)}`}
+                size={27}
               />
             </div>
+            <BarSeries
+              rows={run.detectors
+                .filter((d) => d.falsePositives > 0)
+                .sort((a, b) => b.falsePositives - a.falsePositives)
+                .map((d) => ({ label: thing(d.entityClass), value: d.falsePositives }))}
+              format={exact}
+            />
           </Panel>
         </Card>
       </div>
 
       <Caveat>
-        <strong style={{ fontWeight: 'var(--w-medium)', color: 'var(--text-body)' }}>
-          Aadhaar precision is arithmetic, not a bug.
-        </strong>{' '}
-        A Verhoeff check digit rejects nine in ten random twelve-digit strings and accepts
-        the tenth, so a corpus of twelve-digit order numbers produces one apparent Aadhaar
-        per ten by construction. That is why the checksum is a filter and the co-occurrence
-        scanner is the decision - and why{' '}
-        <span className="zt-mono-sm">quasi_identifier_set</span> carries the record cases at
-        1.00 precision instead.
+        Almost all the false alarms are Aadhaar numbers, and that is arithmetic rather
+        than a fault. An Aadhaar has a built-in check digit that roughly one in ten
+        random twelve-digit numbers passes by chance - so a batch of order numbers
+        produces false matches no matter how good the rule is. It is why a twelve-digit
+        number on its own is only ever a hint, and why the check that actually decides
+        is the one that reads what surrounds it.
       </Caveat>
 
       {/* -- the registry -------------------------------------------------------- */}
@@ -155,19 +144,18 @@ export function DetectorsView() {
             onChange={setSort}
             style={{ flex: 1 }}
             items={[
-              { value: 'weakest', label: 'Weakest recall' },
-              { value: 'noisiest', label: 'Noisiest' },
-              { value: 'volume', label: 'Most seen' },
-              { value: 'slowest', label: 'Slowest' },
+              { value: 'weakest', label: 'Missed most' },
+              { value: 'noisiest', label: 'Most false alarms' },
+              { value: 'volume', label: 'Seen most' },
             ]}
           />
           <Input
             size="sm"
             icon="search"
-            placeholder="Filter classes"
+            placeholder="Filter"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            style={{ width: 200, paddingBottom: 10 }}
+            style={{ width: 190, paddingBottom: 10 }}
           />
         </div>
 
@@ -175,35 +163,30 @@ export function DetectorsView() {
           <div>
             <TableHead cols={COLS} />
             {rows.length ? rows.map((d) => <DetectorLine key={d.entityClass} row={d} />) : (
-              <EmptyState icon="search" title="No class matches" description="Clear the filter." />
+              <EmptyState icon="search" title="Nothing matches" description="Clear the filter." />
             )}
           </div>
         </div>
       </Card>
 
-      <Provenance scope="Detector quality" />
+      <Provenance />
     </div>
   );
 }
 
 function DetectorLine({ row }: { row: DetectorRow }) {
-  const exactBoth = row.recall === 1 && row.precision === 1;
+  const flawless = row.recall === 1 && row.precision === 1;
   return (
     <div
       className="zt-row"
       style={{
         display: 'grid', gridTemplateColumns: columns(COLS), gap: 12, alignItems: 'center',
-        minHeight: 'var(--row-h)', padding: '10px 16px',
+        minHeight: 'var(--row-h)', padding: '11px 16px',
         boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
       }}
     >
-      <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>
-          {classToken(row.entityClass)}
-        </span>
-        <span className="zt-mono-sm" style={{ color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {row.detectors.length ? row.detectors.join(' · ') : 'composed scanner'}
-        </span>
+      <span style={{ font: 'var(--type-body-sm)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {thing(row.entityClass)}
       </span>
 
       <span className="zt-mono-sm zt-nums" style={{ textAlign: 'right', color: 'var(--text-quiet)' }}>
@@ -211,30 +194,21 @@ function DetectorLine({ row }: { row: DetectorRow }) {
       </span>
 
       <ScoreCell value={row.recall} />
-      <ScoreCell value={row.precision} />
 
       <span
         className="zt-mono-sm zt-nums"
         style={{ textAlign: 'right', color: row.falsePositives ? 'var(--ink)' : 'var(--text-faint)' }}
       >
-        {row.falsePositives ? exact(row.falsePositives) : '-'}
-      </span>
-
-      <span className="zt-mono-sm zt-nums" style={{ textAlign: 'right', color: 'var(--text-quiet)' }}>
-        {row.runtimeUs === null ? (
-          <Tooltip label="Composed of several scanners; no isolated cost">
-            <span>-</span>
-          </Tooltip>
-        ) : micros(row.runtimeUs)}
+        {row.falsePositives ? exact(row.falsePositives) : 'none'}
       </span>
 
       <span>
-        {exactBoth ? (
-          <Badge status="clean" tone="clean">Exact</Badge>
+        {flawless ? (
+          <Badge status="clean" tone="clean">Caught every one</Badge>
         ) : (row.recall ?? 1) < 1 ? (
-          <Badge status="redacted" tone="redacted">Misses</Badge>
+          <Badge status="redacted" tone="redacted">Missed some</Badge>
         ) : (
-          <Badge status="info" tone="info">Over-claims</Badge>
+          <Badge status="info" tone="info">Some false alarms</Badge>
         )}
       </span>
     </div>
@@ -242,34 +216,35 @@ function DetectorLine({ row }: { row: DetectorRow }) {
 }
 
 /**
- * A score with a short rule under it.
+ * A share, with a short rule under it.
  *
- * The rule is 44px and not the column width. Stretched across the cell it read as
- * an input underline - a column of them looked like a form, which is exactly the
- * "invented affordance" failure that makes an operator distrust a table.
+ * The rule is 44px and not the column width - stretched across the cell it read as
+ * an input underline, and a column of them looked like a form. The scale starts at
+ * 80% because every value in this table sits between 0.88 and 1, and a full-range
+ * bar would make 88% and 99.99% look identical.
  */
 function ScoreCell({ value }: { value: number | null }) {
   if (value === null) {
-    return <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>not measured</span>;
+    return <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>not tested</span>;
   }
-  const perfect = value === 1;
+  const whole = value === 1;
+  // 0.999994 rounds to "100.0%", which then sat next to a badge saying it missed
+  // something - the table contradicting itself in two adjacent columns. A share that
+  // is not all of them never reads as all of them.
+  const label = whole ? 'all of them'
+    : value >= 0.9995 ? 'all but a few'
+      : percent(value, 1);
   return (
     <span style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-      <span className="zt-mono-sm zt-nums" style={{ color: perfect ? 'var(--text-quiet)' : 'var(--ink)' }}>
-        {score(value)}
+      <span className="zt-mono-sm zt-nums" style={{ color: whole ? 'var(--text-quiet)' : 'var(--ink)' }}>
+        {label}
       </span>
-      <span
-        aria-hidden
-        style={{ width: 44, height: 2, background: 'rgba(17,17,17,0.11)', borderRadius: 1 }}
-      >
+      <span aria-hidden style={{ width: 44, height: 2, background: 'rgba(17,17,17,0.11)', borderRadius: 1 }}>
         <span
           style={{
             display: 'block', height: '100%',
-            // Below 0.8 the bar would be a sliver at 44px, so the scale starts there:
-            // every score in this table is between 0.75 and 1, and a full-range bar
-            // would make a 0.888 and a 0.9999 look identical.
             width: `${Math.max(0, (value - 0.8) / 0.2) * 100}%`,
-            background: perfect ? 'rgba(17,17,17,0.22)' : 'rgba(17,17,17,0.72)',
+            background: whole ? 'rgba(17,17,17,0.22)' : 'rgba(17,17,17,0.72)',
             borderRadius: 1,
           }}
         />

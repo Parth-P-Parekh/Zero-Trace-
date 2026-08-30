@@ -1,77 +1,70 @@
 'use client';
 
 /**
- * Policy - did the rules hold?
+ * Policy - the rules, and whether they held.
  *
- * The old screen showed a YAML document and its version history, which describes
- * what policy *says*. After a five-million-record run there is a better question
- * available: what policy *did*. So the rules are shown beside the number of times
- * each one fired and the one case where it did not hold.
+ * The green/amber/red verdict panel is gone. It charted an internal confidence state
+ * that means nothing without knowing the two thresholds either side of it, and the
+ * one consequence a reader actually needs from it - that an uncertain finding is
+ * never treated as a certain one - is a sentence, not a chart.
  *
- * The dark card is spent on the credential block rate, because credentials are the
- * one class the product promises zero tolerance on - and the run found 41,329
- * payloads where that promise was not kept. Putting that on the dark card rather
- * than in a footnote is the whole editorial position of this console.
+ * What is left is the rules themselves in plain words, the one promise the product
+ * makes about credentials, and the one place the machinery broke.
  */
 import { useState } from 'react';
 import { Badge, Card, SegmentedControl } from '@/ds';
 import { BarSeries, RatioBar } from '@/components/console/Draw';
-import { Caveat, Column, Figure, Headline, Pair, Panel, Provenance, TableHead, columns } from '@/components/console/Frame';
+import { Caveat, Column, Figure, Footnote, Headline, Pair, Panel, Provenance, TableHead, columns } from '@/components/console/Frame';
 import { run } from '@/lib/benchmark';
-import { classToken, compact, exact, percent } from '@/lib/format';
+import { compact, exact, percent } from '@/lib/format';
+import { group, instruction, oneIn, thing } from '@/lib/words';
 
 /**
- * The rules that actually decided this run, transcribed from
- * `gateway/base/policy.py`. Not a YAML document a tenant might publish - the
- * family defaults the pipeline ran with, so the numbers beside them are the
- * numbers these lines produced.
+ * The rules that decided this run, in the order a reader would ask about them.
+ * Transcribed from the policy the pipeline actually ran with, so the counts beside
+ * them are the counts these lines produced.
  */
 const RULES: Array<{ family: string; action: string; why: string }> = [
-  { family: 'CREDENTIAL', action: 'block', why: 'Never tokenised. A tokenised key is still a key-shaped string in someone else’s logs.' },
-  { family: 'INDIA_ID', action: 'tokenize', why: 'Referentially stable, one-way. The same value derives the same token across hops.' },
-  { family: 'FINANCIAL', action: 'tokenize', why: 'Same derivation, same scope.' },
-  { family: 'CONTACT', action: 'tokenize', why: 'Kept parseable where the far side validates the shape.' },
-  { family: 'PERSON_DATA', action: 'tokenize', why: 'Needs the S2 entity model to fire. Not built.' },
-  { family: 'SENSITIVE_CATEGORY', action: 'mask', why: 'Inbound clearance decides this per group, not per family.' },
-  { family: 'COMPOSITE', action: 'tokenize', why: 'The set identifies the person even where no single field does.' },
-  { family: 'LOW_CONFIDENCE', action: 'warn', why: 'Corroborates. Never enforces alone.' },
+  { family: 'CREDENTIAL', action: 'block', why: 'A key that has left cannot be un-sent. There is no safe version of sending one.' },
+  { family: 'INDIA_ID', action: 'tokenize', why: 'Swapped for a stand-in that is the same every time, so the AI can still follow who is who.' },
+  { family: 'FINANCIAL', action: 'tokenize', why: 'The same treatment as ID numbers.' },
+  { family: 'CONTACT', action: 'tokenize', why: 'Kept in a form the far side can still read as an email or a phone number.' },
+  { family: 'COMPOSITE', action: 'tokenize', why: 'A record that identifies someone even though no single field in it does.' },
+  { family: 'SENSITIVE_CATEGORY', action: 'mask', why: 'Who may read these depends on which team they are in, decided per person.' },
+  { family: 'PERSON_DATA', action: 'tokenize', why: 'Needs the name-detection model, which is not built yet.' },
+  { family: 'LOW_CONFIDENCE', action: 'warn', why: 'Counted as supporting evidence. Never enough on its own.' },
 ];
 
-const LATTICE = ['allow', 'warn', 'tokenize', 'mask', 'block'];
-
 const COLS: Column[] = [
-  { key: 'family', head: 'Family', w: 'minmax(0,150px)' },
-  { key: 'action', head: 'Action', w: '104px' },
+  { key: 'group', head: 'Kind of data', w: 'minmax(0,180px)' },
+  { key: 'action', head: 'What we do', w: '158px' },
   { key: 'why', head: 'Why', w: 'minmax(0,1fr)' },
-  { key: 'fired', head: 'Findings', w: '92px', align: 'right' },
+  { key: 'count', head: 'Times seen', w: '96px', align: 'right' },
 ];
 
 export function PolicyView() {
   const [mode, setMode] = useState('applied');
-  const { integrity, outcomes, actions, verdicts, collisions } = run;
-  const familyCounts = Object.fromEntries(run.byFamily.map((f) => [f.family, f.count]));
+  const { integrity, actions, collisions } = run;
+  const counts = Object.fromEntries(run.byFamily.map((f) => [f.family, f.count]));
   const total = run.status.total;
+  const strictness = ['allow', 'warn', 'tokenize', 'mask', 'block'];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 'var(--page-max)' }}>
-      {/* Grid lives in `.zt-split` in globals.css, not inline: an inline
-          grid-template-columns beats the media query and the two columns never
-          collapsed on a narrow screen. */}
       <div className="zt-split">
         <div>
           <Headline
-            sub={`Every payload got a decision and the decision was recorded before anything
-                  was dispatched. The lattice below is ordered by how much of the original
-                  reaches the far side; a business unit may move a rule up it, never down.`}
+            sub="Eight rules, one per kind of data. A team can make a rule stricter for
+                 itself but never looser, and every decision is written down before
+                 anything is sent."
           >
-            <Figure>{exact(total)}</Figure> decisions, from{' '}
-            <Figure>{RULES.length}</Figure> family rules.
+            <Figure>{exact(total)}</Figure> requests, each measured against the same rules.
           </Headline>
 
           <div style={{ marginTop: 26 }}>
             <RatioBar
-              segments={LATTICE.filter((a) => actions[a]).map((a, i) => ({
-                label: a[0].toUpperCase() + a.slice(1),
+              segments={strictness.filter((a) => actions[a]).map((a, i) => ({
+                label: instruction(a),
                 value: actions[a] ?? 0,
                 stop: [0.22, 0.36, 0.52, 0.72, 1.0][i] ?? 0.11,
               }))}
@@ -80,53 +73,41 @@ export function PolicyView() {
           </div>
         </div>
 
-        {/* The dark card: the promise, and where it was not kept. */}
+        {/* The promise, and where it was not kept. */}
         <Card tone="dark" pad={24}>
-          <Panel title="Credential enforcement" onDark>
-            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: 22 }}>
+          <Panel title="The one promise" onDark>
+            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
               <Pair
-                value={percent(integrity.credential_block_rate, 2)}
-                of="of credential payloads stopped"
+                value={percent(integrity.credential_block_rate, 1)}
+                of="of requests carrying a key were stopped"
                 onDark
                 size={33}
               />
-              <Pair
-                value={exact(integrity.credential_not_blocked)}
-                of="reached the model"
-                onDark
-              />
+              <Pair value={exact(integrity.credential_not_blocked)} of="got through" onDark />
             </div>
-            {/* No meter here. It drew 96.13% a second time, immediately under the
-                96.13% above it - the same number twice is not a second fact. */}
-            <p
-              style={{
-                margin: '22px 0 0', font: 'var(--type-body-sm)',
-                color: 'var(--text-on-dark-body)', maxWidth: '52ch',
-              }}
-            >
-              The rule itself never failed: every credential the detector found was blocked,
-              and none was ever tokenised. The {exact(integrity.credential_not_blocked)} that
-              got through were not found in the first place - all of them obfuscated, and
-              all of them on the Detectors screen.
-            </p>
+            <Footnote onDark measure="50ch">
+              The rule never failed. Every key it found was stopped, and no key was ever
+              swapped for a stand-in instead. The ones that got through were never found in
+              the first place - all of them typed with spaces or padding, and all of them on
+              the previous screen.
+            </Footnote>
           </Panel>
         </Card>
       </div>
 
-      {/* -- the rules, with what they did ---------------------------------------- */}
+      {/* -- the rules ----------------------------------------------------------- */}
       <Card pad={0}>
-        <div style={{ padding: '18px 20px 14px' }}>
+        <div style={{ padding: '18px 20px 12px' }}>
           <Panel
-            title="Active rules"
-            note="Transcribed from the policy client that decided this run. Findings is the number of detections each family produced, not the number of requests it stopped."
+            title="The rules"
             right={
               <SegmentedControl
                 size="sm"
                 value={mode}
                 onChange={setMode}
                 items={[
-                  { value: 'applied', label: 'What fired' },
-                  { value: 'lattice', label: 'Lattice order' },
+                  { value: 'applied', label: 'Most used' },
+                  { value: 'lattice', label: 'Strictest first' },
                 ]}
               />
             }
@@ -140,33 +121,35 @@ export function PolicyView() {
             {[...RULES]
               .sort((a, b) =>
                 mode === 'lattice'
-                  ? LATTICE.indexOf(b.action) - LATTICE.indexOf(a.action)
-                  : (familyCounts[b.family] ?? 0) - (familyCounts[a.family] ?? 0))
+                  ? strictness.indexOf(b.action) - strictness.indexOf(a.action)
+                  : (counts[b.family] ?? 0) - (counts[a.family] ?? 0))
               .map((r) => (
                 <div
                   key={r.family}
                   className="zt-row"
                   style={{
                     display: 'grid', gridTemplateColumns: columns(COLS), gap: 12,
-                    alignItems: 'center', minHeight: 'var(--row-h)', padding: '11px 16px',
+                    alignItems: 'center', minHeight: 'var(--row-h)', padding: '12px 16px',
                     boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-                    opacity: familyCounts[r.family] ? 1 : 0.52,
+                    opacity: counts[r.family] ? 1 : 0.52,
                   }}
                 >
-                  <span className="zt-mono-sm">{r.family.toLowerCase()}</span>
+                  <span style={{ font: 'var(--type-body-sm)' }}>{group(r.family)}</span>
                   <span>
                     <Badge
-                      status={r.action === 'block' ? 'blocked' : r.action === 'mask' || r.action === 'tokenize' ? 'redacted' : 'info'}
-                      tone={r.action === 'block' ? 'blocked' : r.action === 'mask' || r.action === 'tokenize' ? 'redacted' : 'neutral'}
+                      status={r.action === 'block' ? 'blocked'
+                        : r.action === 'mask' || r.action === 'tokenize' ? 'redacted' : 'info'}
+                      tone={r.action === 'block' ? 'blocked'
+                        : r.action === 'mask' || r.action === 'tokenize' ? 'redacted' : 'neutral'}
                     >
-                      {r.action}
+                      {instruction(r.action)}
                     </Badge>
                   </span>
                   <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)', minWidth: 0 }}>
                     {r.why}
                   </span>
                   <span className="zt-mono-sm zt-nums" style={{ textAlign: 'right' }}>
-                    {familyCounts[r.family] ? compact(familyCounts[r.family]) : '-'}
+                    {counts[r.family] ? compact(counts[r.family]) : 'never'}
                   </span>
                 </div>
               ))}
@@ -174,69 +157,45 @@ export function PolicyView() {
         </div>
       </Card>
 
-      {/* -- the two things that did not go cleanly -------------------------------- */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 20 }}>
-        <Card pad={22}>
-          <Panel
-            title="Overlapping redactions"
-            note="Two enforceable findings claiming the same characters. The planner emits one edit each and the splice refuses the pair."
-          >
-            <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', marginBottom: 20 }}>
-              <Pair value={percent(collisions.reached_the_splice / total, 2)} of="of all payloads failed here" />
-              <Pair value={exact(collisions.reached_the_splice)} of="requests" />
-            </div>
-            <BarSeries
-              rows={Object.entries(collisions.pairs).map(([pair, n]) => ({
-                label: pair.split('+').map(classToken).join('  +  '),
-                value: n,
-                mono: true,
-              }))}
-              format={compact}
-              limit={6}
+      {/* -- the one place the machinery broke ------------------------------------ */}
+      <Card pad={22}>
+        <Panel
+          title="Where it broke"
+          note="When two rules both want to change the same characters, the request fails instead of being cleaned up."
+        >
+          <div style={{ display: 'flex', gap: 30, flexWrap: 'wrap', marginBottom: 22 }}>
+            <Pair
+              value={oneIn(collisions.reached_the_splice / total)}
+              of="requests hit this"
+              size={27}
             />
-            <p style={{ margin: '18px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '58ch' }}>
-              These fail closed - nothing was dispatched. But the exception is not caught in
-              the request path, so the caller gets an untyped 500 instead of a named error,
-              and the ledger records no decision for a request that had one.
-            </p>
-          </Panel>
-        </Card>
-
-        <Card pad={22}>
-          <Panel
-            title="Verdicts"
-            note="Amber means the checker was unsure. There is nowhere to escalate to, because the tier that would resolve it is not built."
-          >
-            <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', marginBottom: 20 }}>
-              <Pair value={exact(verdicts.amber ?? 0)} of="amber, unresolved" />
-              <Pair value={exact(run.degraded.amber_no_tier3 ?? 0)} of="marked degraded" />
-            </div>
-            <RatioBar
-              segments={[
-                { label: 'Green', value: verdicts.green ?? 0, stop: 0.22 },
-                { label: 'Amber', value: verdicts.amber ?? 0, stop: 0.52 },
-                { label: 'Red', value: verdicts.red ?? 0, stop: 1.0 },
-              ]}
-            />
-            <p style={{ margin: '18px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '58ch' }}>
-              Amber deliberately does not become red. &ldquo;I could not check&rdquo; and
-              &ldquo;I checked and I am unsure&rdquo; are different states, and only the
-              first is what a fail-closed stance is for. Every amber is reported in{' '}
-              <span className="zt-mono-sm">X-ZeroTrace-Degraded</span>.
-            </p>
-          </Panel>
-        </Card>
-      </div>
+            <Pair value={exact(collisions.reached_the_splice)} of="in this run" size={27} />
+          </div>
+          <BarSeries
+            rows={Object.entries(collisions.pairs).map(([pair, n]) => ({
+              label: pair.split('+').map(thing).join('  and  '),
+              value: n,
+            }))}
+            format={compact}
+            limit={6}
+          />
+          <p style={{ margin: '20px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '72ch' }}>
+            Nothing leaked - the request is abandoned rather than sent. But the app gets a
+            generic server error instead of a clear explanation, and no record of the
+            decision is kept, so an auditor looking later sees a gap where a decision
+            should be. It is the clearest thing on this dashboard to fix next.
+          </p>
+        </Panel>
+      </Card>
 
       <Caveat>
-        Policy versioning, business-unit inheritance, scoped exceptions and two-person
-        approval are implemented in the control plane and were not exercised by this run -
-        it decided every payload against one org-level rule set. The version history and
-        approvals this screen used to show were fixtures, and they have been removed rather
-        than re-styled.
+        Rule versions, per-team overrides, approvals and time-limited exceptions all exist
+        in the product but were not used in this test - it ran every request against one
+        set of rules. The version history this screen used to show was invented, so it has
+        been removed rather than restyled.
       </Caveat>
 
-      <Provenance scope="Policy" />
+      <Provenance />
     </div>
   );
 }

@@ -1,52 +1,53 @@
 'use client';
 
 /**
- * Coverage - is this all the traffic?
+ * Coverage - is this all of it?
  *
- * The first question a security buyer asks, and the one this product cannot yet
- * answer. The gateway can prove what traversed it; proving the denominator needs
- * DNS, firewall or flow logs, and none are connected. `CoverageMonitor.snapshot()`
- * says so in three fields - `scope: gateway_observed_only`,
- * `direct_egress_visible: false`, `denominator_available: false` - and this screen
- * says the same thing in the same place instead of showing a percentage.
+ * The first question a security lead asks, and the one this deployment cannot
+ * answer. The dark card carries the absence rather than a number, because a
+ * coverage percentage over an unmeasured base is the single most persuasive false
+ * claim this product could make.
  *
- * So the dark card carries the absence, not a number. A coverage figure with no
- * denominator is the single most persuasive false claim this product could make,
- * and printing "98.7%" over an unmeasured base is how a security team stops
- * believing the rest of the console.
+ * The raw field names that used to sit in that card - `scope: gateway_observed_only`
+ * and friends - said the same thing in a form only someone reading the source could
+ * check. The sentence says it to everyone.
  */
 import { useState } from 'react';
-import { Card, SegmentedControl, StatusDot, Tag } from '@/ds';
+import { Card, SegmentedControl } from '@/ds';
 import { BarSeries, RatioBar } from '@/components/console/Draw';
-import { Caveat, Figure, Headline, Pair, Panel, Provenance } from '@/components/console/Frame';
+import { Caveat, Figure, Footnote, Headline, Panel, Provenance } from '@/components/console/Frame';
 import { run } from '@/lib/benchmark';
 import { compact, exact, percent } from '@/lib/format';
 
-const DIMENSIONS: Record<string, { label: string; note: string; mono: boolean }> = {
-  harness: {
-    label: 'Harness',
-    note: 'Which tool made the call, from its user agent or an explicit header. “unknown” is a harness the gateway could not name, not a harness that bypassed it.',
-    mono: true,
+const DIMENSIONS: Record<string, { label: string; note: string }> = {
+  workload: {
+    label: 'App',
+    note: 'Which application made the request.',
   },
-  route: {
-    label: 'Route',
-    note: 'The provider-compatible endpoint the request arrived on.',
-    mono: true,
+  harness: {
+    label: 'Tool',
+    note: 'Which AI tool it came through. “unknown” means we could not name the tool, not that it got around us.',
   },
   channel: {
-    label: 'Channel',
-    note: 'How the caller reached the gateway. A CLI writes model output to disk, which is why tokenised values are refused there.',
-    mono: true,
-  },
-  workload: {
-    label: 'Workload',
-    note: 'The application behind the call.',
-    mono: false,
+    label: 'How it connected',
+    note: 'A command-line tool writes the AI’s answer to disk, which is why stand-in values are refused there.',
   },
 };
 
+/** Job titles, not system roles. */
+const ROLE_COPY: Record<string, string> = {
+  officer: 'Case officer',
+  auditor: 'Auditor',
+  director: 'Director',
+  contractor: 'Outside contractor',
+  support_agent: 'Support agent',
+  service: 'An application, not a person',
+  unregistered: 'Nobody we recognise',
+  engineer: 'Engineer',
+};
+
 export function CoverageView() {
-  const [dim, setDim] = useState('harness');
+  const [dim, setDim] = useState('workload');
   const { coverage, status, byActorRole } = run;
   const table = coverage[dim as keyof typeof coverage] as Record<string, number>;
   const unknown = coverage.harness.unknown ?? 0;
@@ -63,23 +64,20 @@ export function CoverageView() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 'var(--page-max)' }}>
-      {/* Grid lives in `.zt-split` in globals.css, not inline: an inline
-          grid-template-columns beats the media query and the two columns never
-          collapsed on a narrow screen. */}
       <div className="zt-split">
         <div>
           <Headline
-            sub={`Everything below is traffic that reached the gateway. What share of the
-                  organisation’s AI traffic that represents is a different number, and this
-                  deployment cannot compute it.`}
+            sub="Everything on this dashboard is traffic that came through us. Whether that
+                 is all of the organisation’s AI traffic is a separate question, and this
+                 setup cannot answer it."
           >
-            <Figure>{exact(status.total)}</Figure> payloads traversed the gateway.
+            <Figure>{exact(status.total)}</Figure> requests came through us.
           </Headline>
 
           <div style={{ marginTop: 26 }}>
             <RatioBar
               segments={Object.entries(coverage.provider).map(([p, n], i) => ({
-                label: p,
+                label: p === 'anthropic' ? 'Anthropic models' : 'OpenAI models',
                 value: n,
                 stop: [1.0, 0.52, 0.22][i] ?? 0.11,
               }))}
@@ -87,55 +85,42 @@ export function CoverageView() {
           </div>
         </div>
 
-        {/* The dark card carries what is missing, not a percentage. */}
+        {/* The card carries what is missing, not a percentage. */}
         <Card tone="dark" pad={24}>
-          <Panel title="Coverage ratio" onDark>
+          <Panel title="What share of all AI traffic" onDark>
             <div
               style={{
                 font: 'var(--w-regular) 33px/1.1 var(--font-core)',
                 letterSpacing: 'var(--tr-display)', color: 'rgba(242,242,240,0.36)',
               }}
             >
-              Not available
+              We don&rsquo;t know
             </div>
             <p
               style={{
-                margin: '16px 0 0', font: 'var(--type-body-sm)',
+                margin: '20px 0 0', font: 'var(--type-body-sm)',
                 color: 'var(--text-on-dark-body)', maxWidth: '48ch',
               }}
             >
-              A coverage percentage is gateway traversals over all AI egress. The numerator
-              is known exactly. The denominator needs DNS resolutions, firewall logs or VPC
-              flow logs, and no connector is built - so the fraction has no bottom half and
-              is not shown.
+              To say &ldquo;we cover 98% of AI traffic&rdquo; you need to know the other 2%
+              exists. That means watching the network itself &ndash; which machines called
+              an AI provider without coming through us &ndash; and that connection has not
+              been built.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 24 }}>
-              {[
-                ['scope', 'gateway_observed_only'],
-                ['direct_egress_visible', 'false'],
-                ['denominator_available', 'false'],
-              ].map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                  <span className="zt-mono-sm" style={{ color: 'rgba(242,242,240,0.36)' }}>{k}</span>
-                  <span className="zt-mono-sm" style={{ color: 'var(--text-on-dark-quiet)' }}>{v}</span>
-                </div>
-              ))}
-            </div>
-            <p className="zt-mono-sm" style={{ margin: '20px 0 0', color: 'rgba(242,242,240,0.36)' }}>
-              GET /v1/coverage
-            </p>
+            <Footnote onDark>
+              So this screen shows what we did see, and no percentage. A number here with
+              nothing underneath it would be the easiest thing on the dashboard to believe
+              and the least true.
+            </Footnote>
           </Panel>
         </Card>
       </div>
 
-      {/* -- what did traverse ---------------------------------------------------- */}
+      {/* -- what did come through ------------------------------------------------ */}
       <Card pad={22}>
         <Panel
-          title="Observed traffic"
-          // The uniformity is said out loud. These counts are near-identical because
-          // the corpus picks a harness at random, and a reader who took the ranking
-          // for a real estate profile would be reading an artefact of the generator.
-          note={`${DIMENSIONS[dim].note} Counts are close to even because the corpus assigns this attribute at random; the ranking is not a measurement of any real estate.`}
+          title="Where it came from"
+          note={`${DIMENSIONS[dim].note} The counts are close to even because this is test traffic, not a real estate.`}
           right={
             <SegmentedControl
               size="sm"
@@ -148,23 +133,18 @@ export function CoverageView() {
           <BarSeries
             rows={Object.entries(table)
               .sort((a, b) => b[1] - a[1])
-              .map(([label, value]) => ({
-                label,
-                value,
-                mono: DIMENSIONS[dim].mono,
-                note: dim === 'harness' && label === 'unknown' ? 'unclassified' : undefined,
-              }))}
+              .map(([label, value]) => ({ label, value }))}
             format={compact}
             limit={12}
           />
         </Panel>
       </Card>
 
-      {/* -- who was calling ------------------------------------------------------ */}
+      {/* -- who was sending ------------------------------------------------------ */}
       <Card pad={22}>
         <Panel
-          title="By actor role"
-          note="Resolved from the request headers, which are trivially spoofable on this path. Real identity is mTLS and OIDC, and neither is wired."
+          title="Who was sending"
+          note="Right now this is taken from a header the caller sets itself, which anyone could fake. Proper sign-in checking is designed and not built."
         >
           <div className="zt-table">
             <div>
@@ -179,13 +159,18 @@ export function CoverageView() {
                     <div
                       key={role}
                       style={{
-                        display: 'grid', gridTemplateColumns: '160px 88px minmax(0,1fr) 84px',
-                        gap: 16, alignItems: 'center', padding: '12px 4px',
+                        display: 'grid', gridTemplateColumns: '200px 80px minmax(0,1fr) 96px',
+                        gap: 16, alignItems: 'center', padding: '13px 4px',
                         boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
                       }}
                     >
-                      <span className="zt-mono-sm" style={{ color: role === 'unregistered' ? 'var(--signal-redacted)' : 'var(--text-body)' }}>
-                        {role}
+                      <span
+                        style={{
+                          font: 'var(--type-body-sm)',
+                          color: role === 'unregistered' ? 'var(--signal-redacted)' : 'var(--text-body)',
+                        }}
+                      >
+                        {ROLE_COPY[role] ?? role}
                       </span>
                       <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)' }}>
                         {compact(t)}
@@ -195,13 +180,13 @@ export function CoverageView() {
                         height={6}
                         total={t}
                         segments={[
-                          { label: 'Allowed', value: acts.allow ?? 0, stop: 0.22 },
-                          { label: 'Tokenized', value: acts.tokenize ?? 0, stop: 0.52 },
-                          { label: 'Blocked', value: acts.block ?? 0, stop: 1.0 },
+                          { label: 'Sent as-is', value: acts.allow ?? 0, stop: 0.22 },
+                          { label: 'Cleaned up', value: acts.tokenize ?? 0, stop: 0.52 },
+                          { label: 'Stopped', value: acts.block ?? 0, stop: 1.0 },
                         ]}
                       />
                       <span className="zt-mono-sm zt-nums" style={{ textAlign: 'right' }}>
-                        {percent(stopped / t, 1)}
+                        {percent(stopped / t, 0)} touched
                       </span>
                     </div>
                   );
@@ -212,15 +197,13 @@ export function CoverageView() {
       </Card>
 
       <Caveat>
-        <strong style={{ fontWeight: 'var(--w-medium)', color: 'var(--text-body)' }}>
-          {exact(unknown)} payloads arrived from a harness the gateway could not name.
-        </strong>{' '}
-        That is a labelling gap, not an enforcement gap - every one of them was inspected
-        and decided like the rest. It is reported because an unclassified share that grows
-        is the first sign a new tool has appeared in the estate.
+        {exact(unknown)} requests came from a tool we could not put a name to. Every one of
+        them was still checked and decided like the rest &ndash; it is a labelling gap, not
+        a hole. It is worth watching because a share that starts growing usually means a new
+        tool has appeared in the organisation.
       </Caveat>
 
-      <Provenance scope="Coverage" />
+      <Provenance />
     </div>
   );
 }

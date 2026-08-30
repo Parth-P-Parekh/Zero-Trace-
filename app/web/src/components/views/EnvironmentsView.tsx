@@ -1,24 +1,28 @@
 'use client';
 
 /**
- * Environments - production enforces, staging observes.
+ * Environments - the live system, and the one watching quietly beside it.
  *
  * Shadow mode is the only safe way to put a blocking control in front of traffic
- * nobody has characterised yet, and the number that decides whether to promote it
- * is "what would this have stopped". So the two environments are shown as one
- * comparison rather than two dashboards: same policy, same detectors, same
- * decisions, and the only difference is whether the decision was applied.
+ * nobody has characterised yet, and the number that decides whether to switch it on
+ * is "what would this have stopped". So the two are one comparison rather than two
+ * dashboards: same rules, same detection, and the only difference is whether the
+ * decision was acted on.
  *
- * The dark card is spent on the promotion question, because that is the decision
- * this screen exists to support and nothing else on it is a decision at all.
+ * "Intervention rate" and "shadow" both went. The first is a phrase nobody says out
+ * loud; the second is a term of art meaning "watching without acting", which is
+ * shorter than the term is.
  */
 import { Badge, Card, StatusDot } from '@/ds';
 import { BarSeries, RatioBar } from '@/components/console/Draw';
-import { Caveat, Figure, Headline, Pair, Panel, Provenance } from '@/components/console/Frame';
+import { Caveat, Figure, Footnote, Headline, Pair, Panel, Provenance } from '@/components/console/Frame';
 import { run } from '@/lib/benchmark';
-import { compact, exact, percent } from '@/lib/format';
+import { compact, exact } from '@/lib/format';
+import { instruction } from '@/lib/words';
 
 const ORDER = ['production', 'staging'] as const;
+
+const NAMES: Record<string, string> = { production: 'Live', staging: 'Test' };
 
 export function EnvironmentsView() {
   const envs = run.environments;
@@ -28,51 +32,41 @@ export function EnvironmentsView() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 'var(--page-max)' }}>
-      {/* Grid lives in `.zt-split` in globals.css, not inline: an inline
-          grid-template-columns beats the media query and the two columns never
-          collapsed on a narrow screen. */}
       <div className="zt-split">
         <div>
-          {/* The two rates are the same to within a rounding place, so stating them as
-              a comparison read as a mistake. What the equality means is the finding. */}
+          {/* The two rates match to within a rounding place, so stating them as a
+              comparison read as a mistake. What the match means is the finding. */}
           <Headline
-            sub={`Both run the same detector pack and the same policy. Staging decides every
-                  payload and records the decision; it simply does not apply it. The rates
-                  agreeing is what says the shadow traffic resembles the real thing - which
-                  is the only condition under which promoting it is a review rather than a
-                  gamble.`}
+            sub="The test system checks every request and writes down what it would have
+                 done, then sends it anyway. The live system does the same and acts on it.
+                 Same rules, same detection - the only difference is whether anything
+                 happens."
           >
-            Staging and production decide alike, to within{' '}
+            Both systems reach the same decisions, within{' '}
             <Figure>{Math.abs(delta * 100).toFixed(2)}</Figure> of a percentage point.
           </Headline>
         </div>
 
         <Card tone="dark" pad={24}>
-          <Panel title="Promotion" onDark>
-            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: 22 }}>
+          <Panel title="Safe to switch on?" onDark>
+            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
               <Pair
-                value={`${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(2)} pp`}
-                of="staging vs production"
+                value={`${delta >= 0 ? '+' : ''}${(delta * 100).toFixed(2)} pts`}
+                of="difference between the two"
                 onDark
                 size={33}
               />
               <Pair
                 value={exact((stage?.would_block ?? 0) + (stage?.would_redact ?? 0))}
-                of="payloads it would have touched"
+                of="requests the test system would have touched"
                 onDark
               />
             </div>
-            <p
-              style={{
-                margin: 0, font: 'var(--type-body-sm)',
-                color: 'var(--text-on-dark-body)', maxWidth: '50ch',
-              }}
-            >
-              A shadow environment whose intervention rate matches production is one whose
-              traffic looks like production, and promoting it changes nothing an operator
-              has not already seen. A gap in either direction is the thing to explain before
-              switching enforcement on.
-            </p>
+            <Footnote onDark measure="50ch">
+              Yes. When the test system stops the same share of traffic as the live one,
+              switching it on changes nothing anybody has not already seen. A gap in either
+              direction would be the thing to explain first.
+            </Footnote>
           </Panel>
         </Card>
       </div>
@@ -81,78 +75,70 @@ export function EnvironmentsView() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(340px,1fr))', gap: 20 }}>
         {ORDER.filter((name) => envs[name]).map((name) => {
           const env = envs[name];
-          const enforcing = env.mode === 'enforce';
+          const acting = env.mode === 'enforce';
           return (
             <Card key={name} pad={22}>
               <div
                 style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  gap: 12, marginBottom: 20,
+                  gap: 12, marginBottom: 22,
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                  <StatusDot state={enforcing ? 'clean' : 'info'} size={6} live={enforcing} />
-                  <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{name}</span>
+                  <StatusDot state={acting ? 'clean' : 'info'} size={6} live={acting} />
+                  <span style={{ font: 'var(--type-body-sm)' }}>{NAMES[name]}</span>
                 </div>
-                <Badge
-                  status={enforcing ? 'clean' : 'info'}
-                  tone={enforcing ? 'clean' : 'info'}
-                >
-                  {enforcing ? 'Enforcing' : 'Shadow'}
+                <Badge status={acting ? 'clean' : 'info'} tone={acting ? 'clean' : 'info'}>
+                  {acting ? 'Acting on it' : 'Watching only'}
                 </Badge>
               </div>
 
               <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', marginBottom: 22 }}>
-                <Pair value={compact(env.records)} of="payloads" />
+                <Pair value={compact(env.records)} of="requests" />
                 <Pair
                   value={exact(env.would_block)}
-                  of={enforcing ? 'blocked' : 'would be blocked'}
+                  of={acting ? 'stopped' : 'would have been stopped'}
                 />
                 <Pair
                   value={exact(env.would_redact)}
-                  of={enforcing ? 'redacted' : 'would be redacted'}
+                  of={acting ? 'cleaned up' : 'would have been cleaned up'}
                 />
               </div>
 
               <RatioBar
                 total={env.records}
                 segments={[
-                  { label: 'Allowed', value: env.allowed, stop: 0.22 },
-                  { label: enforcing ? 'Redacted' : 'Would redact', value: env.would_redact, stop: 0.52 },
-                  { label: enforcing ? 'Blocked' : 'Would block', value: env.would_block, stop: 1.0 },
+                  { label: 'Sent as-is', value: env.allowed, stop: 0.22 },
+                  { label: acting ? 'Cleaned up' : 'Would clean up', value: env.would_redact, stop: 0.52 },
+                  { label: acting ? 'Stopped' : 'Would stop', value: env.would_block, stop: 1.0 },
                 ]}
               />
 
-              {/* Both cards carry a closing sentence. Only staging had one before, and
-                  the pair sat side by side with a block of dead space under production. */}
               <p
                 style={{
-                  margin: '20px 0 0', font: 'var(--type-body-sm)',
+                  margin: '22px 0 0', font: 'var(--type-body-sm)',
                   color: 'var(--text-quiet)', maxWidth: '52ch',
                 }}
               >
-                {enforcing
-                  ? `Every decision here was applied. A blocked payload never reached the
-                     model and a redacted one was verified in the dispatched bytes before it
-                     was sent, so the counts above are of things that happened rather than
-                     of things that were decided.`
-                  : `Nothing here was stopped or rewritten. The decisions were made and
-                     written to the ledger, which is the entire point of running in shadow -
-                     the record says what would have happened, so promotion is a review
-                     rather than a gamble.`}
+                {acting
+                  ? `Everything here actually happened. A stopped request never reached the
+                     model, and a cleaned-up one was checked before it was sent.`
+                  : `Nothing here was stopped or changed. The decisions were made and
+                     written down anyway, which is the whole point - switching it on later
+                     becomes a review rather than a gamble.`}
               </p>
             </Card>
           );
         })}
       </div>
 
-      {/* -- where the two differ, by action ------------------------------------- */}
+      {/* -- side by side, by decision ------------------------------------------- */}
       <Card pad={22}>
         <Panel
-          title="Decisions by environment"
-          note="The same lattice in both. Staging’s counts are decisions recorded, not actions applied."
+          title="What each decided"
+          note="The same rules in both. The test system’s numbers are decisions written down, not actions taken."
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             {ORDER.filter((n) => envs[n]).map((name) => (
               <div key={name}>
                 <div
@@ -161,15 +147,15 @@ export function EnvironmentsView() {
                     marginBottom: 10,
                   }}
                 >
-                  <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{name}</span>
+                  <span style={{ font: 'var(--type-body-sm)' }}>{NAMES[name]}</span>
                   <span className="zt-mono-sm zt-nums" style={{ color: 'var(--text-quiet)' }}>
-                    {exact(envs[name].records)} payloads
+                    {exact(envs[name].records)} requests
                   </span>
                 </div>
                 <BarSeries
                   rows={Object.entries(envs[name].actions)
                     .sort((a, b) => b[1] - a[1])
-                    .map(([action, n]) => ({ label: action, value: n, mono: true }))}
+                    .map(([action, n]) => ({ label: instruction(action), value: n }))}
                   format={compact}
                   max={envs[name].records}
                 />
@@ -180,13 +166,13 @@ export function EnvironmentsView() {
       </Card>
 
       <Caveat>
-        Environment is a property of the payload in this run, not of a separate deployment -
-        both slices went through one gateway process with one detector pack. A real staging
-        environment differs in the traffic it sees, and this comparison is only as good as
-        the assumption that the two populations are alike.
+        In this test, live and test are two slices of one run rather than two separate
+        deployments &ndash; so the comparison assumes both see the same kind of traffic. A
+        real test environment usually does not, and that is what would make the two numbers
+        diverge.
       </Caveat>
 
-      <Provenance scope="Environments" />
+      <Provenance />
     </div>
   );
 }

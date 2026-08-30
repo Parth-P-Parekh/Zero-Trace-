@@ -11,7 +11,7 @@
 import Link from 'next/link';
 import { Icon } from '@/ds';
 import { run } from '@/lib/benchmark';
-import { compact, exact } from '@/lib/format';
+import { exact } from '@/lib/format';
 
 // --------------------------------------------------------------------- panel --
 
@@ -123,6 +123,43 @@ export function Figure({ children }: { children: React.ReactNode }) {
 // -------------------------------------------------------------------- notes --
 
 /**
+ * The closing line under a dark card's numbers, above a full-width rule.
+ *
+ * This was written inline five times as a paragraph carrying both the rule and a
+ * `max-width`, which meant the rule stopped where the text did - a hairline that
+ * ended two-thirds of the way across the card and read as a rendering fault. The
+ * rule belongs to the card and the measure belongs to the prose, so they are two
+ * elements.
+ */
+export function Footnote({
+  children,
+  onDark = false,
+  measure = '48ch',
+}: {
+  children: React.ReactNode;
+  onDark?: boolean;
+  measure?: string;
+}) {
+  return (
+    <div
+      style={{
+        marginTop: 24, paddingTop: 20,
+        boxShadow: `inset 0 1px 0 ${onDark ? 'var(--border-on-dark)' : 'var(--border-hairline)'}`,
+      }}
+    >
+      <p
+        style={{
+          margin: 0, maxWidth: measure, font: 'var(--type-body-sm)',
+          color: onDark ? 'var(--text-on-dark-body)' : 'var(--text-quiet)',
+        }}
+      >
+        {children}
+      </p>
+    </div>
+  );
+}
+
+/**
  * A limit on what the number above it proves.
  *
  * Every measurement on these screens has an edge, and the edge is written next to
@@ -153,20 +190,21 @@ export function Caveat({ children }: { children: React.ReactNode }) {
  * The same line on every measured screen, because the answer is the same on every
  * measured screen and an operator should stop reading it after the first time.
  */
-export function Provenance({ scope }: { scope?: string }) {
-  const { records, spans_scanned, wall_seconds, engines, corpus_seed } = run.meta;
+export function Provenance() {
+  const { records } = run.meta;
   return (
     <p
-      className="zt-mono-sm"
       style={{
         margin: 0, color: 'var(--text-faint)', paddingTop: 18,
+        font: 'var(--type-body-sm)',
         boxShadow: 'inset 0 1px 0 var(--border-hairline)', lineHeight: 1.7,
       }}
     >
-      {scope ? `${scope} · ` : ''}
-      {exact(records)} synthetic payloads · {compact(spans_scanned)} spans ·{' '}
-      {wall_seconds.toFixed(0)}s · engines {engines} · seed {corpus_seed} ·{' '}
-      <Link href="/method" style={{ color: 'var(--text-quiet)' }}>how this was measured</Link>
+      {/* Span counts, engine names and the corpus seed used to sit here. They are
+          reproduction details, and they belong on the page that explains how to
+          reproduce it rather than at the foot of every screen. */}
+      Measured on {exact(records)} test requests, not estimated.{' '}
+      <Link href="/method" style={{ color: 'var(--text-quiet)' }}>How this was measured</Link>
     </p>
   );
 }

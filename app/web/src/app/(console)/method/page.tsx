@@ -1,59 +1,73 @@
 import { Card } from '@/ds';
-import { Caveat, Headline, Pair, Panel, Figure } from '@/components/console/Frame';
-import { BarSeries } from '@/components/console/Draw';
+import { Caveat, Figure, Headline, Pair, Panel } from '@/components/console/Frame';
 import { run } from '@/lib/benchmark';
 import { compact, exact, micros, percent } from '@/lib/format';
+import { howFound, howFoundLong } from '@/lib/words';
 
-export const metadata = { title: 'Method · ZeroTrace' };
+export const metadata = { title: 'How it works · ZeroTrace' };
 
 /**
  * How the numbers were produced.
  *
- * A Read surface inside an Operate console: measure is narrower, prose carries the
- * page, and there is no table anyone has to scan. It exists because every other
- * screen links here from its provenance line, and a claim whose method is one
- * click away is a different kind of claim from one whose method is nowhere.
+ * This is the one screen allowed to be technical, and it is deliberately ordered so
+ * that a reader can stop whenever they have had enough: the idea first, then the
+ * test, then the definitions, then the file names. Someone who only reads the first
+ * card still leaves knowing what the dashboard is measuring.
+ *
+ * A Read surface inside an Operate console - narrower measure, prose carrying the
+ * page, nothing anyone has to scan.
  */
 export default function MethodPage() {
-  const { meta, latency, latencyAsync, integrity, outcomes } = run;
+  const { meta, latency, latencyAsync, integrity } = run;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 32, maxWidth: 860 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 32, maxWidth: 820 }}>
       <Headline
-        sub="Everything on the six screens behind this one came from a single run against the
-             product's own code paths. This page says what ran, what was substituted, and
-             what the result does not prove."
+        sub="Not a simulation of the product and not a model of it. The test feeds made-up
+             traffic through the same code that would handle a real request, and counts
+             what comes out."
       >
-        <Figure>{exact(meta.records)}</Figure> synthetic payloads through the real pipeline.
+        We hid known secrets in{' '}
+        <Figure>{exact(meta.records)}</Figure> fake requests and counted how many it caught.
       </Headline>
 
-      <Card pad={24}>
+      {/* -- the idea, for anyone who reads only one card ------------------------ */}
+      <Card pad={26}>
+        <Panel title="The idea">
+          <p style={{ margin: 0, font: 'var(--type-body)', color: 'var(--text-body)', maxWidth: '68ch' }}>
+            You cannot measure whether a guardrail works by watching real traffic, because
+            nobody knows what was in it. So the test writes the traffic itself: five million
+            requests where we already know the answer &ndash; this one has an AWS key in it,
+            this one has an Aadhaar number, this one has nothing at all and must stay quiet.
+          </p>
+          <p style={{ margin: '18px 0 0', font: 'var(--type-body)', color: 'var(--text-body)', maxWidth: '68ch' }}>
+            Then every number on this dashboard is a count rather than an estimate. When a
+            screen says it caught 96% of keys, that is 96% of a number we planted on purpose.
+          </p>
+        </Panel>
+      </Card>
+
+      {/* -- the three ways it looks --------------------------------------------- */}
+      <Card pad={26}>
         <Panel
-          title="What ran"
-          note="The benchmark imports the gateway. It does not reimplement it, and every object below is the one a live request goes through."
+          title="Three ways of looking"
+          note="Most tools only do the first. The third is the one that finds records nobody labelled."
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-            {[
-              ['gateway/spans/jsonspan.py', 'extract_spans', 'Byte-accurate JSON leaf extraction, including $json recursion into stringified tool results.'],
-              ['gateway/base/checker.py', 'Checker', 'Three-tier scan, span cache, 50 ms deadline, green/amber/red verdict.'],
-              ['gateway/detect/', 'five scanners', 'S0 credentials, obfuscation rescan, S1 key-name context, S2 co-occurrence, encoded rescan.'],
-              ['gateway/base/policy.py', 'StubPolicyClient', 'Family defaults, the action lattice, read-only origin rules, inbound clearance.'],
-              ['gateway/redact.py', 'plan → apply → verify_dispatch', 'Redaction planned, spliced into the original bytes, then proven absent in the bytes about to leave.'],
-            ].map(([file, symbol, what]) => (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {['S0', 'S1', 'S2'].map((stage) => (
               <div
-                key={file}
+                key={stage}
                 style={{
-                  display: 'grid', gridTemplateColumns: 'minmax(0,220px) minmax(0,1fr)',
-                  gap: 20, padding: '14px 0',
+                  display: 'grid', gridTemplateColumns: 'minmax(0,200px) minmax(0,1fr)',
+                  gap: 22, padding: '16px 0',
                   boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
                 }}
               >
-                <div style={{ minWidth: 0 }}>
-                  <div className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{symbol}</div>
-                  <div className="zt-mono-sm" style={{ color: 'var(--text-faint)', marginTop: 3 }}>{file}</div>
-                </div>
+                <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-body)' }}>
+                  {howFound(stage)}
+                </span>
                 <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
-                  {what}
+                  {howFoundLong(stage)}
                 </p>
               </div>
             ))}
@@ -61,69 +75,24 @@ export default function MethodPage() {
         </Panel>
       </Card>
 
-      <Card pad={24}>
-        <Panel
-          title="The one substitution"
-          note="Stated rather than buried, because it is the only place the benchmark and the product differ."
-        >
-          <p style={{ margin: '0 0 18px', font: 'var(--type-body)', color: 'var(--text-body)', maxWidth: '70ch' }}>
-            <code className="zt-mono-sm">Checker.check()</code> dispatches the scan to a worker
-            thread so a watchdog can bound it - CPU-bound Python cannot be interrupted from
-            outside. That is a latency-safety mechanism, not a detection mechanism, and paying
-            a thread hop five million times would have measured the executor. So the sweep
-            called <code className="zt-mono-sm">_scan_all</code> and{' '}
-            <code className="zt-mono-sm">_verdict</code> directly, and a separate pass of{' '}
-            {exact(latencyAsync.records)} payloads went through the full{' '}
-            <code className="zt-mono-sm">check()</code> to measure what was skipped.
-          </p>
-          <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-            <Pair value={micros(latency.p50)} of="p50, scan only" />
-            <Pair value={micros(latencyAsync.p50_us)} of="p50, full check" />
-            <Pair value={micros(latencyAsync.p95_us)} of="p95, full check" />
-          </div>
-          <p style={{ margin: '18px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '70ch' }}>
-            The two agree, so the console quotes the full-check figures everywhere a latency
-            number appears.
-          </p>
-        </Panel>
-      </Card>
-
-      <Card pad={24}>
-        <Panel
-          title="The corpus"
-          note="Generated, not stored. Shard k seeds from the run seed and its own index, so any record can be regenerated from its index alone and the whole corpus is reproducible without a 3.5 GB artifact."
-        >
-          <BarSeries
-            rows={Object.entries(run.scenarios)
-              .sort((a, b) => b[1] - a[1])
-              .map(([name, n]) => ({ label: name.replace(/_/g, ' '), value: n, mono: true }))}
-            format={compact}
-            limit={12}
-          />
-          <p style={{ margin: '20px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '70ch' }}>
-            Thirty-eight families across five groups: ordinary work, things shaped like
-            secrets that are not, real leaks, evasion variants of those leaks, and inbound
-            responses. The families generated with nothing in them are larger than the
-            families carrying credentials, because a false positive is what gets a security
-            control switched off and needs the bigger sample.
-          </p>
-        </Panel>
-      </Card>
-
-      <Card pad={24}>
-        <Panel title="How each score is defined">
+      {/* -- what the words on the other screens mean ---------------------------- */}
+      <Card pad={26}>
+        <Panel title="What the numbers mean">
           {[
-            ['Recall', 'Planted a known number of times, then counted. A class present in the payload and absent from the findings is a miss - there is no partial credit and no judgement call.'],
-            ['Precision', `Measured only on the ${exact(integrity.quiet_records)} payloads generated with no leak in them. An enforceable finding there has no defence available, which is the only place a false positive is unambiguous.`],
-            ['False-positive rate', `Payloads in that same set that raised any enforceable finding, over the set. ${percent(integrity.false_positive_rate, 2)}.`],
-            ['Detection under evasion', 'The same credential values, rewritten. Recall is computed per technique rather than pooled, because pooling hides which technique works.'],
-            ['Runtime', 'One class per probe, scanned in isolation and averaged over 3,000 repetitions after a warm pass. Composed scanners report nothing rather than a misleading share.'],
+            ['Share it found',
+              'We planted a known number and counted how many came back. A value that was in the request and not in the results is a miss - no partial credit, no judgement call.'],
+            ['False alarms',
+              `Counted only on the ${exact(integrity.quiet_records)} requests written with nothing sensitive in them. An alert there has no possible defence, which makes it the only place a false alarm is unarguable. The rate was ${percent(integrity.false_positive_rate, 1)}.`],
+            ['Ways around it',
+              'The same keys retyped the way people actually paste them - with spaces, split over lines, encoded. Counted per trick rather than lumped together, because lumping hides which trick works.'],
+            ['Time added',
+              `Measured end to end, including the safety timer the product runs the check inside. Typically ${micros(latencyAsync.p50_us)}; the slowest one in twenty took ${micros(latencyAsync.p95_us)}.`],
           ].map(([term, def]) => (
             <div
               key={term}
               style={{
                 display: 'grid', gridTemplateColumns: 'minmax(0,180px) minmax(0,1fr)',
-                gap: 20, padding: '14px 0',
+                gap: 22, padding: '15px 0',
                 boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
               }}
             >
@@ -138,21 +107,66 @@ export default function MethodPage() {
         <strong style={{ fontWeight: 'var(--w-medium)', color: 'var(--text-body)' }}>
           What this does not prove.
         </strong>{' '}
-        The corpus is synthetic, so recall is recall against shapes someone chose - a
-        credential format nobody thought of is not in it and would not show as a miss. The
-        mix is an assumption about what enterprise AI traffic looks like, not a measurement
-        of it. Throughput was measured on one machine with twenty workers and says nothing
-        about behaviour under concurrent load. And no part of this run exercised the control
-        plane, the ledger chain, streaming responses, or the inbound clearance path against
-        a real directory.
+        The traffic is made up, so &ldquo;caught all of them&rdquo; means all of the shapes
+        somebody thought to write down &ndash; a key format nobody anticipated would not
+        show up as a miss. The mix of clean and risky requests is an assumption about what
+        real AI traffic looks like, not a measurement of it. Speed was measured on one
+        machine with nothing else competing for it. And none of this exercised the sign-in
+        system, the audit log, or streamed replies.
       </Caveat>
 
-      <p className="zt-mono-sm" style={{ margin: 0, color: 'var(--text-faint)', lineHeight: 1.8 }}>
-        Reproduce: <span style={{ color: 'var(--text-quiet)' }}>python test_dashboard/benchmark.py --records {meta.records} --workers {meta.workers}</span>
-        <br />
-        Run {meta.generated_at} · engines {meta.engines} · seed {meta.corpus_seed} ·{' '}
-        {compact(meta.bytes_scanned)} bytes · {outcomes.verify_failures} verification failures
-      </p>
+      {/* -- the engineering detail, last, for the one reader who wants it -------- */}
+      <Card pad={26} tone="sunken">
+        <Panel
+          title="For engineers"
+          note="The test imports the product rather than reimplementing it. Every stage below is the one a live request goes through."
+        >
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {[
+              ['gateway/spans/jsonspan.py', 'Pulls every piece of text out of the request, including text hidden inside text.'],
+              ['gateway/base/checker.py', 'Runs the three passes, reuses what it has seen before, and stops if it takes too long.'],
+              ['gateway/detect/', 'The five scanners: shapes, obfuscated shapes, field names, context, and encoded values.'],
+              ['gateway/base/policy.py', 'Turns findings into a decision, and decides what may not enforce.'],
+              ['gateway/redact.py', 'Rewrites the request, then re-reads the bytes about to be sent to prove the original is gone.'],
+            ].map(([file, what]) => (
+              <div
+                key={file}
+                style={{
+                  display: 'grid', gridTemplateColumns: 'minmax(0,230px) minmax(0,1fr)',
+                  gap: 22, padding: '13px 0',
+                  boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
+                }}
+              >
+                <span className="zt-mono-sm" style={{ color: 'var(--text-body)' }}>{file}</span>
+                <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
+                  {what}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <p style={{ margin: '22px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-quiet)', maxWidth: '70ch' }}>
+            One substitution, stated rather than buried. The scan normally runs on a worker
+            thread so a watchdog can bound it; paying that hop five million times would have
+            measured the thread pool, so the sweep called the scan directly and a separate
+            pass of {exact(latencyAsync.records)} requests measured the full path. The two
+            agree &ndash; {micros(latency.p50)} against {micros(latencyAsync.p50_us)} &ndash;
+            so the dashboard quotes the full-path figure everywhere.
+          </p>
+
+          <div style={{ display: 'flex', gap: 30, flexWrap: 'wrap', marginTop: 24 }}>
+            <Pair value={compact(meta.spans_scanned)} of="pieces of text scanned" />
+            <Pair value={`${meta.wall_seconds.toFixed(0)} s`} of="to run" />
+            <Pair value={exact(Math.round(meta.records_per_second))} of="requests a second" />
+          </div>
+
+          <p className="zt-mono-sm" style={{ margin: '24px 0 0', color: 'var(--text-faint)', lineHeight: 1.8 }}>
+            python test_dashboard/benchmark.py --records {meta.records} --workers {meta.workers}
+            <br />
+            {meta.generated_at} · engines {meta.engines} · seed {meta.corpus_seed}
+          </p>
+        </Panel>
+      </Card>
     </div>
   );
 }

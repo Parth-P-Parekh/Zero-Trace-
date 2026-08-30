@@ -5,9 +5,10 @@
  * dark 232px rail, sticky; 56px topbar at 82% paper with the panel blur and an
  * inset bottom hairline.
  *
- * The one extension: the rail is grouped. Seven destinations is past the point
- * where a flat list scans, so they sit under three labelled groups following the
- * kit's own "Environments" precedent - Traffic, Control, Assurance.
+ * The one extension: the rail is grouped, and the groups are named as questions
+ * rather than as subsystems. "Control" and "Assurance" are what the parts are
+ * called internally; "How it decides" and "Proof" are what someone opening the
+ * console is trying to find out.
  */
 import { useState } from 'react';
 import Link from 'next/link';
@@ -29,49 +30,51 @@ export interface ConsoleShellProps {
 }
 
 const ROUTE_TITLES: Array<[string, string]> = [
-  ['/traffic', 'Traffic'],
-  ['/findings', 'Findings'],
-  ['/detectors', 'Detectors'],
-  ['/policy', 'Policy'],
+  ['/traffic', 'Requests'],
+  ['/findings', 'What we found'],
+  ['/detectors', 'Detection'],
+  ['/policy', 'Rules'],
   ['/coverage', 'Coverage'],
   ['/environments', 'Environments'],
-  ['/licence', 'Metering'],
-  ['/method', 'Method'],
+  ['/licence', 'Usage'],
+  ['/method', 'How it works'],
 ];
 
 function titleFor(pathname: string): string {
-  if (/^\/traffic\/[^/]+$/.test(pathname)) return 'Traffic · Inspector';
+  if (/^\/traffic\/[^/]+$/.test(pathname)) return 'Requests · One request';
   const hit = ROUTE_TITLES.find(([base]) => pathname.startsWith(base));
   return hit ? hit[1] : 'Console';
 }
 
 /**
  * Eight destinations under three headings, ordered by the question each answers:
- * what moved, whether the machinery works, and whether any of it can be proved.
- * Findings is its own route rather than a tab on Traffic - a payload is blocked
- * once but can carry six findings, and the two counts belong on separate screens.
+ * what happened, how it decided, and whether any of it can be proved.
+ *
+ * "What we found" is its own route rather than a tab on Requests, because one
+ * request can carry six findings - they are different counts and belong on
+ * different screens.
  */
 const GROUPS = (counts: Record<string, number | string>): NavGroup[] => [
   {
-    label: 'Traffic',
+    label: 'What happened',
     items: [
-      { href: '/traffic', icon: 'scan-line', label: 'Traffic', count: counts.traffic },
-      { href: '/findings', icon: 'eye-off', label: 'Findings', count: counts.findings },
+      { href: '/traffic', icon: 'scan-line', label: 'Requests', count: counts.traffic },
+      { href: '/findings', icon: 'eye-off', label: 'What we found', count: counts.findings },
     ],
   },
   {
-    label: 'Control',
+    label: 'How it decides',
     items: [
-      { href: '/detectors', icon: 'activity', label: 'Detectors', count: counts.detectors },
-      { href: '/policy', icon: 'list-filter', label: 'Policy', count: counts.policy },
+      { href: '/detectors', icon: 'activity', label: 'Detection', count: counts.detectors },
+      { href: '/policy', icon: 'list-filter', label: 'Rules' },
     ],
   },
   {
-    label: 'Assurance',
+    label: 'Proof',
     items: [
       { href: '/coverage', icon: 'shield', label: 'Coverage', count: counts.coverage },
-      { href: '/licence', icon: 'file-text', label: 'Metering' },
-      { href: '/method', icon: 'book-open', label: 'Method' },
+      { href: '/licence', icon: 'file-text', label: 'Usage' },
+      { href: '/method', icon: 'book-open', label: 'How it works' },
     ],
   },
 ];
@@ -140,16 +143,18 @@ export function ConsoleShell({
             Environments
           </div>
           <div className="zt-rail-items" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {(['production', 'staging'] as const).map((env) => (
-              <Link key={env} href={`/environments#${env}`} style={{ textDecoration: 'none' }}>
-                <RailItem
-                  icon={env === 'production' ? 'shield' : 'activity'}
-                  label={env}
-                  count={env === 'production' ? 'enforce' : 'shadow'}
-                  active={pathname.startsWith('/environments')}
-                />
-              </Link>
-            ))}
+            {([['production', 'Live', 'acting'], ['staging', 'Test', 'watching']] as const).map(
+              ([slug, label, state]) => (
+                <Link key={slug} href={`/environments#${slug}`} style={{ textDecoration: 'none' }}>
+                  <RailItem
+                    icon={slug === 'production' ? 'shield' : 'activity'}
+                    label={label}
+                    count={state}
+                    active={pathname.startsWith('/environments')}
+                  />
+                </Link>
+              ),
+            )}
           </div>
         </div>
 
@@ -164,7 +169,7 @@ export function ConsoleShell({
         >
           <StatusDot state="clean" size={6} live />
           <span className="zt-mono-sm" style={{ color: 'var(--text-on-dark-quiet)' }}>
-            gateway live · 4 ms
+            protection on
           </span>
         </div>
       </aside>
@@ -183,7 +188,7 @@ export function ConsoleShell({
           <span style={{ font: 'var(--type-body-sm)' }}>{heading}</span>
           <span style={{ flex: 1 }} />
           {actions}
-          <Badge status="clean" tone="clean">Enforcing</Badge>
+          <Badge status="clean" tone="clean">Protecting</Badge>
           <Tooltip label="Documentation">
             <IconButton name="book-open" label="Documentation" />
           </Tooltip>
