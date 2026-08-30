@@ -155,6 +155,11 @@ class IntelPlane:
         its failure mode is "no new detectors get proposed", which is a degradation of an
         improvement loop rather than an outage.
         """
+        from .escalation import enabled
+
+        if not enabled():
+            log.info("Loop 2 is switched off; no worker started")
+            return
         if self._task is not None and not self._task.done():
             return
         self._pack = pack

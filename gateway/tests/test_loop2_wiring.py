@@ -31,6 +31,18 @@ from gateway.intel.escalation import (
     tokens_in,
 )
 
+@pytest.fixture(autouse=True)
+def _loop2_on(monkeypatch):
+    """These tests are about the loop, so the loop has to be on for them.
+
+    Without this they read whatever the developer's machine happens to have: the moment
+    `zerotrace loop2 off` was run here, five of them failed. A test that depends on
+    ambient state in the user's home directory is a test that passes or fails for
+    reasons unrelated to the code, and the off-switch tests below set their own.
+    """
+    monkeypatch.setenv("ZT_LOOP2", "on")
+
+
 TENANT_SALT = b"loop2-test-salt"
 
 #: A reference number in a shape no detector in the pack knows. This is the case the
@@ -266,3 +278,72 @@ def test_the_gateway_starts_a_worker_and_a_real_adjudicator(monkeypatch):
                               "session_id": "wiring"})
         assert r.status_code == 200
         assert len(app.state.intel.queue) or app.state.intel.proposals
+
+
+# ------------------------------------------------------------- the off switch --
+
+def _fresh_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZT_HOME", str(tmp_path))
+    monkeypatch.delenv("ZT_LOOP2", raising=False)
+    return tmp_path
+
+
+def test_loop2_is_on_by_default(tmp_path, monkeypatch):
+    """An improvement loop that must be discovered and enabled never runs anywhere,
+    which is most of how this one spent its life already."""
+    from gateway.intel.escalation import enabled
+
+    _fresh_home(tmp_path, monkeypatch)
+    assert enabled()
+
+
+def test_the_marker_file_switches_it_off(tmp_path, monkeypatch):
+    """A file rather than an environment variable, because the hook is a fresh process
+    on every prompt and would not inherit a variable exported in one shell."""
+    from gateway.intel.escalation import enabled
+
+    home = _fresh_home(tmp_path, monkeypatch)
+    (home / "loop2-off").touch()
+    assert not enabled()
+
+
+def test_the_env_var_wins_over_the_marker(tmp_path, monkeypatch):
+    """So a single run or a CI job can override the machine's setting either way."""
+    from gateway.intel.escalation import enabled
+
+    home = _fresh_home(tmp_path, monkeypatch)
+    (home / "loop2-off").touch()
+    monkeypatch.setenv("ZT_LOOP2", "on")
+    assert enabled()
+    monkeypatch.setenv("ZT_LOOP2", "off")
+    (home / "loop2-off").unlink()
+    assert not enabled()
+
+
+def test_nothing_escalates_or_drains_when_off(tmp_path, monkeypatch):
+    """Both halves: no enqueue, and no worker to drain one."""
+    _fresh_home(tmp_path, monkeypatch)
+    monkeypatch.setenv("ZT_LOOP2", "off")
+
+    intel = IntelPlane(adjudicator=StubAdjudicator())
+    n = escalate(intel, text_tree(f"our internal ref is {REF} here"), _Check(),
+                 TENANT_SALT)
+    assert n == 0 and len(intel.queue) == 0
+    intel.start()
+    assert intel._task is None, "a worker started with the loop switched off"
+
+
+def test_detection_still_works_with_the_loop_off(tmp_path, monkeypatch):
+    """The point of the switch: it costs future detectors, never a live decision.
+
+    Loop 2 only ever proposed advisory rules capped below the enforcement threshold, so
+    turning it off cannot change what is blocked today. If this ever fails, the loop has
+    acquired authority it was never supposed to have.
+    """
+    _fresh_home(tmp_path, monkeypatch)
+    monkeypatch.setenv("ZT_LOOP2", "off")
+
+    from gateway.part_a.reading import _value_classes_local
+
+    key = "sk-" + "ant-" + "api03-" + "x7Kq9mZp2Wv4Bn8Rt6" + "Yu3Ia5Oe1Ld0Sf3Gh7Jk2Mn5Pq8Rs"
+    assert "ANTHROPIC_KEY" in _value_classes_local("my key is " + key)

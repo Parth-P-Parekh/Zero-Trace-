@@ -30,8 +30,10 @@ escalation costs one learning opportunity, while a flood costs the queue its mea
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from .features import EscalationFeatures, charset_class, features_of
@@ -57,6 +59,26 @@ MAX_PER_REQUEST = 8
 #: asked to classify -- that is the `PERSON` problem and it needs a model on the *record*,
 #: not a synthesised regex on the value.
 IDENTIFIER_CHARSETS = frozenset({"digits", "hex", "base64ish", "ascii"})
+
+
+def enabled() -> bool:
+    """Is Loop 2 switched on for this process?
+
+    Two ways to say no, because the two callers are different. `ZT_LOOP2=off` covers a
+    single run or a CI job; a `loop2-off` marker under `ZT_HOME` covers the machine, and
+    is what `zerotrace loop2 off` writes -- the hook is a fresh process on every prompt,
+    so an environment variable exported in one shell would not reach it.
+
+    Default is on. An improvement loop that has to be discovered and enabled is one that
+    never runs anywhere, which is most of how this one spent its life already.
+    """
+    flag = os.environ.get("ZT_LOOP2", "").strip().lower()
+    if flag in ("0", "off", "false", "no"):
+        return False
+    if flag in ("1", "on", "true", "yes"):
+        return True
+    home = Path(os.environ.get("ZT_HOME") or (Path.home() / ".zerotrace"))
+    return not (home / "loop2-off").exists()
 
 
 def is_identifier_shaped(text: str) -> bool:
@@ -147,6 +169,8 @@ def escalate(intel: Any, tree: Any, check: Any, tenant_key: bytes,
     an improvement loop: losing an escalation costs a future detector, never this
     response.
     """
+    if not enabled():
+        return 0
     count = 0
     try:
         for span, matching in spans_to_escalate(tree, check):

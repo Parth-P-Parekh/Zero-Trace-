@@ -189,13 +189,18 @@ def test_the_gate_is_absent_unless_it_is_switched_on():
 
 # --------------------------------------------------- one conversion, one escalation --
 
-def test_the_high_entropy_signal_reaches_the_intel_plane_over_http(client):
+def test_the_high_entropy_signal_reaches_the_intel_plane_over_http(client, monkeypatch):
     """Withheld from policy, not lost: the blind agent still gets the shape.
 
     This is what guards the prompt on its way to the model. Loop 2 sees a shape, a length,
     a charset and an entropy score, proposes checks for *later* calls, and never gates
     this one.
+
+    `ZT_LOOP2=on` because the loop has a machine-level off switch now, and a test about
+    the loop must not read whatever the developer's home directory happens to say -- this
+    failed the moment `zerotrace loop2 off` was run here.
     """
+    monkeypatch.setenv("ZT_LOOP2", "on")
     app = client.app
     app.state.intel.queue.drain()          # ignore anything from earlier requests
 

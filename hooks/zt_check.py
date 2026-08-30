@@ -203,13 +203,17 @@ def check_service(text: str, session_id: str, cwd: str | None) -> dict:
 # ---------------------------------------------------------------------- main --
 
 def main() -> None:
-    try:
-        event = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        # Malformed hook input is our bug, not the user's. Never block on it.
-        print("zerotrace: could not parse hook input; allowing", file=sys.stderr)
-        sys.exit(0)
-    run(event)
+    """Read the event, then decide.
+
+    Reading is its own problem on Windows -- PowerShell re-encodes a pipeline through the
+    console encoding, so the JSON can arrive as UTF-16 with a BOM -- and it used to fail
+    *open*: unparseable input exited 0, which is allow. See hooks/hookio.py.
+    """
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from hooks.hookio import read_event
+
+    run(read_event(deny))
 
 
 def run(event: dict) -> None:

@@ -65,7 +65,13 @@ def _install(args: argparse.Namespace) -> int:
             print(f"  {host:8} hooks    {', '.join(events) or 'nothing'}")
             print(f"  {'':17} {paths[host]}")
 
-    if not args.claude_only:
+    # Codex is opt-in. It is the only part of activation that writes outside our own
+    # config -- a function into the user's shell profile -- and it is the less proven
+    # path of the two. Installing it by default meant `zerotrace on` touched a file
+    # nobody asked about and then spent three lines of output explaining Codex to people
+    # who only use Claude Code. Same reasoning as `--vscode`.
+    want_codex = args.codex or args.codex_only
+    if want_codex and not args.claude_only:
         changed = shim.apply(remove=False)
         if changed:
             print("  codex    command   `codex` now starts a mediated session")
@@ -74,6 +80,8 @@ def _install(args: argparse.Namespace) -> int:
             print("  " + " " * 17 + "open a new shell for this to take effect")
         else:
             print("  codex    command   no shell profile found; run `zerotrace codex`")
+    elif not args.claude_only:
+        print("  codex    command   not covered (opt in with `zerotrace on --codex`)")
 
     if args.as_actor:
         _activate_role(args.as_actor, args.tenant)
@@ -84,14 +92,16 @@ def _install(args: argparse.Namespace) -> int:
         print("  vscode   panel     not covered (opt in with `zerotrace on --vscode`)")
 
     print()
-    print("  Claude Code: restart running sessions -- they keep the config they started")
-    print("  with. Codex: `codex` in a NEW shell is mediated; the VS Code side panel is")
-    print("  its own client and is not covered. See docs/15_APPSERVER_ATTACH.md")
-    if not args.codex_hooks:
+    print("  Restart any running Claude Code session -- a session keeps the config it")
+    print("  started with, so editing this file does not reach one already open.")
+    if want_codex:
         print()
-        print("  Codex hooks were not written: Codex silently declines hooks it has not")
-        print("  had a human review, so they would look active without enforcing.")
-        print("  `--codex-hooks` writes them anyway if you have trusted them.")
+        print("  Codex: `codex` in a NEW shell is mediated. The VS Code side panel is its")
+        print("  own client and is not covered. See docs/15_APPSERVER_ATTACH.md")
+        if not args.codex_hooks:
+            print("  Codex hooks were not written: Codex silently declines hooks it has")
+            print("  not had a human review, so they would look active without")
+            print("  enforcing. `--codex-hooks` writes them anyway if you trust them.")
     return 0
 
 
@@ -321,6 +331,42 @@ def _status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _loop2(args: argparse.Namespace) -> int:
+    """Turn the learning loop on or off for this machine.
+
+    A marker file rather than an environment variable, because the hook is a fresh
+    process on every prompt and would not inherit a variable exported in one shell.
+    Detection, the policy layer and the ledger are untouched either way -- Loop 2 only
+    ever proposed advisory rules, so switching it off costs future detectors and nothing
+    a request depends on.
+    """
+    from pathlib import Path as _Path
+
+    home = _Path(os.environ.get("ZT_HOME") or (_Path.home() / ".zerotrace"))
+    marker = home / "loop2-off"
+
+    if args.state == "on":
+        marker.unlink(missing_ok=True)
+        print("Loop 2 on. Escalation resumes on the next prompt.")
+    elif args.state == "off":
+        home.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        print("Loop 2 off. Nothing is escalated and no worker runs.")
+        print("Detection, policy and the ledger are unaffected.")
+        print("A running daemon keeps its own copy: `zerotrace reset` or wait for it")
+        print("to idle out if you want it to take effect immediately.")
+    else:
+        from gateway.intel.escalation import enabled
+
+        print(f"Loop 2 is {'on' if enabled() else 'off'}")
+        if marker.exists():
+            print(f"  switched off by {marker}")
+        env = os.environ.get("ZT_LOOP2", "")
+        if env:
+            print(f"  ZT_LOOP2={env} in this environment")
+    return 0
+
+
 def _print_intel() -> None:
     """Loop 2, if a daemon is up to answer for it.
 
@@ -332,6 +378,12 @@ def _print_intel() -> None:
 
     print()
     print("  loop 2 (learns from spans no detector claimed)")
+    from gateway.intel.escalation import enabled as _loop2_on
+
+    if not _loop2_on():
+        print("    off           `zerotrace loop2 on` to re-enable")
+        print("                  detection, policy and the ledger are unaffected")
+        return
     info = daemon_client.intel()
     if info is None:
         print("    not running   no warm daemon. Loop 2 lives in the daemon, which")
@@ -641,6 +693,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="this directory only (default: whole machine)")
         p.add_argument("--claude-only", action="store_true")
         p.add_argument("--codex-only", action="store_true")
+        p.add_argument("--codex", action="store_true",
+                       help="also mediate the `codex` command (writes a shell profile)")
         p.add_argument("--as", dest="as_actor", metavar="ACTOR",
                        help="act as this person; seeds the local store if empty")
         p.add_argument("--tenant", help="organisation for --as")
@@ -672,6 +726,11 @@ def main(argv: list[str] | None = None) -> int:
     rl.set_defaults(fn=_roles)
     sub.add_parser("whoami", help="who you are acting as").set_defaults(fn=_whoami)
     sub.add_parser("logout", help="stop acting as anyone").set_defaults(fn=_logout)
+
+    loop2 = sub.add_parser("loop2", help="turn the learning loop on or off")
+    loop2.add_argument("state", choices=("on", "off", "status"), nargs="?",
+                       default="status")
+    loop2.set_defaults(fn=_loop2)
 
     lg = sub.add_parser("login", help="act as one of the seeded people")
     lg.add_argument("actor")

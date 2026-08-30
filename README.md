@@ -55,8 +55,8 @@ Three deployment surfaces, one decision engine:
 
 | surface | how | covers |
 |---|---|---|
-| **Claude Code** | `UserPromptSubmit` + `PreToolUse` hooks | typed prompts, tool arguments, file reads |
-| **Codex** | app-server mediation (`zerotrace codex`) | prompts and tool calls — Codex declines hooks no human has reviewed, so we do not pretend otherwise (`docs/14`) |
+| **Claude Code** | `UserPromptSubmit` + `PreToolUse` hooks — installed by `zerotrace on` | typed prompts, tool arguments, file reads |
+| **Codex** | app-server mediation, opt-in via `zerotrace on --codex` | prompts and tool calls — Codex declines hooks no human has reviewed, so we do not pretend otherwise (`docs/14`) |
 | **Browser / API** | MV3 extension + FastAPI gateway | claude.ai, chatgpt.com, and any client pointed at the gateway |
 
 ```bash
@@ -97,10 +97,11 @@ place, and nothing is enforced — the worst possible state for a security tool.
 of hooks, ZeroTrace goes *in front of* the `codex` command and speaks its app-server
 protocol (`docs/14`, `docs/15`).
 
-**1. Install.** The same command covers it:
+**1. Install.** Codex is **opt-in**, because it is the only part of activation that
+writes outside ZeroTrace's own config — a function into your shell profile:
 
 ```bash
-zerotrace on
+zerotrace on --codex
 ```
 
 This writes a shell alias into your profile, between markers so `zerotrace off` removes

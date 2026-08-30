@@ -142,11 +142,31 @@ def test_hook_fails_closed_when_checker_is_down():
     assert "ZT_FAIL=open" in reason      # and the escape hatch
 
 
-def test_hook_never_blocks_on_its_own_bug():
-    """Malformed hook input is our problem, not the user's."""
+def test_hook_refuses_input_it_cannot_read():
+    """This asserted the opposite, and the opposite was how the product switched off.
+
+    Malformed input used to exit 0 -- allow -- on the reasoning that our bug should not
+    be the user's problem. Then PowerShell turned out to re-encode piped stdin as UTF-16,
+    every hook event on Windows became unreadable, and that reasoning waved through every
+    prompt and every tool call while `zerotrace status` reported both hooks healthy.
+
+    "I could not read the question" is not "the answer is yes". `ZT_FAIL=open` is the
+    escape hatch, tested below, and it is the same one every other failure path here has.
+    """
     r = subprocess.run(
         [sys.executable, str(HOOK)], input="{not json", text=True,
         capture_output=True, timeout=30,
+    )
+    assert r.returncode == 2
+    assert "ZT_FAIL=open" in r.stdout + r.stderr
+
+
+def test_zt_fail_open_restores_the_old_behaviour():
+    import os as _os
+
+    r = subprocess.run(
+        [sys.executable, str(HOOK)], input="{not json", text=True,
+        capture_output=True, timeout=30, env={**_os.environ, "ZT_FAIL": "open"},
     )
     assert r.returncode == 0
 
