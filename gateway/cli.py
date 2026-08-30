@@ -275,6 +275,21 @@ def _status(args: argparse.Namespace) -> int:
         for scope, path in stale:
             print(f"      {scope:8} {path}")
 
+    print()
+    print("  control plane")
+    from gateway.part_a.control import source_label
+    from gateway.part_a.session import current as _current
+
+    print(f"    roles    {source_label()}")
+    _here = _current()
+    if _here is None:
+        print("    acting   nobody -- detection runs, policy does not")
+        print("             `zerotrace on --as <name>` to pick a role")
+    else:
+        print(f"    acting   {_here.actor} in {_here.tenant}")
+        print("             a role is not authentication: anyone who can write the")
+        print("             session file can claim any actor")
+
     exe = _console_script()
     print(f"\n  entry point  {exe or 'not installed (hooks point at this checkout)'}")
     if not exe:
@@ -355,32 +370,36 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def _activate_role(actor: str, tenant: str | None) -> None:
-    """Seed the local store if it is empty, then act as `actor`.
+    """Initialise this person's roles locally, then act as them.
 
-    One flag rather than three commands, because "who am I" is part of attaching, not a
-    separate ceremony. Seeding only happens when the store has no such tenant -- running
-    `zerotrace on --as` twice must not overwrite an operator's real actors with the demo
-    ones.
+    One flag rather than three commands, because "who am I" is part of attaching.
 
-    **This is a local store, and it is a stand-in.** In a deployment the actors and their
-    groups come from the organisation's own directory; Part A resolves identity through
-    mTLS/OIDC. What this gives you is the same decision path with a store you can seed on
-    a laptop.
+    **The control DB is the organisation's and it is hosted.** Set `ZT_CONTROL_URL` and
+    this pulls the person's role and groups from it once, at attach, and caches them
+    locally -- the hook then decides in-process, because a network round trip in front of
+    every prompt would put someone's editor at the mercy of a control plane's uptime.
+
+    Without that variable the seeded example is used instead, and every surface says so.
+    A demo that looks identical to a deployment is how someone ends up believing a
+    laptop's JSON file is their organisation's access control.
     """
     import asyncio
 
+    from gateway.part_a.control import ControlUnreachable, initialise_locally
     from gateway.part_a.session import login, plane, roles
-    from gateway.part_a.wiring import DEMO_TENANT, seed_demo
+    from gateway.part_a.wiring import DEMO_TENANT
 
     p = plane()
     tenant = tenant or DEMO_TENANT
 
-    async def prepare():
-        if not await p.store.tenant_exists(tenant):
-            await seed_demo(p)
-        return {a for a, _r, _g in await roles(tenant)}
+    try:
+        source = asyncio.run(initialise_locally(p, actor, tenant))
+    except ControlUnreachable as exc:
+        # Configured and unreachable is an error, never a silent fall back to the demo.
+        print(f"  role     !! {exc}")
+        return
 
-    known = asyncio.run(prepare())
+    known = {a for a, _r, _g in asyncio.run(roles(tenant))}
     if actor not in known:
         print(f"  role     !! {actor!r} is not in {tenant}")
         print(f"           known: {', '.join(sorted(known)) or '(none)'}")
@@ -390,7 +409,8 @@ def _activate_role(actor: str, tenant: str | None) -> None:
     login(actor, tenant)
     groups = next(g for a, _r, g in asyncio.run(roles(tenant)) if a == actor)
     print(f"  role     acting as {actor} ({', '.join(groups) or 'no groups'}) in {tenant}")
-    print(f"           prompts are now decided by this actor's policy too")
+    print(f"           roles from {source}")
+    print("           prompts are now decided by this actor's policy too")
 
 
 # ----------------------------------------------------------------------- role --

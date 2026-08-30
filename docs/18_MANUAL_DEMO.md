@@ -14,9 +14,16 @@ both directions:
 citizen identifier does not reach the model. This is the half that runs in your terminal
 today, in Claude Code and Codex, with no server.
 
-**Inbound — what a user may not SEE.** A model reply or a retrieved record is masked or
-blocked according to which security group the caller belongs to. *Retrieval is not access
-control*: being able to fetch a record is not permission to read it.
+**Inbound — what a user may not SEE.** A retrieved document or model reply is withheld
+according to which security group the caller belongs to. *Retrieval is not access control*:
+a vector store returns what is semantically nearest, not what the caller is entitled to, so
+a question about "employee benefits" will happily surface a named payslip.
+
+`gateway/part_a/retrieval.py` filters documents **before** the model sees them — masking a
+reply afterwards is too late, because the content is already in the context window and the
+transcript keeps it. Withheld documents are explained rather than silently dropped: someone
+who cannot tell whether a search found nothing or found something they may not read will
+conclude the tool is broken and route around it.
 
 Every decision is written to a hash-chained ledger, so "why was this blocked, under which
 rule, by whose policy" is answerable months later — and the chain detects tampering.
@@ -41,19 +48,27 @@ implements.
 | **B — security layer stopping outbound leaks** | `gateway/detect/`, `gateway/base/` | Working for credentials and PAN; see the coverage table below |
 | **C — interception, Claude Code first, then Codex** | `hooks/`, `gateway/attach/` | Claude Code via hooks; Codex via the app-server client. VS Code side panel is opt-in |
 
-**Honest coverage — 13 of 45 vocabulary classes have a detector.**
+**Coverage — 25 of 45 vocabulary classes now produce findings.**
 
-| Family | Detected today | Not yet |
+| Family | Detected | Not yet |
 |---|---|---|
 | CREDENTIAL | `ANTHROPIC_KEY`, `OPENAI_KEY`, `AWS_ACCESS_KEY`, `GITHUB_TOKEN`, `GOOGLE_API_KEY`, `SLACK_TOKEN`, `STRIPE_KEY`, `RAZORPAY_KEY`, `JWT`, `PRIVATE_KEY`, `DB_URI` | `AWS_SECRET_KEY`, `SSH_PRIVATE_KEY`, `GENERIC_SECRET` |
-| INDIA_ID | `PAN` | `AADHAAR`, `VOTER_ID`, `GSTIN`, `IFSC`, `UPI_VPA`, `DL_NUMBER` |
+| INDIA_ID | `PAN`, `AADHAAR` (Verhoeff), `GSTIN` (mod-36), `IFSC`, `VOTER_ID`, `UPI_VPA` | `DL_NUMBER` |
+| SENSITIVE_CATEGORY (documents) | `HR_RECORD`, `CUSTOMER_DATA`, `FINANCIAL_RECORD`, `INFRA_SECRET`, `SECURITY_FINDING`, `LEGAL_PRIVILEGED`, `INCIDENT_REPORT` | `SOURCE_CODE_RESTRICTED` |
 | LOW_CONFIDENCE | `HIGH_ENTROPY_STRING` | — |
-| CONTACT, FINANCIAL, PERSON_DATA, SENSITIVE_CATEGORY | none | all |
+| CONTACT, FINANCIAL, PERSON_DATA | none | all |
 
-This matters for reading the demo. The **policy machinery** for `AADHAAR` and `HR_RECORD`
-is real and tested — but nothing currently *produces* those findings from live text, so the
-inbound section injects them. The outbound section uses only classes a detector really
-emits. Closing this is the top item in §6.
+Two different jobs. The identifier detectors **validate** — Aadhaar by Verhoeff checksum,
+GSTIN by mod-36 — because a shape pattern alone on a 12-digit run would claim every order
+number. The document classifiers are **structural and advisory**: a quorum of co-occurring
+fields (`employee_id` beside `salary` beside `pf_number`), never one keyword, because a word
+filter would mask half of ordinary engineering chat. They sit below the enforcement
+threshold on purpose — what a `CUSTOMER_DATA` finding *means* for a given role is the
+control plane's call, not the classifier's.
+
+`DL_NUMBER` is deliberately absent: driving-licence formats vary by state and several
+collapse to "two letters and some digits", which matches too much to be worth a class
+people would switch off.
 
 ---
 
@@ -75,7 +90,7 @@ pip install -e ".[engines]"
 Check it:
 
 ```bash
-pytest -q                     # expect 522 passed
+pytest -q                     # expect 604 passed
 cd Control-DB && pytest -q    # Part A's own suite
 ```
 
@@ -136,9 +151,38 @@ Exit code is 0 on PASS, 1 if the chain fails to verify or anything leaked.
 ### 5a. Outbound in your actual terminal (this is the shipped product)
 
 ```bash
-zerotrace on          # Claude Code hooks + Codex shell shim
+zerotrace on --as s.iyer    # attach, and say who you are
 zerotrace status
 ```
+
+`--as` initialises that person's roles locally and logs you in. Where they come from is
+the one thing to be clear about:
+
+| | Roles come from | Labelled as |
+|---|---|---|
+| deployment | the organisation's hosted control DB (`ZT_CONTROL_URL`) | `hosted at <url>, cached locally` |
+| laptop | the seeded government example | `local stand-in (no ZT_CONTROL_URL)` |
+
+They are cached at attach and decided in-process, because a network call in front of every
+prompt would put your editor at the mercy of the control plane's uptime — and the first
+outage would end with the tool uninstalled. A control plane that is *configured and
+unreachable* refuses to attach rather than falling back to the example: a session deciding
+by rules nobody in your organisation wrote, while looking protected, is the worst outcome
+available.
+
+**What the role changes**, on the same prompt:
+
+| | PAN in a prompt | API key |
+|---|---|---|
+| not logged in | BLOCKED | BLOCKED |
+| `s.iyer` (citizen-services) | **ALLOWED** — casework is why that clearance exists | BLOCKED |
+| `r.banerjee` (revenue) | BLOCKED | BLOCKED |
+| `vendor.dev` (contractor) | BLOCKED | BLOCKED |
+
+Standing alone, the checker detects *and* enforces. With a control plane attached,
+detection reports and **policy decides** — otherwise the rules an organisation wrote are
+decoration. One exception, enforced in code rather than left to a YAML file staying
+correct: **a credential never leaves, whoever is asking.**
 
 Restart Claude Code, open a **new** shell for Codex. Then in a session, paste a prompt
 containing an API key. Expect:
@@ -294,8 +338,9 @@ pytest -q && (cd Control-DB && pytest -q) && python scripts/demo_gov.py
 
 ## 7. Known gaps
 
-- **32 of 45 classes have no detector** (§2). The inbound half of the demo injects findings
-  for this reason.
+- **20 of 45 classes have no detector** (§2), mostly CONTACT and PERSON_DATA. The demo's
+  inbound section still injects findings for classes the document classifier does not
+  cover.
 - **Identity is header-based and spoofable.** `X-ZeroTrace-Actor` is trusted as given.
   Part A's mTLS/OIDC path exists but needs a request object the root layer does not have.
   What Part A does add today: an *unknown* actor is recorded as unregistered and decided as
