@@ -20,6 +20,8 @@ Verbs:
     check       run one string through the checker, for testing by hand
     reset       clear carried cross-call state (see below)
     hook        the entry point the harnesses call; reads a hook event on stdin
+    codex       run Codex mediated over app-server -- the supported route for Codex,
+                which needs no hooks and no hook trust
 """
 
 from __future__ import annotations
@@ -198,6 +200,20 @@ def _check(args: argparse.Namespace) -> int:
     return 1
 
 
+# ---------------------------------------------------------------------- codex --
+
+def _codex(args: argparse.Namespace) -> int:
+    """Run Codex with ZeroTrace in front of it, over the app-server protocol.
+
+    This is the supported route for Codex. It does not need `zerotrace enable`, and it is
+    unaffected by hook trust -- a client is not an extension point that has to be
+    reviewed. See docs/15_APPSERVER_ATTACH.md.
+    """
+    from gateway.attach.session import run
+
+    return run(cwd=args.cwd, codex=args.codex)
+
+
 # ----------------------------------------------------------------------- hook --
 
 def _hook(args: argparse.Namespace) -> int:
@@ -255,6 +271,11 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("check", help="run one string through the checker")
     c.add_argument("text", nargs="?", help="text to check (or pipe on stdin)")
     c.set_defaults(fn=_check)
+
+    x = sub.add_parser("codex", help="run Codex with ZeroTrace in front (no hooks)")
+    x.add_argument("--cwd", help="working directory for the session")
+    x.add_argument("--codex", help="path to the codex binary, if not on PATH")
+    x.set_defaults(fn=_codex)
 
     h = sub.add_parser("hook", help="entry point for harnesses; reads stdin")
     h.add_argument("--host", choices=["claude", "codex"])

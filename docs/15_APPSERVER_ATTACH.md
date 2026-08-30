@@ -76,7 +76,16 @@ Two guards, both fail-closed:
 - **No UI yet.** This is the mediation layer. A side panel would embed it; the checking,
   the policy guards and the deny shapes do not change when a UI appears.
 
-## Using it
+## Running it
+
+    zerotrace disable --codex-only     # stop using the hook route
+    zerotrace codex                    # mediated session, no hooks, no hook trust
+
+`zerotrace codex` finds the Codex binary (PATH first, then the VS Code / Cursor extension
+build, newest wins), starts an app-server, and runs a prompt loop. Every prompt is checked
+before `turn/start` is composed, and every approval is answered by the checker.
+
+## Using it as a library
 
 ```python
 from gateway.attach.appserver import AppServerClient, StdioTransport

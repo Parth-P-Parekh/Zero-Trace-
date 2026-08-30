@@ -222,3 +222,34 @@ def test_ordinary_consecutive_prompts_are_not_joined_into_a_finding(tmp_path):
                    "run the suite and show failures", "commit that"):
         assert c.submit(prompt).allow
     assert c.blocked == []
+
+
+# ------------------------------------------------------------------- session --
+
+def test_find_codex_prefers_path(monkeypatch):
+    import gateway.attach.session as session
+
+    monkeypatch.setattr(session.shutil, "which", lambda name: "/usr/bin/codex")
+    assert session.find_codex() == "/usr/bin/codex"
+
+
+def test_find_codex_falls_back_to_the_editor_extension(monkeypatch, tmp_path):
+    """`codex` is often not on PATH; the extension build is the one running the panel."""
+    import gateway.attach.session as session
+
+    exe = "codex.exe" if session.os.name == "nt" else "codex"
+    built = tmp_path / ".vscode" / "extensions" / "openai.chatgpt-1" / "bin" / "win" / exe
+    built.parent.mkdir(parents=True)
+    built.write_text("#!/bin/sh\n")
+
+    monkeypatch.setattr(session.shutil, "which", lambda name: None)
+    monkeypatch.setattr(session.Path, "home", staticmethod(lambda: tmp_path))
+    assert session.find_codex() == str(built)
+
+
+def test_find_codex_returns_none_when_absent(monkeypatch, tmp_path):
+    import gateway.attach.session as session
+
+    monkeypatch.setattr(session.shutil, "which", lambda name: None)
+    monkeypatch.setattr(session.Path, "home", staticmethod(lambda: tmp_path))
+    assert session.find_codex() is None
