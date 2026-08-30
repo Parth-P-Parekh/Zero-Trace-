@@ -11,7 +11,7 @@ import { Section, SectionHead, Source, Pull, Stat } from './Shared';
 const CLAIMS: Array<[string, string]> = [
   ['p50 ≤25ms', 'Added latency, inside the noise band of a cross-region model call.'],
   ['One container', 'No GPU, no external classifier. Runs on infrastructure you already have.'],
-  ['One line of config', 'Change the base URL. No code rewrite, no SDK, no endpoint agent.'],
+  ['One package', 'A dependency, not an infrastructure project. No proxy tier, no gateway, no endpoint agent.'],
   ['Zero telemetry', 'Fully in-country, in your VPC, or air-gapped. The product cannot be the leak.'],
 ];
 

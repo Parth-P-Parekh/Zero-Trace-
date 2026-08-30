@@ -28,7 +28,8 @@ export function Hero() {
       >
         It sits between your application and the model. Sensitive data comes out of the outbound
         payload and goes back into the response, a prompt carrying a credential is stopped outright,
-        and every decision lands in a tamper-evident record. One line of config.
+        and every decision lands in a tamper-evident record. It ships as a package, so there is
+        nothing new to deploy or operate.
       </p>
 
       <div style={{ display: 'flex', gap: 10, marginTop: 32, flexWrap: 'wrap' }}>

@@ -41,7 +41,7 @@ export function TrafficView({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 'var(--page-max)' }}>
       <PageHead
         title="Every payload, both legs, before it moved"
-        sub="Requests are intercepted in the egress path. No application here was modified to send them through."
+        sub="Every request the agent inspected, on the way out and on the way back."
         right={
           <SegmentedControl
             value={range}
