@@ -10,7 +10,34 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from zerotrace.spans.vocab import ENTITY_CLASSES, STAGES, family_of
+from gateway.contracts.entity_classes import CLASS_TO_FAMILY, EntityClass
+
+#: VOCAB-01, taken from the root contract rather than mirrored here. Part A kept its own
+#: copy so it could validate findings without importing main code; the copies were
+#: identical, but a mirror is only correct until someone edits one side. A class added to
+#: the root and not here would not fail loudly -- the Finding would just be rejected as
+#: unknown, at runtime, in the control plane, for a class the detector was built to find.
+ENTITY_CLASSES: frozenset[str] = frozenset(c.value for c in EntityClass)
+FAMILY_OF: dict[str, str] = {
+    c.value: getattr(CLASS_TO_FAMILY[c], "value", CLASS_TO_FAMILY[c]) for c in EntityClass
+}
+FAMILIES: frozenset[str] = frozenset(FAMILY_OF.values())
+
+#: Pipeline stages. Not a vocabulary concern, so it stays with the model that uses it.
+STAGES: tuple[str, ...] = ("S0", "S1", "S2", "S3")
+
+
+def is_entity_class(name: str) -> bool:
+    return name in ENTITY_CLASSES
+
+
+def family_of(entity_class: str) -> str:
+    try:
+        return FAMILY_OF[entity_class]
+    except KeyError:
+        raise ValueError(
+            f"{entity_class!r} is not in the closed VOCAB-01 vocabulary"
+        ) from None
 
 Action = Literal["allow", "warn", "tokenize", "mask", "block"]
 Leg = Literal["outbound", "inbound"]
@@ -24,7 +51,8 @@ class Finding:
     is. That is the whole privacy story for this object, and the reason the
     findings table has no value column.
 
-    entity_class comes from the CLOSED VOCAB-01 vocabulary (spans/vocab.py):
+    entity_class comes from the CLOSED VOCAB-01 vocabulary, imported from the root
+    contract at gateway.contracts.entity_classes:
     a class outside it cannot be constructed, and old names (MEDICAL, API_KEY,
     ...) are not aliased. family and length are derived: family from the
     vocabulary, length as end - start. stage is the pipeline stage that emitted

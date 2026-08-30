@@ -356,7 +356,7 @@ def test_bad_stage_or_offsets_are_rejected():
 
 def test_the_vocabulary_is_closed_and_complete():
     """Every class in VOCAB-01 §3.1-3.9 is present, with its family."""
-    from zerotrace.spans.vocab import ENTITY_CLASSES, FAMILIES, FAMILY_OF
+    from zerotrace.spans.model import ENTITY_CLASSES, FAMILIES, FAMILY_OF
 
     expected = {
         # §3.1 CREDENTIAL

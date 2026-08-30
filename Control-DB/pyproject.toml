@@ -8,6 +8,10 @@ version = "0.1.0a1"
 description = "ZeroTrace Part A — the control-group DB"
 requires-python = ">=3.12"
 dependencies = [
+    # The root distribution. Part A imports VOCAB-01 from gateway.contracts rather than
+    # mirroring it: one vocabulary, one place to change it. This is a one-way dependency
+    # -- the root never imports Part A.
+    "zerotrace",
     "aiosqlite==0.22.1",
     "alembic==1.19.1",
     "fastapi==0.141.1",

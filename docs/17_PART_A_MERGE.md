@@ -88,8 +88,9 @@ no database server.
 From `docs/superpowers/plans/2026-08-30-part-a-root-integration.md`, amended for Redis:
 
 - [x] **1. Package for root imports** — both distributions install and import together
-- [ ] **2. One canonical vocabulary** — delete `spans/vocab.py`, import our enum
-- [ ] **3. Request-scoped adapter** — `gateway/part_a/`, identity → `Actor`, findings → theirs
+- [x] **2. One canonical vocabulary** — `spans/vocab.py` deleted; Part A imports our enum
+- [~] **3. Request-scoped adapter** — `RootDetector` fills the seam; identity and policy
+      resolution still to come
 - [ ] **4. Evidence in dual ledgers** — now against `store/ledger.py`
 - [ ] **5. Patch the root HTTP pipeline**
 - [ ] **6. Mount the control plane**
@@ -109,3 +110,46 @@ cd Control-DB && pytest -q  # Part A
 ```
 
 No Docker, no PostgreSQL, no Redis server required for the tests.
+
+
+## The seam is filled (Task 3, first half)
+
+`gateway/part_a/detector.py` implements Part A's `Detector` Protocol using the same
+`extract_spans` normaliser and the same `Checker` the hooks use, so the control plane sees
+exactly what the side-car sees. A second detection path would be a second set of answers,
+and the one that mattered would be whichever the demo exercised.
+
+It reports `degrade_reason = None`, which is how Part A says the scan was real, against the
+stub's `detection_stub`.
+
+### One gap found by wiring it up
+
+Scanning a single credential emits **two** findings: `ANTHROPIC_KEY` at 0.99, and
+`HIGH_ENTROPY_STRING` at 0.55 with `advisory_only=True`. Our contract puts
+`HIGH_ENTROPY_STRING` in `NEVER_ENFORCE_ALONE` — it is corroboration, never grounds to act.
+
+**Part A's `Finding` has no field for that.** Anything we send arrives looking enforceable,
+so forwarding the advisory hit would hand the policy engine a reason to block that we do
+not stand behind. Advisory findings are therefore withheld by default;
+`RootDetector(include_advisory=True)` exists for a caller that knows what it is asking for.
+
+Closing this properly needs `advisory_only` on their `Finding` — a two-track change, like
+adding a vocabulary class. Until then the default is the safe direction: a missed
+corroborating signal, not a block nobody can justify.
+
+## What the end-to-end test proves
+
+`gateway/tests/test_part_a_end_to_end.py` is the first test that runs both halves
+together. Until now each was tested against a stand-in for the other — Part A against a
+`FixtureDetector`, the root against no control plane — and a seam tested only from both
+sides separately is where integrations fail.
+
+    payload → extract_spans → root Checker → Part A Finding
+            → decision → ledger append → verify
+
+It also checks two things that must survive the conversion, not merely hold on each side:
+the finding never carries the matched value, and neither does the ledger record — the
+whole Redis key space is swept for the fixture literal.
+
+Still open for a *full* end-to-end: identity resolution, the real policy engine deciding
+the action rather than the test asserting it, and the HTTP pipeline (Tasks 3–5).
