@@ -1,0 +1,710 @@
+"""The proxy. Two entry points, one checker. SKEL-01 Part C.
+
+**Proxy mode** — Claude Code, Codex CLI. They respect ``ANTHROPIC_BASE_URL`` /
+``OPENAI_BASE_URL``, so we sit in the path, hold the real key and forward upstream.
+
+    POST /v1/messages           Anthropic-compatible
+    POST /v1/chat/completions   OpenAI-compatible
+
+**Scan-only mode** — the Claude sidebar and any browser surface. claude.ai will not
+respect a proxy: it talks to first-party endpoints from inside a browser with its own
+TLS stack, so env vars and system proxies never see it. The extension patches
+``window.fetch`` in the page, asks us to check the outgoing body, and **the browser**
+sends it. We never see the upstream call.
+
+    POST /v1/prompt/scan        verdict + sanitised text, no forwarding
+
+Both paths run the same :class:`Checker` and produce the same ledger record. That is the
+point: the interception mechanism is interchangeable, the guarantee is not.
+
+**On blocking.** For interactive channels a block returns a **well-formed provider
+response carrying an attributed ZeroTrace message**, not a 403. A 403 is a broken tool,
+and the bypass is one environment variable — we would be teaching the user to route
+around us on their first bad experience. This is not the canned response SSOT §6 A1
+forbids: A1 is about fabricating a *model answer* when upstream is unavailable, whereas
+this is an enforcement notice, attributed by name, on a path where we deliberately did
+not call the model. ``ZT_BLOCK_STYLE=http_error`` restores the 403 for API callers,
+where a broken call is the correct signal.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from contextlib import asynccontextmanager
+from dataclasses import replace
+from typing import Any
+
+from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from .check import CheckVerdict, text_tree, to_verdict
+from .base.cache import InMemorySpanCache
+from .base.checker import Checker, CheckerConfig
+from .base.policy import StubPolicyClient
+from .base.scanner import DetectorPack, assert_production_engines
+from .contracts.types import Action, Actor
+from .coverage import CoverageMonitor
+from .detect.encodings import EncodedScanner
+from .detect.obfuscation import ObfuscationScanner
+from .detect.s0_credentials import scan_span_credentials
+from .detect.s1_context import ContextScanner
+from .detectors.example import EXAMPLE_DETECTORS
+from .intel.agent import IntelPlane
+from .ledger import JsonlLedgerStore, Ledger
+from .ledger import records as ledger_records
+from .intel.features import features_of
+from .redact import (
+    DispatchVerificationError, apply_redaction, plan_redaction, verify_dispatch,
+)
+from .spans.jsonspan import MalformedJSON, extract_spans
+from .spans.model import SpanTree
+
+log = logging.getLogger(__name__)
+router = APIRouter()
+
+UPSTREAM = {
+    "anthropic": os.getenv("ZT_UPSTREAM_ANTHROPIC", "https://api.anthropic.com"),
+    "openai": os.getenv("ZT_UPSTREAM_OPENAI", "https://api.openai.com"),
+}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    assert_production_engines()
+    detectors = list(EXAMPLE_DETECTORS)
+    app.state.pack = DetectorPack.build(
+        detectors,
+        version=1,
+        scanners=[
+            # S0: the zero-tolerance credential pack -- the reason the product exists.
+            scan_span_credentials,
+            # Second chance at S0 for keys that were wrapped, spaced or zero-width
+            # padded. Runs the same confirm(), so it widens what we look at without
+            # lowering the bar for what counts.
+            ObfuscationScanner(detectors),
+            # S1: key-name and structure context. The only thing that finds a secret
+            # with no shape -- `DB_PASSWORD=hunter2` -- which is most of what a
+            # retrieved config file or runbook contains.
+            ContextScanner(),
+            # Decode-and-rescan for encodings that occur without intent -- base64 is
+            # how k8s Secrets are stored and what PowerShell's ToBase64String emits.
+            # Reuses the S0 scanner, so every class it knows is covered here too.
+            EncodedScanner(scan_span_credentials),
+        ],
+    )
+    app.state.cache = InMemorySpanCache()
+    app.state.checker = Checker(
+        app.state.pack, app.state.cache,
+        tenant_key=os.getenv("ZT_VAULT_MASTER_KEY", "dev-key-not-a-secret").encode(),
+        config=CheckerConfig.from_env(),
+    )
+    app.state.policy = StubPolicyClient()
+    app.state.intel = IntelPlane()
+    app.state.coverage = CoverageMonitor()
+    # File-backed until persistence lands; the chain semantics are the Postgres ones.
+    app.state.ledger = Ledger(JsonlLedgerStore(os.getenv("ZT_LEDGER_DIR", "evidence/ledger")))
+    log.info("gateway up: %d detectors, pack v%d",
+             len(app.state.pack), app.state.pack.version)
+    yield
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="ZeroTrace Gateway", lifespan=lifespan)
+    app.include_router(router)
+    return app
+
+
+# ------------------------------------------------------------------ routes --
+
+@router.get("/healthz")
+async def healthz() -> dict[str, Any]:
+    return {"status": "ok"}
+
+
+@router.get("/readyz")
+async def readyz(request: Request) -> dict[str, Any]:
+    """Readiness reflects the fail stance: under ``fail: closed`` a gateway that cannot
+    check is not ready to be in the path."""
+    cfg: CheckerConfig = request.app.state.checker._cfg
+    return {"status": "ok", "fail": cfg.fail, "pack_version": request.app.state.pack.version}
+
+
+@router.get("/v1/coverage")
+async def coverage(request: Request) -> dict[str, Any]:
+    """Harnesses observed by this gateway process.
+
+    This is traversal evidence, not a network-wide coverage percentage.  The response
+    advertises that limitation until a DNS/flow-log denominator is connected.
+    """
+    return request.app.state.coverage.snapshot()
+
+
+@router.post("/v1/messages")
+async def anthropic_messages(request: Request) -> Response:
+    return await _proxy(request, provider="anthropic", path="/v1/messages")
+
+
+@router.post("/v1/chat/completions")
+async def openai_chat(request: Request) -> Response:
+    return await _proxy(request, provider="openai", path="/v1/chat/completions")
+
+
+@router.post("/v1/responses")
+async def openai_responses(request: Request) -> Response:
+    """The OpenAI Responses API -- what modern Codex actually calls.
+
+    `/v1/chat/completions` alone is not enough for current Codex, which speaks this
+    endpoint and streams by default. Three things this must get right:
+
+    * `instructions` (developer instructions) and `tools` (function and skill schemas)
+      are classified read-only by `spans.jsonspan` and are never rewritten. They are
+      still scanned, so a real credential in one is still caught and reported.
+    * `input` may be a bare string or an array of message objects; the span extractor
+      walks either without special-casing.
+    * SSE responses stream straight through, frame for frame.
+    """
+    return await _proxy(request, provider="openai", path="/v1/responses")
+
+
+@router.post("/v1/prompt/check")
+async def prompt_check(request: Request) -> Response:
+    """**The primary integration.** Side-car: check one prompt, answer, forward nothing.
+
+    Called by the Claude Code ``UserPromptSubmit`` hook and by the browser extension.
+    Takes the prompt text only -- no payload, no tools, no system prompt -- so skills
+    and the upstream prompt cache are untouched by construction (see `check.py`).
+
+    ``POST {"text": "...", "session_id": "...", "cwd": "..."}``
+    ``->  {"allow": bool, "reason": str, "classes": [...], "latency_ms": float}``
+    """
+    payload = await request.json()
+    text = payload.get("text") or ""
+    if not isinstance(text, str):
+        return _error(400, "zt.bad_request", "`text` must be a string")
+
+    actor = _resolve_actor(request, default_channel="cli")
+    if payload.get("session_id"):
+        actor = replace(actor, session_id=str(payload["session_id"]))
+
+    tree = text_tree(text)
+    check = await request.app.state.checker.check(tree, actor.tenant_id)
+
+    # Loop 2 -- an uncertain span still teaches the next request, even though this
+    # path never rewrites anything.
+    for span in tree:
+        matching = tuple(f for f in check.findings if f.span_path == span.path)
+        if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
+            request.app.state.intel.maybe_escalate(
+                features_of(span, matching, request.app.state.checker._tenant_key)
+            )
+
+    verdict: CheckVerdict = to_verdict(check, actor)
+    await request.app.state.ledger.append(
+        actor.tenant_id, "prompt.checked",
+        ledger_records.prompt_checked(
+            actor=actor, check=check, allowed=verdict.allow,
+            reason_classes=list(verdict.classes),
+            tenant_key=request.app.state.checker._tenant_key),
+    )
+    _record_coverage(
+        request, actor, provider="checker",
+        outcome="allowed" if verdict.allow else "blocked",
+    )
+    return JSONResponse(
+        {
+            "allow": verdict.allow,
+            "reason": verdict.reason,
+            "classes": list(verdict.classes),
+            "findings": verdict.findings,
+            "latency_ms": round(verdict.latency_ms, 2),
+            "degraded": verdict.degraded,
+        },
+        headers={
+            "X-ZeroTrace-Verdict": check.verdict.value,
+            "X-ZeroTrace-Classes": ",".join(verdict.classes),
+            "X-ZeroTrace-Latency-Ms": f"{check.latency_ms:.1f}",
+        },
+    )
+
+
+@router.post("/v1/prompt/scan")
+async def prompt_scan(request: Request) -> Response:
+    """Scan-only. The browser extension calls this and sends the result itself.
+
+    Fail-closed is the extension's job as well as ours: if this endpoint is
+    unreachable, the extension must refuse to submit rather than submit unscanned.
+    """
+    body = await request.body()
+    actor = _resolve_actor(request, default_channel="http")
+    try:
+        tree = SpanTree(body, extract_spans(body), provider="scan")
+    except MalformedJSON as exc:
+        return _error(400, "zt.malformed_payload", str(exc))
+
+    outcome = await _run(request, tree, actor)
+    if isinstance(outcome, Response):
+        _record_coverage(request, actor, provider="scan", outcome="failed")
+        return outcome
+    check, decision, plan, dispatched = outcome
+    _record_coverage(
+        request, actor, provider="scan",
+        outcome="blocked" if dispatched is None else "allowed",
+    )
+
+    # A block must come back in the *scan* shape, not a provider shape: the extension
+    # reads `action` to decide whether to refuse submission, and a chat-completion body
+    # here would be a KeyError on the one path that must fail closed.
+    return JSONResponse(
+        {
+            "verdict": check.verdict.value,
+            "action": decision.action.value,
+            "blocked": dispatched is None,
+            "content": None if dispatched is None
+                       else dispatched.decode("utf-8", errors="replace"),
+            "findings": [
+                {"span_path": f.span_path, "class": f.entity_class.value,
+                 "confidence": f.confidence}
+                for f in check.findings
+            ],
+        },
+        headers=_headers(check, decision, plan),
+    )
+
+
+# ------------------------------------------------------------------- core --
+
+async def _proxy(request: Request, *, provider: str, path: str) -> Response:
+    body = await request.body()
+    actor = _resolve_actor(request, default_channel="cli")
+
+    try:
+        tree = SpanTree(body, extract_spans(body), provider=provider)
+    except MalformedJSON as exc:
+        # A payload we cannot parse is a payload we cannot prove we redacted.
+        _record_coverage(request, actor, provider=provider, outcome="failed")
+        return _error(400, "zt.malformed_payload", str(exc))
+
+    outcome = await _run(request, tree, actor)
+    if isinstance(outcome, Response):
+        _record_coverage(request, actor, provider=provider, outcome="failed")
+        return outcome
+    check, decision, plan, dispatched = outcome
+
+    if dispatched is None:
+        await _record(request, actor, check, decision, plan,
+                      destination=provider, dispatched=False)
+        _record_coverage(request, actor, provider=provider, outcome="blocked")
+        return _blocked(check, decision, provider, path=path, body=body)
+
+    # Headers go in via `extra` rather than being set afterwards: a StreamingResponse
+    # has already begun once it is returned, so mutating .headers then is too late.
+    resp = await _dispatch(
+        provider, path, dispatched, request.headers, _headers(check, decision, plan)
+    )
+    await _record(request, actor, check, decision, plan,
+                  destination=provider, dispatched=True)
+    _record_coverage(request, actor, provider=provider, outcome="allowed")
+    return resp
+
+
+async def _run(request: Request, tree: SpanTree, actor: Actor):
+    """Loop 1, policy, redaction, verify.
+
+    Returns ``(check, decision, plan, dispatched)``; ``dispatched`` is ``None`` when the
+    request is blocked. Returns a ``Response`` only for hard failures the caller cannot
+    shape (malformed payload, verification failure).
+    """
+    app = request.app
+    check = await app.state.checker.check(tree, actor.tenant_id)
+
+    decision = await app.state.policy.decide(
+        actor=actor, findings=check.findings, risk=check.risk,
+        leg="outbound", destination=tree.provider,
+        # Where each finding sits decides whether it may enforce at all. Track A cannot
+        # know this -- only the span tree does.
+        origins={s.path: s.origin for s in tree},
+    )
+
+    # Loop 2 — enqueue and move on. Never awaited; see intel/agent.py.
+    for span in tree:
+        matching = tuple(f for f in check.findings if f.span_path == span.path)
+        if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
+            app.state.intel.maybe_escalate(
+                features_of(span, matching, app.state.checker._tenant_key)
+            )
+
+    if decision.action is Action.BLOCK:
+        # Nothing is dispatched. The caller decides how to say so, because a CLI and a
+        # browser extension need different shapes for the same outcome.
+        return check, decision, None, None
+
+    plan = plan_redaction(
+        tree, check.findings, decision,
+        tenant_key=app.state.checker._tenant_key,
+        scope_key=actor.session_id or actor.id,
+    )
+    dispatched = apply_redaction(tree, plan)
+
+    try:
+        verify_dispatch(dispatched, plan)
+    except DispatchVerificationError as exc:
+        # We could not prove the redaction, so we do not send.
+        # A failure to *prove* a redaction is the one event that must never be silent.
+        log.error("dispatch verification failed: %s", exc)
+        await app.state.ledger.append(
+            actor.tenant_id, "dispatch.verification_failed",
+            ledger_records.dispatch_verification_failed(
+                request_id=_request_id(request), reason=str(exc), plan=plan),
+        )
+        return _error(500, "zt.dispatch_verification_failed", str(exc))
+
+    return check, decision, plan, dispatched
+
+
+_HOP_BY_HOP_HEADERS = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
+})
+_REBUILT_REQUEST_HEADERS = frozenset({"host", "content-length"})
+
+
+def _forward_headers(headers) -> list[tuple[str, str]]:
+    """Preserve end-to-end request headers, including unknown provider betas.
+
+    RFC hop-by-hop fields and fields named by ``Connection`` stop at this proxy.
+    Host/content-length are rebuilt by httpx.  ZeroTrace control fields are consumed
+    locally and must not disclose identity or policy metadata to the provider.
+    """
+    raw = getattr(headers, "raw", None)
+    if raw is None:
+        pairs = [(str(k), str(v)) for k, v in headers.items()]
+    else:
+        pairs = [
+            (k.decode("latin-1"), v.decode("latin-1")) for k, v in raw
+        ]
+    connection_fields = {
+        token.strip().lower()
+        for key, value in pairs if key.lower() == "connection"
+        for token in value.split(",") if token.strip()
+    }
+    denied = _HOP_BY_HOP_HEADERS | _REBUILT_REQUEST_HEADERS | connection_fields
+    return [
+        (key, value) for key, value in pairs
+        if key.lower() not in denied
+        and not key.lower().startswith("x-zerotrace-")
+    ]
+
+
+def _response_headers(
+    headers, extra: dict[str, str] | None = None, *, decoded_body: bool = False
+) -> dict[str, str]:
+    """Relay provider metadata while removing response hop-by-hop framing."""
+    connection_fields = {
+        token.strip().lower()
+        for token in headers.get("connection", "").split(",") if token.strip()
+    }
+    denied = _HOP_BY_HOP_HEADERS | {"content-length"} | connection_fields
+    if decoded_body:
+        # httpx decodes gzip/br for .content/.aread(). Keeping Content-Encoding would
+        # make the harness try to decode already-decoded bytes a second time.
+        denied = denied | {"content-encoding"}
+    relayed = {key: value for key, value in headers.items() if key.lower() not in denied}
+    relayed.update(extra or {})
+    return relayed
+
+
+def _wants_stream(body: bytes) -> bool:
+    """Whether the caller asked for SSE. Codex streams by default."""
+    try:
+        return bool(json.loads(body).get("stream"))
+    except (ValueError, AttributeError):
+        return False
+
+
+async def _dispatch(
+    provider: str, path: str, body: bytes, headers, extra: dict[str, str] | None = None
+) -> Response:
+    """Forward upstream. The gateway holds the real key; it is never logged.
+
+    Streaming responses are relayed frame for frame rather than buffered, so
+    time-to-first-token is the upstream's and the client sees a normal SSE stream. The
+    inbound leg is not scanned yet -- that is the sliding-window work (CODE-01 §9.2) --
+    and rather than imply otherwise the response carries
+    ``X-ZeroTrace-Degraded: inbound_stream_unscanned``.
+
+    **The outbound leg is fully scanned either way.** The request body is complete
+    before anything is sent, whether or not the response streams, so streaming costs us
+    nothing on the leg that matters most.
+    """
+    import httpx
+
+    fwd = _forward_headers(headers)
+    url = UPSTREAM[provider] + path
+
+    if not _wants_stream(body):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(url, content=body, headers=fwd)
+        except httpx.HTTPError as exc:
+            return _error(502, "zt.upstream_unavailable", str(exc))
+        return Response(
+            content=r.content,
+            status_code=r.status_code,
+            headers=_response_headers(r.headers, extra, decoded_body=True),
+        )
+
+    # -- streaming --------------------------------------------------------------
+    client = httpx.AsyncClient(timeout=None)
+    req = client.build_request("POST", url, content=body, headers=fwd)
+    try:
+        upstream = await client.send(req, stream=True)
+    except httpx.HTTPError as exc:
+        await client.aclose()
+        return _error(502, "zt.upstream_unavailable", str(exc))
+
+    if upstream.status_code >= 400:
+        # Surface the upstream error body rather than a stream of nothing.
+        payload = await upstream.aread()
+        await upstream.aclose()
+        await client.aclose()
+        return Response(
+            content=payload, status_code=upstream.status_code,
+            headers=_response_headers(upstream.headers, extra, decoded_body=True),
+        )
+
+    async def relay():
+        # The client must always be closed, including when the caller disconnects
+        # mid-stream -- otherwise a cancelled request leaks a connection per abort.
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    hdrs = _response_headers(upstream.headers, extra)
+    hdrs["X-ZeroTrace-Degraded"] = "inbound_stream_unscanned"
+    hdrs["Cache-Control"] = "no-cache"
+    return StreamingResponse(
+        relay(),
+        status_code=upstream.status_code,
+        headers=hdrs,
+    )
+
+
+# ---------------------------------------------------------------- helpers --
+
+def _resolve_actor(request: Request, *, default_channel: str) -> Actor:
+    """Placeholder for Track A's ``identity.resolve``.
+
+    ``X-ZeroTrace-Actor`` is injected by the CLI wrapper and is **trivially spoofable**.
+    That is a real limitation, stated here, in the README and in the scope note — not a
+    footnote. Real identity is Track A's mTLS/OIDC path.
+    """
+    return Actor(
+        id=request.headers.get("x-zerotrace-actor", "anonymous"),
+        tenant_id=request.headers.get("x-zerotrace-tenant", "acme"),
+        role="engineer",
+        groups=tuple(
+            g for g in request.headers.get("x-zerotrace-groups", "").split(",") if g
+        ),
+        channel=request.headers.get("x-zerotrace-channel", default_channel),  # type: ignore[arg-type]
+        session_id=request.headers.get("x-zerotrace-session"),
+    )
+
+
+def _request_id(request: Request) -> str:
+    return request.headers.get("x-zerotrace-request-id") or f"req_{id(request):x}"
+
+
+def _harness(request: Request) -> str:
+    explicit = request.headers.get("x-zerotrace-harness", "").strip().lower()
+    if explicit:
+        return explicit[:80]
+    user_agent = request.headers.get("user-agent", "").lower()
+    for name in ("codex", "cursor", "claude"):
+        if name in user_agent:
+            return name
+    return {
+        "/v1/responses": "openai-responses-compatible",
+        "/v1/chat/completions": "openai-chat-compatible",
+        "/v1/messages": "anthropic-compatible",
+    }.get(request.url.path, "unknown")
+
+
+def _record_coverage(request: Request, actor: Actor, *, provider: str, outcome: str) -> None:
+    request.app.state.coverage.record(
+        harness=_harness(request), route=request.url.path, provider=provider,
+        channel=actor.channel, outcome=outcome,
+    )
+
+
+async def _record(request, actor, check, decision, plan, *, destination, dispatched):
+    """One record per request, whatever the outcome.
+
+    Written for allowed requests too: a ledger that only records blocks answers "what
+    did you stop?" but not "what did you let through?", and the second is the question
+    an auditor actually asks. Never fails the request -- a ledger write that raises is
+    logged and the response still goes out.
+    """
+    try:
+        await request.app.state.ledger.append(
+            actor.tenant_id, "request.decided",
+            ledger_records.request_decided(
+                request_id=_request_id(request), actor=actor, check=check,
+                decision=decision, plan=plan,
+                tenant_key=request.app.state.checker._tenant_key,
+                channel=actor.channel, destination=destination, dispatched=dispatched),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("ledger append failed; request already served")
+
+
+def _headers(check, decision, plan) -> dict[str, str]:
+    h = {
+        "X-ZeroTrace-Action": decision.action.value,
+        "X-ZeroTrace-Findings": str(len(check.findings)),
+        "X-ZeroTrace-Classes": ",".join(
+            sorted({f.entity_class.value for f in check.findings})
+        ),
+        "X-ZeroTrace-Verdict": check.verdict.value,
+        "X-ZeroTrace-Latency-Ms": f"{check.latency_ms:.1f}",
+        "X-ZeroTrace-Cache-Hits": str(check.cache_hits),
+    }
+    if check.degraded:
+        h["X-ZeroTrace-Degraded"] = check.degraded
+    if plan is not None and plan.skipped_read_only:
+        # Detected inside tool schemas or developer instructions and deliberately not
+        # rewritten. Reported so it is a visible decision, not a silent omission.
+        h["X-ZeroTrace-Read-Only-Findings"] = str(len(plan.skipped_read_only))
+    if plan is not None and plan.degraded_formats:
+        # Surfaced, never hidden: these got a labelled token where the product claims a
+        # shape-preserving one. Vault formats land at B2.
+        h["X-ZeroTrace-Format-Degraded"] = ",".join(
+            sorted(c.value for c in plan.degraded_formats)
+        )
+    return h
+
+
+def _blocked(
+    check, decision, provider: str, *, path: str = "", body: bytes = b"{}"
+) -> Response:
+    """An attributed enforcement notice, in the provider's own response shape."""
+    classes = sorted({f.entity_class.value for f in check.enforceable_findings})
+    message = (
+        "ZeroTrace blocked this request before it reached the model. "
+        f"Detected: {', '.join(classes) or 'policy violation'}. "
+        "Nothing was sent upstream."
+    )
+
+    if os.getenv("ZT_BLOCK_STYLE", "message") == "http_error":
+        return _error(403, "zt.blocked_by_policy", message)
+
+    now = int(time.time())
+    if path == "/v1/responses":
+        try:
+            requested_model = json.loads(body).get("model", "zerotrace-policy")
+        except (ValueError, AttributeError):
+            requested_model = "zerotrace-policy"
+        item_id = f"msg_zt_{now}"
+        response_id = f"resp_zt_{now}"
+        item = {
+            "id": item_id, "type": "message", "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text", "text": message, "annotations": [],
+            }],
+        }
+        payload = {
+            "id": response_id, "object": "response", "created_at": now,
+            "status": "completed", "error": None, "incomplete_details": None,
+            "model": requested_model, "output": [item], "output_text": message,
+            "parallel_tool_calls": True, "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "store": False, "tools": [], "metadata": {},
+            "usage": {
+                "input_tokens": 0, "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 0,
+            },
+        }
+        if _wants_stream(body):
+            in_progress = dict(payload, status="in_progress", output=[], usage=None)
+            events = [
+                ("response.created", {"type": "response.created",
+                                      "sequence_number": 0, "response": in_progress}),
+                ("response.output_item.added", {
+                    "type": "response.output_item.added", "sequence_number": 1,
+                    "output_index": 0, "item": dict(item, status="in_progress", content=[]),
+                }),
+                ("response.content_part.added", {
+                    "type": "response.content_part.added", "sequence_number": 2,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "part": {"type": "output_text", "text": "", "annotations": []},
+                }),
+                ("response.output_text.delta", {
+                    "type": "response.output_text.delta", "sequence_number": 3,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "delta": message, "logprobs": [],
+                }),
+                ("response.output_text.done", {
+                    "type": "response.output_text.done", "sequence_number": 4,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "text": message, "logprobs": [],
+                }),
+                ("response.content_part.done", {
+                    "type": "response.content_part.done", "sequence_number": 5,
+                    "item_id": item_id, "output_index": 0, "content_index": 0,
+                    "part": item["content"][0],
+                }),
+                ("response.output_item.done", {
+                    "type": "response.output_item.done", "sequence_number": 6,
+                    "output_index": 0, "item": item,
+                }),
+                ("response.completed", {"type": "response.completed",
+                                        "sequence_number": 7, "response": payload}),
+            ]
+            stream = "".join(
+                f"event: {event}\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
+                for event, value in events
+            )
+            return Response(
+                stream, media_type="text/event-stream",
+                headers=_headers(check, decision, None),
+            )
+        return JSONResponse(payload, headers=_headers(check, decision, None))
+
+    if provider == "anthropic":
+        payload: dict[str, Any] = {
+            "id": f"msg_zt_{now}", "type": "message", "role": "assistant",
+            "model": "zerotrace-policy",
+            "content": [{"type": "text", "text": message}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+    else:
+        payload = {
+            "id": f"chatcmpl-zt-{now}", "object": "chat.completion", "created": now,
+            "model": "zerotrace-policy",
+            "choices": [{
+                "index": 0, "finish_reason": "content_filter",
+                "message": {"role": "assistant", "content": message},
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+    return JSONResponse(payload, headers=_headers(check, decision, None))
+
+
+def _error(status: int, code: str, message: str) -> Response:
+    """Every error is honest and typed. Never a 200 with a fabricated body."""
+    return JSONResponse(
+        {"error": {"code": code, "message": message}}, status_code=status
+    )
+
+
+app = create_app()

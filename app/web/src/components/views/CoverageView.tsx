@@ -3,17 +3,21 @@
 import { Badge, Button, Card, Icon, StatusDot, Tag, Tooltip, EmptyState } from '@/ds';
 import { GridHead, PageHead, SectionLabel, StubNote } from '@/components/Chrome';
 import { classToken, count, exact, percent } from '@/lib/format';
-import type { CoverageReport, Counterfactual, LedgerHead, StubNotice } from '@/lib/types';
+import type {
+  CoverageReport, Counterfactual, HarnessCoverageSnapshot, LedgerHead, StubNotice,
+} from '@/lib/types';
 
 const COLUMNS = '84px minmax(0,1fr) 200px 168px';
 
 export function CoverageView({
   report,
+  harnessCoverage,
   counterfactual,
   ledger,
   stub,
 }: {
   report: CoverageReport;
+  harnessCoverage: HarnessCoverageSnapshot | null;
   counterfactual: Counterfactual;
   ledger: LedgerHead;
   stub: StubNotice;
@@ -101,6 +105,39 @@ export function CoverageView({
           </Card>
         </div>
       </div>
+
+      {harnessCoverage ? (
+        <Card pad={0}>
+          <div style={{ padding: '16px 16px 12px' }}>
+            <SectionLabel>Observed harnesses · this gateway process</SectionLabel>
+            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
+              {exact(harnessCoverage.total_requests)} checks traversed ZeroTrace since startup.
+              Direct egress is not visible here, so this is traversal evidence—not a coverage percentage.
+            </p>
+          </div>
+          <div className="zt-table">
+            <div>
+              <GridHead columns="minmax(160px,1fr) 210px 130px 100px 100px" cells={['Harness', 'Route', 'Provider', 'Requests', 'Blocked']} />
+              {harnessCoverage.harnesses.map((row) => (
+                <div
+                  key={`${row.harness}:${row.route}:${row.channel}`}
+                  style={{
+                    display: 'grid', gridTemplateColumns: 'minmax(160px,1fr) 210px 130px 100px 100px',
+                    gap: 12, minHeight: 'var(--row-h)', padding: '8px 16px', alignItems: 'center',
+                    boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
+                  }}
+                >
+                  <span style={{ font: 'var(--type-body-sm)' }}>{row.harness}</span>
+                  <span className="zt-mono-sm">{row.route}</span>
+                  <span className="zt-mono-sm">{row.provider}</span>
+                  <span className="zt-mono-sm zt-nums">{exact(row.requests)}</span>
+                  <span className="zt-mono-sm zt-nums">{exact(row.blocked)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      ) : null}
 
       <Card pad={0}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '16px 16px 12px' }}>

@@ -12,8 +12,9 @@ import {
   LEDGER, LICENCE, PAYLOADS, POLICY_VERSIONS, REQUESTS, STUBS,
 } from './fixtures';
 import type {
-  CoverageReport, Counterfactual, Detector, EscalationPoint, LedgerHead, Licence,
-  PayloadLeg, PolicyException, PolicyVersion, RequestRecord, StubNotice,
+  CoverageReport, Counterfactual, Detector, EscalationPoint, HarnessCoverageSnapshot,
+  LedgerHead, Licence, PayloadLeg, PolicyException, PolicyVersion, RequestRecord,
+  StubNotice,
 } from './types';
 
 /** GET /api/requests */
@@ -57,6 +58,19 @@ export function listExceptions(): PolicyException[] {
 /** GET /api/coverage */
 export function getCoverage(): CoverageReport {
   return COVERAGE;
+}
+
+/** GET /v1/coverage — gateway traversals only; never presented as a bypass ratio. */
+export async function getHarnessCoverage(): Promise<HarnessCoverageSnapshot | null> {
+  const base = process.env.ZT_GATEWAY_URL?.replace(/\/$/, '');
+  if (!base) return null;
+  try {
+    const response = await fetch(`${base}/v1/coverage`, { cache: 'no-store' });
+    if (!response.ok) return null;
+    return await response.json() as HarnessCoverageSnapshot;
+  } catch {
+    return null;
+  }
 }
 
 /** GET /api/impact/counterfactual?window= */

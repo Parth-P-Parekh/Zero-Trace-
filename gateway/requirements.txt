@@ -1,0 +1,22 @@
+# Track B data plane. Pinned at M0 and never floated — a dependency resolving
+# differently on a judge's clone at T+20 is a G6 failure with no time to debug it.
+
+# --- production detection engines ---
+# Pure-Python fallbacks exist so the skeleton runs before these land, but they are
+# development-only: assert_production_engines() refuses to start on them outside dev.
+pyahocorasick==2.1.0     # T1 literal anchor automaton
+google-re2==1.1.20240702 # T2/T3 — linear time, no catastrophic backtracking
+
+# --- tests ---
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-benchmark==4.0.0
+
+# --- proxy ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+httpx==0.27.2
+
+# --- S1 rules config ---
+PyYAML==6.0.2
+anthropic==0.75.0

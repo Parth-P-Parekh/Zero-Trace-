@@ -1,0 +1,19 @@
+# ZeroTrace checker as a service.
+#
+#   docker compose up -d          # starts on boot, restarts on failure
+#
+# The Claude Code hook does not need this -- it runs embedded. Use this for the browser
+# extension, or to share one checker across several tools.
+services:
+  checker:
+    build: .
+    container_name: zerotrace-checker
+    # `unless-stopped` is what makes it "linked as soon as you start": Docker brings it
+    # back on boot, so there is no manual step before the first prompt of the day.
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"     # loopback only -- never expose a prompt checker
+    environment:
+      ZT_ENV: prod
+      ZT_FAIL: closed
+      ZT_VAULT_MASTER_KEY: ${ZT_VAULT_MASTER_KEY:-dev-key-change-me}

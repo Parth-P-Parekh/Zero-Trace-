@@ -1,0 +1,29 @@
+{
+  "name": "openai-chat-compatible",
+  "provider": "openai",
+  "path": "/v1/chat/completions",
+  "request": {
+    "model": "gpt-4.1",
+    "messages": [
+      {"role": "system", "content": "Use the provided functions."},
+      {"role": "user", "content": "inspect the retry path"}
+    ],
+    "functions": [{
+      "name": "search_repo",
+      "description": "Search repository text.",
+      "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+    }],
+    "stream": true
+  },
+  "expected_origins": {
+    "messages[0].content": "system",
+    "messages[1].content": "user",
+    "functions[0].description": "tool_definition"
+  },
+  "protected_paths": ["functions"],
+  "cache_markers": [],
+  "sse_frames": [
+    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+    "data: [DONE]\n\n"
+  ]
+}

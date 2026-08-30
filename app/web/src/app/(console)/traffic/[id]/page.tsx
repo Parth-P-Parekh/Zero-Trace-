@@ -1,10 +1,9 @@
 import { notFound } from 'next/navigation';
 import { InspectorView } from '@/components/views/InspectorView';
-import { getPayload, getRequest, listRequests } from '@/lib/client';
+import { getPayload, getRequest } from '@/lib/client';
 
-export function generateStaticParams() {
-  return listRequests().map((r) => ({ id: r.id }));
-}
+// Not prerendered: the console layout gates on the session, so these render per
+// request like every other route behind the gate.
 
 export default async function InspectorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

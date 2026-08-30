@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Node (app/web)
+node_modules/
+.next/
+out/
+
+# Local config and secrets -- never committed
+.env
+.env.local
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Ledger (file-backed until persistence lands)
+evidence/ledger/
+
+# PreToolUse cross-call fragment window (temp dir, but never commit one)
+zerotrace-window/

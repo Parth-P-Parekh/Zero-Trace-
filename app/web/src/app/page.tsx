@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Button, Card, Icon, Tag, Wordmark } from '@/ds';
-import { DrainHero } from '@/components/DrainHero';
+import { BreachHero } from '@/components/BreachHero';
 
 export const metadata = {
   title: 'ZeroTrace — an egress firewall for AI traffic',
@@ -38,19 +38,20 @@ export default function SitePage() {
             }}
           >
             ZeroTrace is an egress firewall for AI traffic. It runs inside your perimeter, in the
-            path every application already takes to reach a model, and redacts secrets and personal
-            data out of outbound and inbound payloads before either side sees them.
+            path every application already takes to reach a model. When a payload carries something
+            policy forbids, the request stops there — the provider never receives it, and the caller
+            is told exactly what was found.
           </p>
 
           <div style={{ display: 'flex', gap: 10, marginTop: 32, flexWrap: 'wrap' }}>
-            <Link href="/traffic" style={{ textDecoration: 'none' }}>
+            <Link href="/login?next=%2Ftraffic" style={{ textDecoration: 'none' }}>
               <Button icon="scan-line">Open the console</Button>
             </Link>
             <Button variant="secondary" iconEnd="arrow-right">Read the architecture</Button>
           </div>
 
           <div style={{ marginTop: 48 }}>
-            <DrainHero />
+            <BreachHero />
           </div>
         </section>
 
@@ -186,9 +187,7 @@ function SiteNav() {
           <Wordmark size={16} />
         </Link>
         <span style={{ flex: 1 }} />
-        <Link href="/traffic" style={{ font: 'var(--type-body-sm)', textDecoration: 'none', color: 'var(--text-body)' }}>
-          Console
-        </Link>
+        {/* No direct console link. The console is reachable only through sign-in. */}
         <Link href="/login" style={{ textDecoration: 'none' }}>
           <Button size="sm" variant="secondary" pill>Sign in</Button>
         </Link>
@@ -201,7 +200,7 @@ function Path() {
   const steps = [
     { label: 'Your application', note: 'unmodified' },
     { label: 'ZeroTrace', note: 'S0–S5 outbound' },
-    { label: 'The model', note: 'sees tokens' },
+    { label: 'The model', note: 'only what policy allowed' },
     { label: 'ZeroTrace', note: 'S6 inbound' },
     { label: 'Your user', note: 'cleared to read it' },
   ];
