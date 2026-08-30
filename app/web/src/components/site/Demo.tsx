@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Button } from '@/ds';
-import { SHELL, Source } from './Shared';
+import { SHELL } from './Shared';
 
 /**
  * Move 8: the close.
@@ -39,10 +39,11 @@ export function Demo() {
           Every number quoted here is reproducible in the room.
         </p>
 
+        {/* One action left, so it takes the primary weight - a lone secondary
+            button at the close of the page reads as an afterthought. */}
         <div style={{ display: 'flex', gap: 10, marginTop: 34, flexWrap: 'wrap' }}>
-          <Button size="lg" icon="scan-line">Book the live demo</Button>
           <Link href="/login" style={{ textDecoration: 'none' }}>
-            <Button size="lg" variant="secondary" iconEnd="arrow-right">Open the console</Button>
+            <Button size="lg" iconEnd="arrow-right">Open the console</Button>
           </Link>
         </div>
 
@@ -79,12 +80,6 @@ export function Demo() {
           </p>
         </div>
 
-        <p style={{ margin: '30px 0 0', maxWidth: '70ch' }}>
-          <Source>
-            Sources are inline and re-verified quarterly. A stale number on a security site is worse
-            than no number.
-          </Source>
-        </p>
       </div>
     </section>
   );
