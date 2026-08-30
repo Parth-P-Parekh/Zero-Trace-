@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Badge, Card, Icon, Input, Metric, SegmentedControl, StatusDot, Tabs, Tag, Tooltip, EmptyState,
 } from '@/ds';
-import { GridHead, PageHead } from '@/components/Chrome';
+import { GridHead } from '@/components/Chrome';
 import { classToken, count, exact, ms, risk, shortPath, statusLabel } from '@/lib/format';
 import type { RequestRecord } from '@/lib/types';
 
@@ -39,22 +39,21 @@ export function TrafficView({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 'var(--page-max)' }}>
-      <PageHead
-        title="Every payload, both legs, before it moved"
-        sub="Every request the agent inspected, on the way out and on the way back."
-        right={
-          <SegmentedControl
-            value={range}
-            onChange={setRange}
-            size="sm"
-            items={[
-              { value: '24h', label: 'Last 24h' },
-              { value: '7d', label: '7 days' },
-              { value: '30d', label: '30 days' },
-            ]}
-          />
-        }
-      />
+      {/* No page heading: the rail and the topbar already name this view, and an
+          operator screen does not need a third label. The range control stays -
+          it is the one thing in this header that did something. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <SegmentedControl
+          value={range}
+          onChange={setRange}
+          size="sm"
+          items={[
+            { value: '24h', label: 'Last 24h' },
+            { value: '7d', label: '7 days' },
+            { value: '30d', label: '30 days' },
+          ]}
+        />
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 }}>
         <Card pad={18}>
