@@ -37,38 +37,74 @@ from pathlib import Path
 # --------------------------------------------------------------------- enable --
 
 def _install(args: argparse.Namespace) -> int:
+    """Activate everything, doing the right thing per harness.
+
+    Claude Code is activated by config: it asks its settings whether to run a hook.
+    Codex is not -- it declines hooks no human has reviewed (docs/14), so it is activated
+    by putting ZeroTrace in front of the `codex` command instead (docs/15). One verb,
+    two mechanisms, because the harnesses genuinely differ.
+    """
+    from gateway import shim
     from hooks import install as installer
 
-    hosts = _hosts(args)
     user_scope = not args.project
-    installer.apply(hosts=hosts, user_scope=user_scope, remove=False)
-    paths = installer.config_paths(user_scope=user_scope)
+    hosts: list[str] = []
+    if not args.codex_only:
+        hosts.append("claude")
+    if args.codex_hooks and not args.claude_only:
+        hosts.append("codex")
 
-    print(f"ZeroTrace enabled  ({'this machine' if user_scope else 'this directory'})\n")
-    for host in hosts:
-        events = installer.installed_events(paths[host])
-        print(f"  {host:8} {', '.join(events) or 'nothing'}")
-        print(f"           {paths[host]}")
+    print(f"ZeroTrace on  ({'this machine' if user_scope else 'this directory'})")
     print()
-    print("  Covers the terminal CLI and the IDE side panel -- both read this file.")
-    print("  Existing sessions keep the config they started with. Restart them.")
+
+    if hosts:
+        installer.apply(hosts=tuple(hosts), user_scope=user_scope, remove=False)
+        paths = installer.config_paths(user_scope=user_scope)
+        for host in hosts:
+            events = installer.installed_events(paths[host])
+            print(f"  {host:8} hooks    {', '.join(events) or 'nothing'}")
+            print(f"  {'':17} {paths[host]}")
+
+    if not args.claude_only:
+        changed = shim.apply(remove=False)
+        if changed:
+            print("  codex    command   `codex` now starts a mediated session")
+            for path in changed:
+                print(f"  {'':17} {path}")
+            print("  " + " " * 17 + "open a new shell for this to take effect")
+        else:
+            print("  codex    command   no shell profile found; run `zerotrace codex`")
+
     print()
-    print("  Checks run in-process; nothing needs starting. If you make many tool")
-    print("  calls, a shared service is ~80x cheaper per call:")
-    print("      docker compose up -d   &&   setx ZT_CHECKER http://127.0.0.1:8080")
+    print("  Claude Code: restart running sessions -- they keep the config they started")
+    print("  with. Codex: `codex` in a NEW shell is mediated; the VS Code side panel is")
+    print("  its own client and is not covered. See docs/15_APPSERVER_ATTACH.md")
+    if not args.codex_hooks:
+        print()
+        print("  Codex hooks were not written: Codex silently declines hooks it has not")
+        print("  had a human review, so they would look active without enforcing.")
+        print("  `--codex-hooks` writes them anyway if you have trusted them.")
     return 0
 
 
 def _uninstall(args: argparse.Namespace) -> int:
+    """Deactivate everything this tool installed, and nothing else."""
+    from gateway import shim
     from hooks import install as installer
 
-    hosts = _hosts(args)
-    changed = installer.apply(hosts=hosts, user_scope=not args.project, remove=True)
+    changed = installer.apply(hosts=("claude", "codex"), user_scope=not args.project,
+                              remove=True)
+    profiles = shim.apply(remove=True)
+
     if changed:
-        print(f"ZeroTrace disabled for: {', '.join(changed)}")
-    else:
-        print("ZeroTrace was not enabled here; nothing to remove.")
-    print("Running sessions keep enforcing until they are restarted.")
+        print(f"ZeroTrace off: hooks removed for {', '.join(changed)}")
+    if profiles:
+        print("ZeroTrace off: `codex` shim removed from")
+        for path in profiles:
+            print(f"  {path}")
+    if not changed and not profiles:
+        print("ZeroTrace was not active here; nothing to remove.")
+    print("Running sessions and open shells keep it until they are restarted.")
     return 0
 
 
@@ -92,34 +128,43 @@ def _console_script() -> str | None:
 # --------------------------------------------------------------------- status --
 
 def _status(args: argparse.Namespace) -> int:
+    from gateway import shim
     from hooks import install as installer
 
     print("ZeroTrace status\n")
 
-    print("  hooks")
-    any_wired = False
+    print("  claude code   hooks")
+    wired = False
     for scope, user in (("machine", True), ("project", False)):
-        for host, path in installer.config_paths(user_scope=user).items():
-            events = installer.installed_events(path)
-            if events:
-                any_wired = True
-                print(f"    {host:8} {scope:8} {', '.join(events)}")
-                print(f"    {'':17} {path}")
-    if not any_wired:
-        print("    nothing wired -- run `zerotrace enable`")
-    elif any(installer.installed_events(p)
-             for p in (installer.config_paths(user_scope=u)["codex"]
-                       for u in (True, False))):
+        path = installer.config_paths(user_scope=user)["claude"]
+        events = installer.installed_events(path)
+        if events:
+            wired = True
+            print(f"    {scope:8} {', '.join(events)}")
+            print(f"    {'':8} {path}")
+    if not wired:
+        print("    not active -- run `zerotrace on`")
+
+    print()
+    print("  codex         app-server client")
+    profiles = [p for p in shim.target_profiles() if shim.installed_in(p)]
+    if profiles:
+        for path in profiles:
+            print(f"    shell    `codex` runs mediated  ({path})")
+    else:
+        print("    not active -- run `zerotrace on`, or `zerotrace codex` directly")
+    print("    note     the VS Code side panel is its own client and is NOT covered")
+
+    stale = [(scope, installer.config_paths(user_scope=u)["codex"])
+             for scope, u in (("machine", True), ("project", False))
+             if installer.installed_events(installer.config_paths(user_scope=u)["codex"])]
+    if stale:
         print()
-        print("    ! codex: configured, NOT confirmed enforcing")
-        print("      Codex >=0.151 reads ~/.codex/hooks.json but silently declines to")
-        print("      run hooks it has not trusted -- no warning, no log line. Verified")
-        print("      on 0.151.0-alpha.7.1: a hook that only appends to a file never ran,")
-        print("      and a prompt carrying a live-shaped key reached the model.")
-        print("      Fix: run `codex` interactively once and accept the hook")
-        print("      review. Trust is pinned to this file's hash, so re-running")
-        print("      `zerotrace enable` de-trusts it and needs re-approval.")
-        print("      Claude Code is unaffected. See docs/14_CODEX_HOOK_TRUST.md")
+        print("    ! codex hooks are still installed and do NOT enforce.")
+        print("      Codex silently declines hooks no human has reviewed, so these look")
+        print("      active while checking nothing. `zerotrace off` removes them.")
+        for scope, path in stale:
+            print(f"      {scope:8} {path}")
 
     exe = _console_script()
     print(f"\n  entry point  {exe or 'not installed (hooks point at this checkout)'}")
@@ -260,11 +305,14 @@ def main(argv: list[str] | None = None) -> int:
                        help="this directory only (default: whole machine)")
         p.add_argument("--claude-only", action="store_true")
         p.add_argument("--codex-only", action="store_true")
+        p.add_argument("--codex-hooks", action="store_true",
+                       help="also write Codex hooks (only useful if you trusted them)")
         return p
 
-    scoped(sub.add_parser("enable", help="wire hooks into every harness found")
+    scoped(sub.add_parser("on", aliases=["enable"], help="activate everything")
            ).set_defaults(fn=_install)
-    scoped(sub.add_parser("disable", help="remove them")).set_defaults(fn=_uninstall)
+    scoped(sub.add_parser("off", aliases=["disable"], help="deactivate everything")
+           ).set_defaults(fn=_uninstall)
     sub.add_parser("status", help="what is wired and what is carried").set_defaults(fn=_status)
     sub.add_parser("reset", help="clear carried cross-call state").set_defaults(fn=_reset)
 
