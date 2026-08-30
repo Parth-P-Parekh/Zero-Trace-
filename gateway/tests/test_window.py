@@ -143,7 +143,11 @@ def test_session_id_is_not_written_to_the_filename(tmp_path):
 
 def run_hook(command: str, session: str, window_dir: Path):
     import os
-    env = {**os.environ, "ZT_CHECKER": "", "TMPDIR": str(window_dir),
+    # ZT_NO_DAEMON: these tests isolate the window through TMPDIR, and a shared daemon --
+    # possibly started by an earlier test with a different TMPDIR -- would answer from its
+    # own state and make the isolation a fiction. The daemon's own equivalent of this
+    # behaviour is covered in test_daemon.py.
+    env = {**os.environ, "ZT_CHECKER": "", "ZT_NO_DAEMON": "1", "TMPDIR": str(window_dir),
            "TEMP": str(window_dir), "TMP": str(window_dir)}
     return subprocess.run(
         [sys.executable, str(HOOK)],

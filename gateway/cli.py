@@ -321,7 +321,9 @@ def _status(args: argparse.Namespace) -> int:
 
 def _state_dir() -> Path:
     import tempfile
-    return Path(tempfile.gettempdir()) / "zerotrace-window"
+    from gateway.base.window import default_state_dir
+
+    return default_state_dir()
 
 
 def _state_counts() -> tuple[int, int, int]:

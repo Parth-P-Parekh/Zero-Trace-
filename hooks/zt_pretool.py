@@ -196,6 +196,32 @@ def run(event: dict) -> None:
 
     session_id = str(event.get("session_id") or "")
 
+    # The warm checker, before anything heavy is imported. This runs in front of EVERY
+    # tool call, and the imports below (asyncio, the pack, the scanners) measured at
+    # ~300ms -- fifteen seconds across a fifty-call session, for work that takes a tenth
+    # of a second. Reaching the daemon first is the entire saving; importing and then
+    # deciding to ask it would pay the cost anyway.
+    from hooks import daemon_client
+
+    fast = daemon_client.ask_tool(tool, args if isinstance(args, dict) else {}, session_id)
+    if fast is not None:
+        if not fast.get("allow", True):
+            classes = ", ".join(fast.get("classes") or []) or "sensitive data"
+            if fast.get("split"):
+                deny(
+                    f"ZeroTrace blocked this {tool} call: joined with the previous call "
+                    f"it forms {classes}. Nothing was run. Splitting a credential across "
+                    f"two commands does not divide it -- the file on the other end is "
+                    f"whole."
+                )
+            deny(
+                f"ZeroTrace blocked this {tool} call: its arguments contain {classes}. "
+                f"Nothing was run and nothing was sent. Reference the secret by name and "
+                f"let the command read it from the environment instead of inlining it."
+            )
+        allow()
+    daemon_client.start()
+
     # Reassembly by destination.
     #
     # A credential split across tool calls is invisible to each one alone. But a split

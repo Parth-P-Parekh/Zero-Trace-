@@ -55,6 +55,20 @@ MAX_CANDIDATES = 24
 
 DEFAULT_TTL_S = 3600
 
+
+def default_state_dir() -> Path:
+    """Where carried cross-call state lives.
+
+    Honours `ZT_HOME` so that every piece of ZeroTrace's state sits in one place: the
+    session, the local store, the learned pack and this. It fell back to the shared temp
+    directory before, which meant `ZT_HOME` isolated everything *except* the window --
+    so two test runs, or two checkouts, silently shared it.
+    """
+    home = os.environ.get("ZT_HOME")
+    if home:
+        return Path(home) / "window"
+    return Path(tempfile.gettempdir()) / "zerotrace-window"
+
 #: Anchors a fragment might be part-way through. A cheap "could this bridge anything?"
 #: filter, not a detector -- the detectors judge the join.
 _ANCHOR_HEADS = (
@@ -145,7 +159,7 @@ class CallWindow:
         window: int = DEFAULT_WINDOW,
         ttl_s: int = DEFAULT_TTL_S,
     ) -> None:
-        self._dir = Path(directory or (Path(tempfile.gettempdir()) / "zerotrace-window"))
+        self._dir = Path(directory) if directory else default_state_dir()
         self._window = window
         self._ttl = ttl_s
 
@@ -249,7 +263,7 @@ class SinkAssembly:
     __slots__ = ("_dir", "_ttl")
 
     def __init__(self, directory: str | Path | None = None, ttl_s: int = DEFAULT_TTL_S) -> None:
-        self._dir = Path(directory or (Path(tempfile.gettempdir()) / "zerotrace-window"))
+        self._dir = Path(directory) if directory else default_state_dir()
         self._ttl = ttl_s
 
     def _path(self, session_id: str, sink: str) -> Path:
@@ -404,7 +418,7 @@ class PromptWindow:
         ttl_s: int = DEFAULT_TTL_S,
         turns: int = MAX_PROMPT_TURNS,
     ) -> None:
-        self._dir = Path(directory or (Path(tempfile.gettempdir()) / "zerotrace-window"))
+        self._dir = Path(directory) if directory else default_state_dir()
         self._window = window
         self._ttl = ttl_s
         self._turns = turns

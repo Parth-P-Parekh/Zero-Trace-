@@ -137,6 +137,28 @@ def check_embedded(text: str, session_id: str) -> dict:
     }
 
 
+def check_local(text: str, session_id: str) -> dict:
+    """The warm daemon if there is one, this process if there is not.
+
+    The daemon is tried *before* the embedded checker's imports, because that is the only
+    place the saving exists: importing asyncio and building the pack and then deciding to
+    ask a daemon would pay the 300ms anyway.
+    """
+    from hooks import daemon_client
+
+    answer = daemon_client.ask(text, session_id)
+    if answer is not None:
+        # The daemon carried the cross-prompt window too, so the caller has nothing left
+        # to do -- see `_prompt_window`.
+        answer["window_done"] = True
+        return answer
+
+    # Nobody home. Start one for the next call, answer this one here. The first prompt of
+    # a session is not made slower by the thing that makes the rest faster.
+    daemon_client.start()
+    return check_embedded(text, session_id)
+
+
 # ------------------------------------------------------------------- service --
 
 def check_service(text: str, session_id: str, cwd: str | None) -> dict:
@@ -213,7 +235,7 @@ def run(event: dict) -> None:
         result = (
             check_service(text, session_id, event.get("cwd"))
             if CHECKER
-            else check_embedded(text, session_id)
+            else check_local(text, session_id)
         )
     except SystemExit:
         raise
@@ -242,12 +264,12 @@ def run(event: dict) -> None:
     # asking and whatever the policy says. The gov policy's only outbound clearance is
     # for citizen identifiers and deliberately does not extend here -- but the guarantee
     # cannot rest on a policy file being written correctly, so it is enforced in code.
-    role = _role_decision(text)
+    role = _role_decision(text) if _logged_in() else None
     classes = tuple(result.get("classes") or ())
 
     if not result.get("allow", False):
         if _has_credential(classes) or role is None or not role.allow:
-            deny(result.get("reason") or "ZeroTrace blocked this prompt.")
+            deny(_denial_reason(result))
         # else: policy cleared this actor for a non-credential class. Fall through.
     elif role is not None and not role.allow:
         deny(role.reason)
@@ -256,7 +278,7 @@ def run(event: dict) -> None:
     # whose first half was typed a turn ago, so the carried tail is joined to this
     # prompt's head and scanned once more. Both sides were allowed individually, so
     # anything found here exists only across the boundary.
-    window, joined = _prompt_window(), ""
+    window, joined = (None, "") if result.get("window_done") else (_prompt_window(), "")
     if window is not None:
         try:
             joined = window.bridge(session_id, text)
@@ -313,6 +335,41 @@ def _has_credential(classes: tuple) -> bool:
         # If we cannot tell, assume it is a credential. The safe direction is to keep the
         # block, never to hand policy a class it might be allowed to clear.
         return True
+
+
+def _denial_reason(result: dict) -> str:
+    """The message the user sees. A split needs its own, or it reads as a false positive.
+
+    "It contains a credential" is baffling when the prompt you just typed plainly does
+    not -- the half that completes it was in the previous message.
+    """
+    if result.get("split"):
+        classes = ", ".join(result.get("classes") or []) or "a credential"
+        return (
+            f"ZeroTrace blocked this prompt: joined with what you sent just before, it "
+            f"forms {classes}. Nothing was sent. Splitting a secret across two messages "
+            f"does not divide it -- the conversation holds both halves."
+        )
+    return result.get("reason") or "ZeroTrace blocked this prompt."
+
+
+def _logged_in() -> bool:
+    """Is there a session at all -- answered without importing anything.
+
+    `_role_decision` pulls in asyncio and the Part A stack, which measured at ~77ms and
+    ~40ms respectively. Paying that on every prompt to discover that nobody has run
+    `zerotrace login` would make the common case the expensive one.
+    """
+    import json as _json
+    import os as _os
+    from pathlib import Path as _Path
+
+    home = _Path(_os.environ.get("ZT_HOME") or (_Path.home() / ".zerotrace"))
+    try:
+        raw = _json.loads((home / "session.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(raw.get("tenant") and raw.get("actor"))
 
 
 def _role_decision(text: str):
