@@ -1,20 +1,20 @@
-import { Section, SectionHead, Source, Stat } from './Shared';
+import { Section, SectionHead, Source } from './Shared';
+import { Reveal, RevealGroup, RevealItem } from './Reveal';
 import { run } from '@/lib/benchmark';
 import { exact, micros, percent } from '@/lib/format';
 
 /**
  * Move 4: what it does, and what happened when it was tested.
  *
- * Every figure on this page now comes from `data/benchmark.json` rather than from
- * a string typed here, so the landing page and the console cannot drift apart -
- * and a number that changes on the next run changes in both places or in neither.
+ * The product and the evidence used to be two full sections, one of them dark,
+ * and together they were the longest stretch of the page. They are one section
+ * now: four claims, then the one dark card that carries what the run actually
+ * measured. That is the design system's own rule - one dark card per screen,
+ * spent on the thing that matters most - and here the thing that matters most
+ * is that the numbers are counts rather than projections.
  *
- * The dark section used to carry two placeholders: an escalation rate falling from
- * 8-12% to under 3%, and a cost per million tokens falling with it. Both were
- * labelled as unmeasured and both remain unmeasured - they describe the
- * self-teaching loop, which this run did not exercise at all. Rather than leave two
- * empty boxes on the loudest surface on the page, the section now carries what the
- * run actually proved. The saturation argument stays in the lead, as an argument.
+ * Every figure comes from `data/benchmark.json` rather than from a string typed
+ * here, so the landing page and the console cannot drift apart.
  */
 
 const { integrity, outcomes, latencyAsync, meta, byStage, byClass } = run;
@@ -22,87 +22,126 @@ const { integrity, outcomes, latencyAsync, meta, byStage, byClass } = run;
 const composite = byClass.find((c) => c.entityClass === 'QUASI_IDENTIFIER_SET')?.count ?? 0;
 const deterministic = byStage.S0 / Object.values(byStage).reduce((a, b) => a + b, 0);
 
-/** Third field is a caveat, rendered at ramp .36 like every other attribution. */
-const CLAIMS: Array<[string, string, string?]> = [
-  [micros(latencyAsync.p50_us), 'Added to a request, typical - against a model call of 300 to 2,000 ms.',
-    `Measured end to end over ${exact(meta.records)} requests.`],
-  ['One package', 'A dependency, not an infrastructure project. No proxy tier, no gateway, no endpoint agent.'],
-  ['One container', 'No GPU, no external classifier. Runs on infrastructure you already have.'],
-  ['Zero telemetry', 'Fully in-country, in your VPC, or air-gapped. The product cannot be the leak.'],
+const CLAIMS: Array<[string, string]> = [
+  [micros(latencyAsync.p50_us), 'added to a request, against a model call of 300 to 2,000 ms.'],
+  ['One package', 'a dependency, not an infrastructure project. No proxy tier, no endpoint agent.'],
+  ['One container', 'no GPU, no external classifier. Runs on what you already have.'],
+  ['Zero telemetry', 'in your VPC or air-gapped. The product cannot be the leak.'],
+];
+
+const MEASURED: Array<[string, string, string]> = [
+  [
+    percent(integrity.credential_block_rate, 1),
+    'of requests carrying a live key were stopped before the model saw one.',
+    `${exact(integrity.credential_records)} planted`,
+  ],
+  [
+    exact(composite),
+    'records identified where no single field in them was identifying.',
+    'the case entity filters have no answer for',
+  ],
+  [
+    String(outcomes.verify_failures),
+    'redactions where the original was still in the payload we sent.',
+    `${exact(outcomes.redactions_verified)} re-read before dispatch`,
+  ],
 ];
 
 export function Solution() {
   return (
-    <>
-      <Section id="solution" tight>
-        <SectionHead
-          step="03 · The product"
-          title="Nothing sensitive leaves. Everything still works."
-          lead="ZeroTrace redacts sensitive data on the way out and restores it on the way back, so the answer still lands. Credentials are the exception: a key is never tokenised, so a prompt carrying one is stopped."
-        />
+    <Section id="solution" tight>
+      <SectionHead
+        step="03 · The product"
+        title="Nothing sensitive leaves. Everything still works."
+        lead="Sensitive values are swapped for stand-ins on the way out, so the answer still lands. A credential is the exception: a key is never tokenised, so a prompt carrying one is stopped."
+      />
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(224px,1fr))', gap: 30 }}>
-          {CLAIMS.map(([value, body, note]) => (
-            <div key={value}>
-              <div
-                className="zt-nums"
-                style={{
-                  font: 'var(--w-medium) var(--t-21)/var(--lh-snug) var(--font-core)',
-                  letterSpacing: 'var(--tr-heading)', marginBottom: 10,
-                }}
-              >
-                {value}
-              </div>
-              <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)', maxWidth: '34ch' }}>
-                {body}
-              </p>
-              {note ? (
-                <p style={{ margin: '8px 0 0' }}>
-                  <Source>{note}</Source>
-                </p>
-              ) : null}
+      <RevealGroup
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 28 }}
+      >
+        {CLAIMS.map(([value, body], i) => (
+          <RevealItem key={value} index={i}>
+            <div
+              className="zt-nums"
+              style={{
+                font: 'var(--w-medium) var(--t-21)/var(--lh-snug) var(--font-core)',
+                letterSpacing: 'var(--tr-heading)', marginBottom: 8,
+              }}
+            >
+              {value}
             </div>
-          ))}
+            <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)', maxWidth: '32ch' }}>
+              {body}
+            </p>
+          </RevealItem>
+        ))}
+      </RevealGroup>
+
+      {/* The one dark card. It carries the measurement, because the measurement
+          is the only part of this section a competitor cannot also assert. */}
+      <Reveal
+        delay={1}
+        style={{
+          marginTop: 56, background: 'var(--surface-dark)', borderRadius: 'var(--r-16)',
+          boxShadow: 'var(--sh-3)', padding: '34px 34px 30px',
+        }}
+      >
+        <div className="zt-on-dark">
+          <div className="zt-eyebrow" style={{ color: 'rgba(242,242,240,0.52)', marginBottom: 16 }}>
+            Measured, not modelled
+          </div>
+          <p
+            style={{
+              font: 'var(--w-regular) clamp(21px, 2.2vw, 26px)/var(--lh-snug) var(--font-core)',
+              letterSpacing: 'var(--tr-heading)', margin: 0, maxWidth: '30ch',
+              color: 'var(--ink-inverse)',
+            }}
+          >
+            Five million requests, with the answers known in advance.
+          </p>
+          <p
+            style={{
+              font: 'var(--type-body-sm)', color: 'var(--text-on-dark-body)',
+              margin: '14px 0 34px', maxWidth: '58ch',
+            }}
+          >
+            You cannot measure a guardrail on live traffic, because nobody knows what was in it.
+            So the traffic was written: {exact(meta.records)} requests with the answer decided
+            before the test ran. {percent(deterministic, 0)} of what it found needed no model
+            call at all.
+          </p>
+
+          <RevealGroup
+            style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 32 }}
+          >
+            {MEASURED.map(([value, body, note], i) => (
+              <RevealItem key={value} index={i}>
+                <div
+                  className="zt-nums"
+                  style={{
+                    font: 'var(--w-semibold) clamp(26px, 2.8vw, 33px)/var(--lh-tight) var(--font-core)',
+                    letterSpacing: 'var(--tr-display)', color: 'var(--ink-inverse)', marginBottom: 10,
+                  }}
+                >
+                  {value}
+                </div>
+                <p style={{ margin: '0 0 8px', font: 'var(--type-body-sm)', color: 'var(--text-on-dark-body)', maxWidth: '32ch' }}>
+                  {body}
+                </p>
+                <Source onDark>{note}</Source>
+              </RevealItem>
+            ))}
+          </RevealGroup>
+
+          <p style={{ margin: '32px 0 0', maxWidth: '64ch' }}>
+            <Source onDark>
+              It also raised a false alarm on {percent(integrity.false_positive_rate, 1)} of clean
+              traffic, and missed keys typed with spaces in them. Both numbers are on the Detection
+              screen in the console rather than left off this page.
+            </Source>
+          </p>
         </div>
-      </Section>
-
-      <Section ground="dark" tight>
-        <SectionHead
-          step="03 · The evidence"
-          onDark
-          title="Five million requests, with the answers known in advance."
-          lead={`You cannot measure a guardrail on live traffic, because nobody knows what was in it. So we wrote the traffic: five million requests with the answer decided before the test ran. Every figure below is a count, not a projection - and ${percent(deterministic, 0)} of what it found needed no model call at all, which is why the cost does not climb with the model's price.`}
-        />
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 36 }}>
-          <Stat
-            onDark
-            value={percent(integrity.credential_block_rate, 1)}
-            body="of requests carrying a live key were stopped before the model saw one."
-            source={`Measured. ${exact(integrity.credential_records)} planted.`}
-          />
-          <Stat
-            onDark
-            value={exact(composite)}
-            body="records identified where no single field in them was identifying. Entity filters pass these."
-            source="Measured. The case the category has no answer for."
-          />
-          <Stat
-            onDark
-            value={String(outcomes.verify_failures)}
-            body="redactions where the original was still in the payload we sent."
-            source={`Measured. Every one of ${exact(outcomes.redactions_verified)} re-read before dispatch.`}
-          />
-        </div>
-
-        <p style={{ margin: '44px 0 0', maxWidth: '64ch' }}>
-          <Source onDark>
-            It also raised a false alarm on {percent(integrity.false_positive_rate, 1)} of clean
-            traffic, and missed keys typed with spaces in them. Both numbers, and what they cost,
-            are on the Detection screen inside the console rather than left off this page.
-          </Source>
-        </p>
-      </Section>
-    </>
+      </Reveal>
+    </Section>
   );
 }

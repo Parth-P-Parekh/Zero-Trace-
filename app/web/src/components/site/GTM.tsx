@@ -1,114 +1,103 @@
-import { Section, SectionHead, Stat, Pull } from './Shared';
+import { Section, SectionHead, Source } from './Shared';
+import { RevealGroup, RevealItem } from './Reveal';
 
 /**
- * Move 6: how we get in, why they pick us, and where it goes.
+ * Move 6: the next six months, one line each.
  *
- * Seven moves became four, because three of them were sequencing detail that
- * belongs in a plan rather than on a page.
+ * The section used to run to five years and three paragraphs a move. A five-year
+ * plan on a landing page is a statement of ambition, and a reader deciding
+ * something this quarter cannot act on one - so what survives is the window a
+ * first customer can actually be in.
+ *
+ * Each row is a month, a move and the rule it is pitched against, and nothing
+ * else. The rule is the whole content: "sell to government" is not a plan, and
+ * "Rule 155, so a purchase committee can sign it" is. The order matters more
+ * than the prose, and certification is first because it is the only item that
+ * money cannot speed up later.
  */
 
-const MOVES: Array<[string, string]> = [
-  ['Sell the audit, not the software', 'Nobody buys an unbudgeted security product; anyone can sanction a four-week assessment. The exposure report it produces creates the budget line for the year after. This is the whole entry strategy.'],
-  ['Be a component, not a procurement', 'Attach to programmes that are already funded and already sanctioned, instead of starting a new line item from zero.'],
-  ['Earn the procurement path in parallel', 'GeM, STQC, CERT-In empanelment. Slow, unglamorous, and the one moat a better-funded competitor cannot buy quickly.'],
-  ['Fund the long cycle with the short one', 'Regulated enterprise closes in weeks and needs the same product. It pays for the public-sector cycle that closes in quarters.'],
-];
+interface Move {
+  when: string;
+  title: string;
+  line: string;
+  cite?: string;
+  href?: string;
+}
 
-const HORIZON: Array<[string, string]> = [
-  ['Year 1', 'Two paid audits, one converted to a licence, certification started, enterprise self-serve live.'],
-  ['Year 2', 'Listed and partnered, so the second department is an order rather than a tender.'],
-  ['Year 3', 'Compositional detection and tamper-evident evidence written into buyers’ own specifications - competitors become non-compliant rather than merely pricier.'],
-  ['Years 4-5', 'The default for AI egress control here, then the same wedge in markets with the identical contradiction. The product does not change; the identifier pack and the procurement path do.'],
-];
-
-const WHY: Array<[string, string]> = [
-  ['They cannot certify fast', 'Hosting can be announced in a quarter. Empanelment cannot be compressed, and it has to be finished before the tender, not during it.'],
-  ['They classify spans; we score sets', 'Adding compositional risk means rebuilding the detection core. Rewrites do not happen inside a product absorbed into someone’s XDR roadmap.'],
-  ['Their cost curve points the wrong way', 'Per-request model calls get more expensive as adoption grows. Ours converges toward a CPU floor.'],
-  ['They govern laptops', 'The leak is server-side. That is an architectural position, not a feature gap.'],
+const MOVES: Move[] = [
+  {
+    when: 'Month 1',
+    title: 'Start certification',
+    line: 'The only item money cannot speed up later, and it has to be done before a tender, not during one.',
+    cite: 'STQC · CERT-In',
+    href: 'https://www.stqc.gov.in/',
+  },
+  {
+    when: 'Month 1–2',
+    title: 'Open with a free exposure run',
+    line: 'Thirty days in shadow mode inside their own VPC. Nothing is bought, so nothing has to be sanctioned.',
+    cite: 'DPDP Rules 2025',
+    href: 'https://www.meity.gov.in/data-protection-framework',
+  },
+  {
+    when: 'Month 2–3',
+    title: 'Attach to a funded programme',
+    line: 'A control placed on an AI project that is already sanctioned, not a new line item beside it.',
+    cite: 'IndiaAI Mission',
+    href: 'https://indiaai.gov.in/',
+  },
+  {
+    when: 'Month 3–4',
+    title: 'Take the first paid order',
+    line: 'One officer signs up to ₹50,000 with no quotation; a committee to ₹5,00,000 with no tender.',
+    cite: 'GFR 2017, Rule 154–155',
+    href: 'https://doe.gov.in/general-financial-rules',
+  },
+  {
+    when: 'Month 3–4',
+    title: 'Run the enterprise sale for cash',
+    line: 'AI egress is an open control gap in both frameworks, and it closes in weeks rather than quarters.',
+    cite: 'SEBI CSCRF',
+    href: 'https://www.sebi.gov.in/legal/circulars',
+  },
+  {
+    when: 'Month 4–6',
+    title: 'Get on the rate card',
+    line: 'A department that has to run a procurement will not. One that can place an order will.',
+    cite: 'NICSI · GeM',
+    href: 'https://gem.gov.in/',
+  },
 ];
 
 export function GTM() {
   return (
-    <>
-      <Section id="gtm" tight>
-        <SectionHead
-          step="05 · Go to market"
-          title="Four moves, in an order that matters."
-          lead="Start certification in month one and it is ready when the first large tender lands. Start it in month twelve and you watch someone else win on paperwork."
-        />
+    <Section id="gtm" tight>
+      <SectionHead
+        step="05 · Go to market"
+        title="Six months, six moves, and not one of them needs a tender."
+        lead="Every move names the rule it is pitched against."
+      />
 
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {MOVES.map(([title, body], i) => (
-            <div
-              key={title}
-              style={{
-                display: 'grid', gridTemplateColumns: '40px minmax(180px,260px) minmax(0,1fr)',
-                gap: 24, padding: '18px 0', alignItems: 'baseline',
-                boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-              }}
-            >
-              <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>
-                {String(i + 1).padStart(2, '0')}
-              </span>
-              <div style={{ font: 'var(--type-label)' }}>{title}</div>
-              <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)' }}>{body}</p>
-            </div>
-          ))}
-        </div>
-      </Section>
+      <RevealGroup>
+        {MOVES.map((m, i) => (
+          <RevealItem key={m.title} index={i} className="zt-lift">
+            <div className="zt-move">
+              <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{m.when}</span>
 
-      <Section ground="dark" tight>
-        <SectionHead
-          step="05 · Why us"
-          onDark
-          title="Why anyone picks this over a vendor with a hundred times the distribution."
-          lead="Not because it is better at everything. Because four of the gaps are structural, and a buyer who needs all four has one option."
-        />
+              <div style={{ font: 'var(--type-label)' }}>{m.title}</div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))', gap: 36 }}>
-          {WHY.map(([title, body]) => (
-            <div key={title}>
-              <h3 style={{ font: 'var(--type-h3)', color: 'var(--ink-inverse)', margin: '0 0 10px', maxWidth: '22ch' }}>
-                {title}
-              </h3>
-              <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-on-dark-body)', maxWidth: '40ch' }}>
-                {body}
+              <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)', maxWidth: '58ch' }}>
+                {m.line}
               </p>
+
+              <div className="zt-move-cite">
+                {m.cite ? <Source href={m.href}>{m.cite}</Source> : null}
+              </div>
             </div>
-          ))}
-        </div>
-      </Section>
-
-      <Section ground="card" tight>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 32, marginBottom: 44 }}>
-          <Stat value="$7.69B" body="AI prompt security by 2030, growing 31.1% a year." source="Research and Markets, 2026" />
-          <Stat value="11 weeks" body="Until DPDP enforcement powers begin. Full compliance follows in May 2027." source="DPDP Rules 2025" />
-          <Stat value="₹250 cr" body="Maximum penalty for one security failure, and penalties stack per category." source="DPDP Act 2023, Schedule" />
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {HORIZON.map(([when, what]) => (
-            <div
-              key={when}
-              style={{
-                display: 'grid', gridTemplateColumns: '110px minmax(0,1fr)', gap: 24,
-                padding: '16px 0', alignItems: 'baseline',
-                boxShadow: 'inset 0 -1px 0 var(--border-hairline)',
-              }}
-            >
-              <span className="zt-mono-sm" style={{ color: 'var(--text-faint)' }}>{when}</span>
-              <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)' }}>{what}</p>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 40 }}>
-          <Pull sub="Every figure here carries its source. Modelled numbers are labelled modelled, competitor performance figures are labelled as their claims. For a security product sold into procurement, that is not modesty - it is the shortest path to being believed.">
-            The honest version of this pitch is also the most persuasive one.
-          </Pull>
-        </div>
-      </Section>
-    </>
+            <div className="zt-hair" style={{ ['--i' as string]: i }} />
+          </RevealItem>
+        ))}
+      </RevealGroup>
+    </Section>
   );
 }
