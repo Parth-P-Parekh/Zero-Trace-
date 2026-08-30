@@ -76,8 +76,8 @@ SHOTS = [
         term="claude code",
         say=("An A I coding agent reads your files and runs your commands. "
              "Everything it touches lands in a transcript you cannot recall. "
-             "ZeroTrace asks two questions. May this person send this. "
-             "And may this person see this."),
+             "ZeroTrace asks two questions. May this person send this, "
+             "and may this person see this."),
         lines=[
             ("note", "an agent reads your files, runs your commands,"),
             ("note", "and everything it touches enters a transcript you cannot recall"),
@@ -93,7 +93,7 @@ SHOTS = [
         title="the half everyone has",
         term="claude code",
         say=("An A P I key in a prompt. Blocked before it left the machine. "
-             "Every tool does that. Here is the one they don't."),
+             "Every tool does that."),
         lines=[
             ("you", "my key is sk-ant-api03-x7Kq9mZp2Wv4Bn8Rt6Yu3Ia5... is it valid?", True),
             ("blank", ""),
@@ -104,13 +104,31 @@ SHOTS = [
         ],
     ),
     dict(
+        title="one key, two messages",
+        term="claude code",
+        say=("Now the same key, split across two messages. "
+             "The first half goes through, because on its own it is clean. "
+             "The second is blocked. Joined with what came before, it forms a credential. "
+             "The conversation holds both halves. So the check has to hold both halves."),
+        lines=[
+            ("you", "remember this prefix, I'll need it in a second: sk-ant-api03-x7Kq9", True),
+            ("allow", "▸ allowed - no credential in this message"),
+            ("blank", ""),
+            ("you", "and the rest is mZp2Wv4Bn8Rt6Yu3Ia5... now check the format", True),
+            ("block", "ZeroTrace blocked this prompt: joined with what you sent just"),
+            ("block", "before, it forms ANTHROPIC_KEY. Nothing was sent. Splitting a"),
+            ("block", "secret across two messages does not divide it -- the conversation"),
+            ("block", "holds both halves."),
+        ],
+    ),
+    dict(
         title="what you may not read",
         term="claude code  ·  signed in as s.iyer",
-        say=("A government caseworker opens a citizen case file. It works. Now a payslip. "
+        say=("A caseworker opens a citizen case file. It works. Now a payslip. "
              "Withheld. She is in citizen services. This is an H R record. "
-             "Rule three says those do not meet. "
-             "And look at what the refusal does not contain. Not one figure from that payslip. "
-             "The model reads our refusals. So the refusal is the last place a file can leak."),
+             "And look at what the refusal does not contain. "
+             "Not one figure from that payslip. "
+             "The model reads our refusals, so the refusal is the last place a file can leak."),
         lines=[
             ("cmd", "zerotrace login s.iyer", True),
             ("out", "Acting as s.iyer in bharat-digital   groups: citizen-services"),
@@ -128,11 +146,10 @@ SHOTS = [
     dict(
         title="the same file, a different person",
         term="claude code  ·  signed in as m.khan",
-        say=("Now watch. Different person. Same file. Same prompt. It works. "
-             "Nothing changed except who was asking. That came from a policy file "
-             "neither of them wrote, onto an audit chain neither can edit. "
-             "And the agent cannot route around it. Cat, grep, a shell redirect: "
-             "all the same read."),
+        say=("Different person. Same file. Same prompt. It works. "
+             "Nothing changed except who was asking, and that came from a policy file "
+             "neither of them wrote. The agent cannot route around it either. "
+             "Cat, grep, a shell redirect: all the same read."),
         lines=[
             ("cmd", "zerotrace logout && zerotrace login m.khan", True),
             ("out", "Acting as m.khan in bharat-digital   groups: hr-personnel"),
@@ -149,12 +166,11 @@ SHOTS = [
         term="terminal",
         say=("We gave this code to someone outside the team. They wrote their own harness, "
              "and found real holes. "
-             "Four of five sensitive documents released to everyone. A clinical note with an "
-             "Aadhaar number. A runbook with a production database password. "
-             "To an external contractor, and to an auditor with no clearance. "
-             "That was ours. This is their script, unedited. "
-             "Five of five now. And the infosec engineer still gets the runbook, "
-             "because a rule has to leave someone able to do the job."),
+             "Four of five sensitive documents released to everyone, including an auditor "
+             "with no clearance at all. That was ours. "
+             "This is their script, unedited. Five of five now. "
+             "And infosec still gets the runbook, because a rule has to leave someone "
+             "able to do the job."),
         lines=[
             ("cmd", "python zerotrace-test-harness/run.py rag_e2e", True),
             ("out", "--- cag.audit   role=auditor    groups=('audit',)"),
@@ -171,11 +187,10 @@ SHOTS = [
     dict(
         title="the receipt",
         term="terminal",
-        say=("When our detectors are unsure, a model is asked. After the response has gone, "
+        say=("When our detectors are unsure, a model is asked after the response has gone, "
              "and it never sees the text. Only a shape. "
              "Every decision is on a hash chained ledger. "
-             "Everyone can stop a key going out. "
-             "We also stop the payslip coming back."),
+             "Everyone stops a key going out. We also stop the payslip coming back."),
         lines=[
             ("note", "ACM-4417-KP  ─►  AAA-9999-AA     the model never sees the value"),
             ("blank", ""),
@@ -205,12 +220,23 @@ def sentences(text: str) -> list[str]:
 
 def speak(text: str, path: Path, voice: str = "Microsoft Zira Desktop",
           rate: int = 1) -> None:
-    """Render one shot's narration with Windows SAPI."""
+    """Render one shot's narration with Windows SAPI.
+
+    44.1 kHz 16-bit rather than the 22 kHz default. That, plus the loudnorm pass at
+    the mux, is where the intelligibility actually comes from -- a synthetic voice is
+    judged on clarity long before realism, and one at half the sample rate with drifting
+    levels sounds like a hold queue. The speaking *rate* turned out to matter much less,
+    so it stays at +1 and the two-minute cap survives.
+    """
+    fmt = ("New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo("
+           "44100, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, "
+           "[System.Speech.AudioFormat.AudioChannel]::Mono)")
     script = (
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
         f"$s.SelectVoice('{voice}'); $s.Rate = {rate}; "
-        f"$s.SetOutputToWaveFile('{path}'); "
+        f"$f = {fmt}; "
+        f"$s.SetOutputToWaveFile('{path}', $f); "
         f"$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()"
     )
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -334,7 +360,9 @@ def main() -> int:
         "eyebrow": font("seguisb.ttf", 21),
         "small": font("consola.ttf", 22),
         "mono": font("consola.ttf", 27),
-        "caption": font("seguisb.ttf", 40),
+        # Arial for the subtitle band: it is what a viewer expects a subtitle to
+        # look like, and bold carries better over a dark terminal at 1080p.
+        "caption": font("arialbd.ttf", 40),
     }
 
     # 1. Narration, and the durations it implies.
@@ -344,7 +372,7 @@ def main() -> int:
         wav = AUDIO / f"shot-{i}.wav"
         if not wav.exists():
             speak(shot["say"], wav)
-        dur = wav_seconds(wav) + 0.55          # a beat of air after each shot
+        dur = wav_seconds(wav) + 0.38          # a beat of air after each shot
         plan.append(dur)
         print(f"  shot {i + 1}  {dur:5.1f}s  {shot['title']}")
     total = sum(plan)
@@ -399,7 +427,11 @@ def main() -> int:
     subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
                     "-i", str(listing), "-c", "copy", str(track)], check=True)
     subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(silent),
-                    "-i", str(track), "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+                    "-i", str(track), "-c:v", "copy",
+                    # Broadcast-ish speech levelling: SAPI drifts a few dB between
+                    # shots, which reads as the narrator moving away from the mic.
+                    "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
                     "-shortest", str(OUT)], check=True)
 
     size = OUT.stat().st_size / 1e6
