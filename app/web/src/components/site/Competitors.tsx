@@ -17,7 +17,7 @@ const GAPS: Array<[string, string, string]> = [
 
 export function Competitors() {
   return (
-    <Section id="gaps" tight>
+    <Section id="gaps" ground="card" tight>
       <SectionHead
         step="02 · The gap"
         title="Every serious AI-security company is headquartered somewhere else."

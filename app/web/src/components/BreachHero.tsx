@@ -175,14 +175,6 @@ export function BreachHero() {
           </p>
         </div>
       </div>
-
-      <figcaption
-        style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)', marginTop: 14, maxWidth: '60ch' }}
-      >
-        The application that sent this was not modified. It resolved the provider domain and
-        ZeroTrace answered - the request stopped at the perimeter, and the caller got an error
-        naming what was in it.
-      </figcaption>
     </figure>
   );
 }
