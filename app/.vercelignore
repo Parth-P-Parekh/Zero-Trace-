@@ -1,0 +1,16 @@
+# The deployment root is `app/`, so only two things need to reach the builder:
+# `web/` (the Next app) and `ZeroTrace Design System/` (which `web` compiles from
+# source through a Turbopack alias). Everything below is either rebuilt on the
+# builder or has no business leaving this machine.
+
+node_modules
+.next
+*.tsbuildinfo
+
+# Research notes for the marketing copy. Not shipped.
+06_GOV_WEDGE_WEBSITE_CONTENT.md
+
+# The design system ships its sources because `web` imports the .jsx directly and
+# the folder is read-only - but its authoring material does not.
+ZeroTrace Design System/**/*.prompt.md
+ZeroTrace Design System/.thumbnail
