@@ -75,6 +75,9 @@ def _install(args: argparse.Namespace) -> int:
         else:
             print("  codex    command   no shell profile found; run `zerotrace codex`")
 
+    if args.as_actor:
+        _activate_role(args.as_actor, args.tenant)
+
     if args.vscode and not args.claude_only:
         _enable_side_panel()
     elif not args.claude_only:
@@ -351,6 +354,45 @@ def _check(args: argparse.Namespace) -> int:
     return 1
 
 
+def _activate_role(actor: str, tenant: str | None) -> None:
+    """Seed the local store if it is empty, then act as `actor`.
+
+    One flag rather than three commands, because "who am I" is part of attaching, not a
+    separate ceremony. Seeding only happens when the store has no such tenant -- running
+    `zerotrace on --as` twice must not overwrite an operator's real actors with the demo
+    ones.
+
+    **This is a local store, and it is a stand-in.** In a deployment the actors and their
+    groups come from the organisation's own directory; Part A resolves identity through
+    mTLS/OIDC. What this gives you is the same decision path with a store you can seed on
+    a laptop.
+    """
+    import asyncio
+
+    from gateway.part_a.session import login, plane, roles
+    from gateway.part_a.wiring import DEMO_TENANT, seed_demo
+
+    p = plane()
+    tenant = tenant or DEMO_TENANT
+
+    async def prepare():
+        if not await p.store.tenant_exists(tenant):
+            await seed_demo(p)
+        return {a for a, _r, _g in await roles(tenant)}
+
+    known = asyncio.run(prepare())
+    if actor not in known:
+        print(f"  role     !! {actor!r} is not in {tenant}")
+        print(f"           known: {', '.join(sorted(known)) or '(none)'}")
+        print("           `zerotrace roles` to list them; not logged in.")
+        return
+
+    login(actor, tenant)
+    groups = next(g for a, _r, g in asyncio.run(roles(tenant)) if a == actor)
+    print(f"  role     acting as {actor} ({', '.join(groups) or 'no groups'}) in {tenant}")
+    print(f"           prompts are now decided by this actor's policy too")
+
+
 # ----------------------------------------------------------------------- role --
 
 def _seed(args: argparse.Namespace) -> int:
@@ -495,6 +537,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="this directory only (default: whole machine)")
         p.add_argument("--claude-only", action="store_true")
         p.add_argument("--codex-only", action="store_true")
+        p.add_argument("--as", dest="as_actor", metavar="ACTOR",
+                       help="act as this person; seeds the local store if empty")
+        p.add_argument("--tenant", help="organisation for --as")
         p.add_argument("--vscode", action="store_true",
                        help="also point the VS Code side panel at ZeroTrace; the vendor "
                             "marks that setting DEVELOPMENT ONLY, so it is opt-in")

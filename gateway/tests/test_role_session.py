@@ -197,3 +197,44 @@ def test_the_store_holds_no_credential(home):
         blob += str(loop.run_until_complete(kv.lrange(key, 0, -1)))
     assert _key() not in blob
     assert "AbC9dEf2GhI4jKl6MnO8pQr0StU1vWx3Yz5" not in blob
+
+
+# ------------------------------------------------------------- one-flag attach --
+
+def test_on_with_as_seeds_and_logs_in(home, monkeypatch, tmp_path):
+    """`zerotrace on --as s.iyer` is the whole ceremony: attach and be someone."""
+    from gateway.cli import _activate_role
+    from gateway.part_a.session import current, logout
+
+    logout()
+    _activate_role("s.iyer", None)
+    assert current().actor == "s.iyer"
+    assert current().tenant == AGENCY
+
+
+def test_seeding_does_not_overwrite_an_existing_tenant(home):
+    """Running it twice must not replace an operator's real actors with the demo ones."""
+    import asyncio
+
+    from gateway.cli import _activate_role
+    from gateway.part_a.session import plane
+
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    loop.run_until_complete(
+        plane().store.put_actor(AGENCY, "local.person", role="officer", groups=("revenue",))
+    )
+    _activate_role("s.iyer", None)
+
+    still = loop.run_until_complete(plane().store.get_actor(AGENCY, "local.person"))
+    assert still is not None, "seeding clobbered an actor that was already there"
+
+
+def test_an_unknown_actor_does_not_log_you_in(home, capsys):
+    """Half-attached is worse than not: you would think a role was applying and it is not."""
+    from gateway.cli import _activate_role
+    from gateway.part_a.session import current, logout
+
+    logout()
+    _activate_role("nobody-here", None)
+    assert current() is None
+    assert "not in" in capsys.readouterr().out
