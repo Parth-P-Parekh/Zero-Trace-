@@ -26,8 +26,9 @@ import math
 from dataclasses import dataclass
 from typing import Sequence
 
-import ahocorasick  # pyahocorasick
-import re2  # google-re2
+# Resolved backends, so a machine without the extras degrades to the pure-Python
+# fallbacks instead of failing to import. See gateway/base/scanner.py.
+from gateway.base.scanner import Automaton, regex as re2
 
 from gateway.contracts.entity_classes import EntityClass, Family, CLASS_TO_FAMILY
 from gateway.spans import Span, Finding, deduplicate_findings, Leg
@@ -156,20 +157,20 @@ for _idx, _det in enumerate(_DETECTORS):
 # T1: Aho-Corasick automaton — built ONCE at module load
 # ────────────────────────────────────────────────────────────────────
 
-def _build_automaton() -> ahocorasick.Automaton:
+def _build_automaton() -> Automaton:
     """Build the AC automaton over all literal anchors.
 
     Built once per detector-pack load, never per request.
     Returns candidate offsets, not final matches.
     """
-    A = ahocorasick.Automaton()
+    A = Automaton()
     for anchor in _ANCHOR_TO_DETECTORS:
         A.add_word(anchor, anchor)
     A.make_automaton()
     return A
 
 
-_AUTOMATON: ahocorasick.Automaton = _build_automaton()
+_AUTOMATON = _build_automaton()
 
 
 def rebuild_automaton() -> None:
