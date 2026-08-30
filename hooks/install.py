@@ -32,7 +32,15 @@ HOOKS = (
         # PowerShell is here because leaving it out was a real hole: on Windows it is a
         # full shell, and while this tool was blocking its own development it was the
         # one write path still open.
-        "Bash|PowerShell|apply_patch|Write|Edit|NotebookEdit|WebFetch|WebSearch|mcp__.*",
+        #
+        # Read, Grep and NotebookRead are here because leaving them out was a worse one.
+        # The clearance gate lives in zt_pretool and was tested by invoking that script
+        # directly -- which bypasses this matcher entirely -- so every test passed while
+        # a real `Read` in a real session was never handed to the hook at all. Reads only
+        # got gated when they happened to go through Bash. The headline behaviour of the
+        # product was, on the harness people actually use, off.
+        "Bash|PowerShell|apply_patch|Write|Edit|NotebookEdit|WebFetch|WebSearch"
+        "|Read|Grep|NotebookRead|mcp__.*",
         "ZeroTrace checking tool call...",
     ),
 )

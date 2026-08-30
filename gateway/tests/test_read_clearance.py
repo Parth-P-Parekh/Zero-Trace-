@@ -539,3 +539,30 @@ def test_an_unknown_reader_is_gated_and_an_unknown_writer_is_not():
     assert candidate_paths("mcp__docs__get_document", {"path": faq})
     assert candidate_paths("mcp__fs__save_note", {"path": faq}) == []
     assert candidate_paths("mcp__fs__write_file", {"path": faq}) == []
+
+
+def test_the_installed_matcher_actually_reaches_the_read_tools():
+    """The gate is worthless if the harness never invokes it.
+
+    Every other test in this file calls `zt_pretool` directly, which bypasses the
+    PreToolUse *matcher* in the installed settings. That matcher listed Bash, Write,
+    Edit and the rest but not Read or Grep -- so on a real Claude Code session a `Read`
+    was never handed to the hook, and reads were only gated when they happened to go
+    through Bash. Every test passed the whole time.
+
+    This pins the matcher to the tools the gate claims to handle, so the two cannot
+    drift apart again.
+    """
+    import re
+
+    from hooks.install import HOOKS
+    from gateway.part_a.reading import READ_TOOLS
+
+    matcher = next(h[2] for h in HOOKS if h[0] == "PreToolUse")
+    for tool in sorted(READ_TOOLS):
+        assert re.fullmatch(matcher, tool), (
+            f"{tool} is gated by reading.py but the installed matcher never sends it"
+        )
+    # The write-side tools stay matched too: their arguments still carry payloads.
+    for tool in ("Bash", "Write", "Edit", "mcp__fs__read_file"):
+        assert re.fullmatch(matcher, tool), f"{tool} fell out of the matcher"
