@@ -354,7 +354,7 @@ outbound credential blocking is the beat that must work first.
 
 ### B.4 Scan architecture — prefilter, not a regex loop
 
-**Review finding (Sohil, T-review 1):** *don't run the regexes sequentially; Hyperscan or
+**Review finding (T-review 1):** *don't run the regexes sequentially; Hyperscan or
 pyahocorasick is better.*
 
 Accepted in substance, with one substitution. CODE-01 §6.1(a) already says "a single
@@ -373,7 +373,7 @@ a full pass over every byte for patterns that will almost never match.
 Entropy scanning (§6.1(c)) runs last and only over spans that survived T1–T3 unresolved,
 because it is the one sub-pass whose cost is proportional to content rather than to matches.
 
-**Why Aho-Corasick and not Hyperscan.** Sohil named Hyperscan first and it is the
+**Why Aho-Corasick and not Hyperscan.** The reviewer named Hyperscan first and it is the
 better-engineered library, but three properties make it the wrong choice *here*:
 
 1. **Portability.** Hyperscan is x86_64. The team is mixed Windows/macOS (CODE-01 §1) and
@@ -397,7 +397,7 @@ Hyperscan/Vectorscan in the Rejected column.*
 
 ### B.5 The conversation-resend problem — span-level memoisation
 
-**Review finding (Sohil, T-review 1):** *chat APIs have no memory; every message resends the
+**Review finding (T-review 1):** *chat APIs have no memory; every message resends the
 whole conversation, so we are re-scanning the same text over and over.*
 
 **This is the most valuable point in the review and it appears nowhere in CODE-01.** It is
@@ -451,7 +451,7 @@ sees novel text every time and gets no benefit; that is expected, not a bug.
 
 ### B.6 Detector confidence as a measured posterior
 
-**Review finding (Sohil, T-review 1):** *have some probability of success on the pattern
+**Review finding (T-review 1):** *have some probability of success on the pattern
 checks; run them on every message with some feedback.*
 
 Today every confidence in CODE-01 is a hardcoded constant — S1 key-name proximity is 0.9,
@@ -485,7 +485,7 @@ column exist now costs nothing.
 
 ### B.7 On the 3ms S0 budget
 
-**Review finding (Sohil, T-review 1):** *why is the regex scan estimated at 3ms?*
+**Review finding (T-review 1):** *why is the regex scan estimated at 3ms?*
 
 Straight answer: **it is a top-down allocation, not a measurement.** The ~25ms end-to-end
 target was divided across S0–S6 and S0 got 3ms. No one has benchmarked it. It is in

@@ -1,6 +1,6 @@
 # ZeroTrace — Independent Test Report
 
-**Subject:** `Zero-Trace--main` as committed to `C:\Users\go4sh\Desktop\EasyChip\ZeroTrace`
+**Subject:** `Zero-Trace--main`, as committed at the time of testing
 **Date of testing:** 30 August 2026
 **Tested by:** an independent harness written against the code, not by the ZeroTrace team
 **Scope:** detection accuracy, latency, concurrency, multi-user and multi-tenant isolation,
