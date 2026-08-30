@@ -24,6 +24,22 @@ START = "# >>> zerotrace >>>"
 END = "# <<< zerotrace <<<"
 
 
+def _ps_call(command: str, indent: str) -> str:
+    """Invoke the launcher, forwarding pipeline input only when there is some.
+
+    A PowerShell function does not pass its pipeline input on to a native command, so a
+    plain `& zerotrace codex @args` makes `Get-Content prompt.txt | codex` see EOF
+    immediately -- the session starts and exits without reading anything. Piping `$input`
+    unconditionally is the mirror-image bug: with no pipeline it is empty, and feeding an
+    empty pipeline closes stdin, which breaks interactive use. `ExpectingInput` is what
+    distinguishes the two cases.
+    """
+    return (
+        f"{indent}if ($MyInvocation.ExpectingInput) {{ $input | {command} codex @args }}\n"
+        f"{indent}else {{ {command} codex @args }}\n"
+    )
+
+
 def _powershell_body(command: str, root: str | None) -> str:
     # A function, not Set-Alias: aliases in PowerShell cannot carry arguments.
     #
@@ -31,16 +47,17 @@ def _powershell_body(command: str, root: str | None) -> str:
     # parsed as a string *expression*, so `"C:\...\python.exe" -m gateway.cli` would
     # print the path and run nothing, and `codex` would silently do nothing at all.
     command = f"& {command}"
+    if not root:
+        return f"{START}\nfunction codex {{\n{_ps_call(command, '  ')}}}\n{END}\n"
     # PYTHONPATH is saved and restored rather than set, because this shadows `codex` for
     # the whole session and must not leave the environment altered behind it.
-    if not root:
-        return f"{START}\nfunction codex {{ {command} codex @args }}\n{END}\n"
     return (
         f"{START}\n"
         f"function codex {{\n"
         f"  $old = $env:PYTHONPATH\n"
         f"  $env:PYTHONPATH = '{root}'\n"
-        f"  try {{ {command} codex @args }} finally {{ $env:PYTHONPATH = $old }}\n"
+        f"  try {{\n{_ps_call(command, '    ')}  }}\n"
+        f"  finally {{ $env:PYTHONPATH = $old }}\n"
         f"}}\n"
         f"{END}\n"
     )

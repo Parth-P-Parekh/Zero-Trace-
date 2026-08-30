@@ -134,3 +134,25 @@ def test_fallback_shim_sets_pythonpath_in_both_shells(tmp_path):
     assert "& py -m gateway.cli codex @args" in body
     # Restored, because this shadows `codex` for the whole session.
     assert "finally { $env:PYTHONPATH = $old }" in body
+
+
+def test_powershell_shim_forwards_piped_input(tmp_path):
+    """`Get-Content prompt.txt | codex` must reach the child.
+
+    A PowerShell function does not pass pipeline input to a native command, so without
+    this the session started and saw EOF at once -- found by piping into it, not by
+    reading it.
+    """
+    p = _ps(tmp_path)
+    shim.apply(paths=[p], command="zerotrace")
+    body = p.read_text(encoding="utf-8")
+    assert "$MyInvocation.ExpectingInput" in body
+    assert "$input | & zerotrace codex @args" in body
+
+
+def test_powershell_shim_still_works_without_a_pipeline(tmp_path):
+    """Piping $input unconditionally would close stdin and break interactive use."""
+    p = _ps(tmp_path)
+    shim.apply(paths=[p], command="zerotrace")
+    body = p.read_text(encoding="utf-8")
+    assert "else { & zerotrace codex @args }" in body
