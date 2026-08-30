@@ -209,3 +209,79 @@ async def test_a_confidence_floor_can_be_set():
     findings = await detector.scan(_payload("key " + _key()), "outbound")
     assert all(f.confidence >= 0.9 for f in findings)
     assert {f.entity_class for f in findings} == {"ANTHROPIC_KEY"}
+
+
+# ------------------------------------------------ advisory findings feed Loop 2 --
+
+async def test_a_withheld_advisory_finding_reaches_the_intel_plane():
+    """It is withheld from policy, not discarded.
+
+    A high-entropy run no detector claimed is the most interesting signal we have: a novel
+    credential, an encoding we do not decode, or an attempt to smuggle something past the
+    rules. It guards what reaches the model.
+    """
+    from gateway.intel.agent import IntelPlane
+
+    intel = IntelPlane()
+    await RootDetector(intel=intel).scan(_payload("key " + _key()), "outbound")
+
+    assert len(intel.queue) == 1
+    features = intel.queue.drain()[0]
+    assert features.entropy > 3.0
+    assert features.leg == "outbound"
+
+
+async def test_the_escalation_carries_no_text():
+    """Loop 2 is blind by construction. A text field here reopens the privacy hole."""
+    from gateway.intel.agent import IntelPlane
+
+    intel = IntelPlane()
+    await RootDetector(intel=intel).scan(_payload("key " + _key()), "outbound")
+    payload = intel.queue.drain()[0].to_payload()
+
+    flat = str(payload)
+    assert _key() not in flat
+    assert "AbC9dEf2GhI4jKl6MnO8pQr0StU1vWx3Yz5" not in flat
+    assert "sk-ant" not in flat
+
+
+async def test_the_escalation_names_the_classes_found_alongside_it():
+    """`ANTHROPIC_KEY` beside a high-entropy run is what makes the run explainable."""
+    from gateway.intel.agent import IntelPlane
+
+    intel = IntelPlane()
+    await RootDetector(intel=intel).scan(_payload("key " + _key()), "outbound")
+    features = intel.queue.drain()[0]
+    assert "ANTHROPIC_KEY" in features.neighbour_classes
+
+
+async def test_a_clean_payload_escalates_nothing():
+    from gateway.intel.agent import IntelPlane
+
+    intel = IntelPlane()
+    await RootDetector(intel=intel).scan(_payload("refactor the retry loop"), "outbound")
+    assert len(intel.queue) == 0
+
+
+async def test_escalation_failure_never_breaks_the_scan():
+    """A lost escalation costs a future improvement, never this request."""
+
+    class Broken:
+        def maybe_escalate(self, features):
+            raise RuntimeError("intel plane is down")
+
+    findings = await RootDetector(intel=Broken()).scan(
+        _payload("key " + _key()), "outbound"
+    )
+    assert any(f.entity_class == "ANTHROPIC_KEY" for f in findings)
+
+
+async def test_nothing_is_escalated_when_advisory_findings_are_forwarded():
+    """If policy is getting them, Loop 2 does not also need them."""
+    from gateway.intel.agent import IntelPlane
+
+    intel = IntelPlane()
+    await RootDetector(intel=intel, include_advisory=True).scan(
+        _payload("key " + _key()), "outbound"
+    )
+    assert len(intel.queue) == 0

@@ -18,15 +18,23 @@ does not — `token`, `adjudicated`, `exception_applied` — and every one of th
 by *policy*, not by detection. Filling them here would be the detector claiming authority
 over decisions that are Part A's to make, so they keep their defaults.
 
-**Advisory findings are withheld, and that is a real gap rather than a preference.** Our
-`Finding` carries `advisory_only`, and the contract names `HIGH_ENTROPY_STRING` in
+**Advisory findings are withheld from policy and sent to Loop 2 instead.** Our `Finding`
+carries `advisory_only`, and the contract names `HIGH_ENTROPY_STRING` in
 `NEVER_ENFORCE_ALONE`: a 0.55-confidence entropy hit is corroboration, never grounds to
 act. Part A's `Finding` has no field for that, so anything sent across arrives looking
-enforceable. Scanning one credential emits both `ANTHROPIC_KEY` at 0.99 and
-`HIGH_ENTROPY_STRING` at 0.55; forwarding the second unmarked would offer the policy
-engine a reason to block that we do not stand behind. Passing them needs a field on their
-side — a two-track change, like adding a vocabulary class — so until then they are
-dropped, and `include_advisory=True` exists for a caller who knows what it is asking for.
+enforceable — forwarding it unmarked would offer the policy engine a reason to block that
+we do not stand behind.
+
+But it is not noise, and dropping it would waste the most interesting signal we have. A
+high-entropy run that no detector claimed is exactly what a novel credential, an encoding
+we do not decode, or an attempt to smuggle something past the rules looks like. So it goes
+to the intel plane, which is blind by construction: `EscalationFeatures` carries a shape,
+a length, a charset and an entropy score, never the text. Loop 2 proposes *additional
+checks for later calls*; it cannot gate this one, and it never sees the prompt.
+
+This is inbound-side protection — it guards what reaches the model, not what the model
+says back. `include_advisory=True` still forwards them to policy for a caller who knows
+what it is asking for.
 
 Neither `Finding` has ever carried the matched value, and that survives the conversion:
 what crosses is a class, a path, offsets and a confidence.
@@ -49,7 +57,7 @@ class RootDetector:
     #: response header and in the ledger, and `None` is how it says the scan was genuine.
     degrade_reason: str | None = None
 
-    __slots__ = ("_check", "_min_confidence", "_include_advisory")
+    __slots__ = ("_check", "_min_confidence", "_include_advisory", "_intel", "_key")
 
     def __init__(
         self,
@@ -57,22 +65,27 @@ class RootDetector:
         *,
         min_confidence: float = 0.0,
         include_advisory: bool = False,
+        intel: Any = None,
     ) -> None:
         self._check = check
         self._min_confidence = min_confidence
         self._include_advisory = include_advisory
+        self._intel = intel
+        self._key: bytes | None = None
 
     # -- the seam --
 
     async def scan(self, payload: dict, leg: str) -> list[Any]:
         from zerotrace.spans.model import Finding as PartAFinding
 
-        findings = await self._scan_root(payload, leg)
+        findings, spans = await self._scan_root(payload, leg)
         out: list[Any] = []
+        withheld: list[Any] = []
         for f in findings:
             if f.confidence < self._min_confidence:
                 continue
             if getattr(f, "advisory_only", False) and not self._include_advisory:
+                withheld.append(f)
                 continue
             out.append(
                 PartAFinding(
@@ -86,11 +99,48 @@ class RootDetector:
                     end=int(getattr(f, "end", 0) or 0),
                 )
             )
+        self._escalate(withheld, spans, findings)
         return out
+
+    # -- loop 2 --
+
+    def _escalate(self, withheld: list[Any], spans: list[Any], all_findings: list[Any]) -> None:
+        """Hand the shape of a withheld finding to the blind agent.
+
+        Never awaited and never on the decision path: `maybe_escalate` enqueues and
+        returns, and Loop 2 proposes checks for *later* calls. A model round trip is
+        300-2000ms, and this sits in front of every request.
+        """
+        if not withheld or self._intel is None:
+            return
+        try:
+            from gateway.intel.features import features_of
+
+            by_path = {s.path: s for s in spans}
+            for f in withheld:
+                span = by_path.get(f.span_path)
+                if span is None:
+                    continue
+                self._intel.maybe_escalate(
+                    features_of(span, (f,), self._tenant_key(),
+                                neighbours=tuple(
+                                    o.entity_class for o in all_findings if o is not f
+                                ))
+                )
+        except Exception:  # noqa: BLE001
+            # Losing an escalation costs a future improvement, never this request.
+            pass
+
+    def _tenant_key(self) -> bytes:
+        import os
+
+        if self._key is None:
+            self._key = os.environ.get("ZT_VAULT_MASTER_KEY", "dev-key").encode()
+        return self._key
 
     # -- the root scan --
 
-    async def _scan_root(self, payload: dict, leg: str) -> list[Any]:
+    async def _scan_root(self, payload: dict, leg: str) -> tuple[list[Any], list[Any]]:
         checker = self._check or _default_checker()
         raw = json.dumps(payload).encode("utf-8")
         try:
@@ -100,11 +150,11 @@ class RootDetector:
             # what to do with an empty finding list plus a degrade reason; inventing
             # findings here would be worse, and so would claiming a clean scan.
             self.degrade_reason = "payload_unparseable"
-            return []
+            return [], []
 
         tree = _tree(raw, spans, leg)
         result = await checker.check(tree, "part-a")
-        return list(getattr(result, "findings", ()) or ())
+        return list(getattr(result, "findings", ()) or ()), spans
 
 
 def _class_value(entity_class: Any) -> str:

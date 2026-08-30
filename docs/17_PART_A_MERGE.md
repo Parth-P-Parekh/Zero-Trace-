@@ -89,10 +89,9 @@ From `docs/superpowers/plans/2026-08-30-part-a-root-integration.md`, amended for
 
 - [x] **1. Package for root imports** — both distributions install and import together
 - [x] **2. One canonical vocabulary** — `spans/vocab.py` deleted; Part A imports our enum
-- [~] **3. Request-scoped adapter** — `RootDetector` fills the seam; identity and policy
-      resolution still to come
-- [ ] **4. Evidence in dual ledgers** — now against `store/ledger.py`
-- [ ] **5. Patch the root HTTP pipeline**
+- [x] **3. Request-scoped adapter** — `RootDetector`, `PartAStore`, `PartAContext`
+- [x] **4. Evidence in dual ledgers** — against `store/ledger.py`, written before dispatch
+- [x] **5. Patch the root HTTP pipeline** — `_part_a_gate`, off unless `ZT_PART_A=1`
 - [ ] **6. Mount the control plane**
 - [ ] **7. Replace the standalone E2E route** — no Docker; native Redis
 - [ ] **8. Manual and complete verification**
@@ -153,3 +152,54 @@ whole Redis key space is swept for the fixture literal.
 
 Still open for a *full* end-to-end: identity resolution, the real policy engine deciding
 the action rather than the test asserting it, and the HTTP pipeline (Tasks 3–5).
+
+
+## Tasks 3-5: the product runs end to end
+
+    HTTP request
+      -> root detects (extract_spans -> Checker)
+      -> Part A resolves the caller           (registered, or explicitly unregistered)
+      -> the real policy engine decides       (shipped acme-tech.yaml, not a fixture)
+      -> the decision is recorded             (dp chain, before anything is dispatched)
+      -> dispatch, or refuse
+
+`gateway/part_a/` holds it: `store.py` (actors, tenants, policies on Redis), `context.py`
+(resolve → decide → record), `detector.py` (our detector in their seam), `wiring.py`
+(construction and the on/off switch).
+
+**Off unless `ZT_PART_A=1`.** Part A needs a tenant, a published policy and a store; a
+gateway that refused every request for want of a seed would be a worse default than one
+that keeps the behaviour it had. Once on, it fails closed: an unknown tenant or a missing
+policy is a 403, and a failed ledger write is a 503 rather than an unrecorded dispatch.
+
+### Two ordering bugs found by running it
+
+**Evidence was being skipped for blocked requests.** The gate was placed after the root's
+own block path, which returns early — so exactly the requests most worth recording left no
+trace. The gate now runs before that branch. A request the root blocks is still a request
+the control plane must account for.
+
+**A blocked request must not produce two different refusals.** When the root has already
+blocked, Part A records its decision but does not replace the provider-shaped response.
+That shape is deliberate: a harness handed a well-formed provider reply keeps working,
+where a bare 403 makes it error. Part A's own 403 fires only when the root would have
+allowed — which has its own test, since a gate that never independently refuses is
+decoration.
+
+### What is verified
+
+- the shipped policy, not a fixture, decides — the test asserts only that what it decided
+  was carried out and recorded
+- the record binds to the exact policy row by content hash, so an auditor can prove which
+  rules ran
+- the chain verifies after mixed traffic
+- no credential reaches the store, swept over the whole Redis key space after real HTTP
+- with Part A off, a gateway with nothing seeded still serves
+
+## Still open
+
+Tasks 6-8: mounting the control-plane API, replacing the standalone E2E route, and manual
+verification. Identity is still header-based (`X-ZeroTrace-Actor`), which is spoofable —
+Part A's mTLS/OIDC path needs a request object this layer does not have. What Part A adds
+today is that an *unknown* actor is recorded as unregistered and decided as such, instead
+of being waved through as `anonymous`.
