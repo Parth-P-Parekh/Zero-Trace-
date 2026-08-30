@@ -61,9 +61,9 @@ export function Solution() {
         />
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 36 }}>
-          <Stat onDark value="8-12% → <3%" body="Escalation rate, launch to maturity." source="Benchmark corpus, three runs" />
-          <Stat onDark value="₹0.75 → ₹0.52" body="COGS per 1M tokens scanned, still falling." source="Unit economics, modelled" />
-          <Stat onDark value="0.78" body="Composite risk on a record with no name, no ID, no phone - and no flaggable entity." source="Derived, not asserted" />
+          <Stat onDark value="8-12% → <3%" body="Escalation rate, launch to maturity." source="Placeholder. Target, not yet measured." />
+          <Stat onDark value="₹0.75 → ₹0.52" body="COGS per 1M tokens scanned, still falling." source="Placeholder. Tracks model cost, not yet measured." />
+          <Stat onDark value="0.78" body="Composite risk on a record with no name, no ID, no phone - and no flaggable entity." source="Placeholder. Formula holds; its inputs are not calibrated." />
         </div>
 
         <div style={{ marginTop: 44 }}>
