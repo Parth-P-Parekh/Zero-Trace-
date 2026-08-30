@@ -13,7 +13,7 @@ import { SHELL, Source } from './Shared';
 const BEATS: Array<[string, string]> = [
   ['The install', 'One dependency added to an app. The next prompt it sends is already inspected.'],
   ['The catch', 'A transcript with a name, a PAN and a live key. The name and PAN go upstream tokenized. The key never leaves.'],
-  ['The invisible leak', 'A record with no name and no ID. Every entity filter passes it. Composite risk 0.78, and which combination identifies the person.'],
+  ['The invisible leak', 'A record with no name and no ID. Every entity filter passes it. ZeroTrace names the combination that identifies the person.'],
   ['It teaches itself', 'A leak class absent from the rule pack, caught, written into a detector, promoted. Send it again: 3ms, no model call.'],
   ['The evidence', 'Kill the process, restart, the token still resolves and the ledger verifies. Then the counterfactual.'],
 ];
