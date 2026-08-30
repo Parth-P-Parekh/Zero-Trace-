@@ -89,38 +89,70 @@ zerotrace off             # remove exactly what was installed, and nothing else
 Restart any Claude Code session that was already open — a session keeps the configuration
 it started with.
 
-**Codex** is covered by app-server mediation rather than hooks, because Codex declines
-hooks no human has reviewed and would otherwise look protected while enforcing nothing
-(`docs/14`). `zerotrace on` puts ZeroTrace in front of the `codex` command; the VS Code
-side panel is a separate client and needs `zerotrace on --vscode`.
+### Codex — mediated, not hooked
 
-### Claude Desktop — not covered yet, and here is why
+Codex gets a different mechanism, and the reason matters: **Codex silently declines hooks
+no human has reviewed.** Write them anyway and the config looks correct, the files are in
+place, and nothing is enforced — the worst possible state for a security tool. So instead
+of hooks, ZeroTrace goes *in front of* the `codex` command and speaks its app-server
+protocol (`docs/14`, `docs/15`).
 
-Claude Desktop does not run Claude Code hooks. It talks to **MCP servers**, which is a
-different integration surface, and ZeroTrace does not ship one today. Anyone telling you
-otherwise has not tried it.
+**1. Install.** The same command covers it:
 
-The path is short and the pieces already exist. Every decision in this product is made by
-`PartAContext` behind an interface that neither the hooks nor the HTTP gateway know
-anything special about, and the read gate already understands MCP tool shapes — it gates
-`mcp__*` tools by their path arguments and classifies unknown servers by name
-(`gateway/part_a/reading.py`). What is missing is the server itself: a stdio MCP server
-that wraps a downstream server's tools, runs each call through the same checker and policy,
-and returns the same refusal text. That would drop into `claude_desktop_config.json` beside
-whatever servers you already run:
-
-```jsonc
-// what this would look like — not yet implemented
-{
-  "mcpServers": {
-    "filesystem": { "command": "zerotrace-mcp",
-                    "args": ["--wrap", "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"] }
-  }
-}
+```bash
+zerotrace on
 ```
 
-Until that exists, the honest coverage statement is: **Claude Code on any IDE, Codex via
-mediation, browsers via the extension, and any client you point at the gateway.**
+This writes a shell alias into your profile, between markers so `zerotrace off` removes
+exactly what it added and nothing else. On Windows that is the PowerShell
+`CurrentUserAllHosts` profile; on macOS and Linux it is `~/.bashrc` and `~/.zshrc`, and
+only the ones that already exist — it will not create a shell you do not use.
+
+**2. Open a new shell.** The alias is read at shell start, so an existing terminal keeps
+the old `codex`. This is the step people skip.
+
+**3. Use Codex normally.**
+
+```bash
+codex                     # now a mediated session
+```
+
+**4. Check it took.**
+
+```bash
+zerotrace status          # shows the codex command row and the profile it was written to
+```
+
+**If no shell profile was found** — a container, a bare CI image, a shell you do not want
+touched — run the mediated session directly instead. This is also the way to try it without
+modifying anything:
+
+```bash
+zerotrace codex                          # same session, no profile changes
+zerotrace codex --cwd /path/to/project   # working directory for the session
+zerotrace codex --codex /usr/local/bin/codex   # if the binary is not on PATH
+```
+
+**The VS Code side panel is a separate client** and is not covered by the shell alias,
+because the extension spawns a binary directly rather than going through your shell:
+
+```bash
+pip install -e .          # required: the extension needs a real executable, not a module
+zerotrace on --vscode
+```
+
+That points the extension's `chatgpt.cliExecutable` at the installed
+`zerotrace-codex-proxy` console script, and records where the real `codex` binary lives so
+the proxy never searches at run time and can never find itself. Restart VS Code afterwards.
+
+**If you have reviewed and trusted the hooks yourself,** `zerotrace on --codex-hooks`
+writes them as well. It is off by default precisely because an untrusted hook is
+indistinguishable from an installed one until you look.
+
+### Coverage, stated plainly
+
+**Claude Code on any IDE, Codex via mediation, browsers via the extension, and any client
+you point at the gateway.**
 
 ---
 
