@@ -166,10 +166,26 @@ async def test_a_credential_leaves_for_nobody():
 async def test_citizen_identifiers_leave_only_as_a_token():
     """Tokenize, not allow: a model may reason about the same citizen without the number.
 
-    Part A cannot mint one yet -- that needs the vault -- and it degrades to mask and says
-    so rather than faking a token.
+    Asserted on `revenue`, who has no outbound clearance. Part A cannot mint a token yet
+    -- that needs the vault -- so it degrades to mask and says so rather than faking one.
     """
-    assert await _action("s.iyer", "AADHAAR", leg="outbound") in ("tokenize", "mask")
+    assert await _action("r.banerjee", "AADHAAR", leg="outbound") == "mask"
+
+
+async def test_a_caseworker_may_send_a_citizen_identifier():
+    """The one outbound clearance in the policy, and the reason a role changes what you
+    may TYPE rather than only what you may read.
+
+    A caseworker in citizen-services including a PAN in a prompt is doing the job. Nobody
+    else has that reason, so for everybody else it is tokenised.
+    """
+    assert await _action("s.iyer", "PAN", leg="outbound") == "allow"
+    assert await _action("s.iyer", "AADHAAR", leg="outbound") == "allow"
+
+
+async def test_the_outbound_clearance_does_not_reach_credentials():
+    """Written as a test because the guarantee must not rest on the YAML staying right."""
+    assert await _action("s.iyer", "ANTHROPIC_KEY", leg="outbound") == "block"
 
 async def test_tokenize_degrades_to_mask_and_says_so():
     """Without the vault a token cannot be minted, so the next-strongest action applies.
@@ -181,7 +197,9 @@ async def test_tokenize_degrades_to_mask_and_says_so():
     from zerotrace.spans.model import Finding
 
     ctx = await _ctx()
-    actor = await ctx.resolve(DEMO_TENANT, "s.iyer")
+    # revenue, not citizen-services: the caseworker clearance would allow this outright
+    # and there would be nothing to degrade.
+    actor = await ctx.resolve(DEMO_TENANT, "r.banerjee")
     outcome = await ctx.decide(
         [Finding(entity_class="PAN", span_path="messages[0].content", leg="outbound")],
         actor, leg="outbound",
@@ -202,7 +220,7 @@ async def test_a_degraded_decision_still_names_its_rule():
     from zerotrace.spans.model import Finding
 
     ctx = await _ctx()
-    actor = await ctx.resolve(DEMO_TENANT, "s.iyer")
+    actor = await ctx.resolve(DEMO_TENANT, "r.banerjee")
     outcome = await ctx.decide(
         [Finding(entity_class="PAN", span_path="messages[0].content", leg="outbound")],
         actor, leg="outbound",

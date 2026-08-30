@@ -27,7 +27,7 @@ rules:
   # Citizen identifiers do not reach a vendor at all, masked or otherwise.
   - match:
       direction: inbound
-      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER]
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, CUSTOMER_DATA]
     action: block
     unless:
       - actor_role: [director]
@@ -58,3 +58,14 @@ rules:
       class: [INFRA_SECRET, SECURITY_FINDING]
     action: block
     reason: "infrastructure secrets and security findings never reach a vendor"
+
+  # Outbound, and the reason a role changes what you may TYPE and not only what you may
+  # read. The agency lets staff send a citizen identifier to a model as a shape-preserving
+  # token, because a caseworker legitimately needs the model to reason about "the same
+  # citizen". A vendor has no casework, so there is nothing for a token to be useful for
+  # -- it does not leave at all.
+  - match:
+      direction: outbound
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, GSTIN, FINANCIAL_RECORD, BANK_ACCOUNT]
+    action: block
+    reason: "a vendor sends no citizen, tax or financial identifier to a model"

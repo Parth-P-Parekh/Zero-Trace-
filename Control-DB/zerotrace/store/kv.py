@@ -20,8 +20,10 @@ every test that uses it a lie.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
+from pathlib import Path
 from typing import Protocol
 
 
@@ -236,3 +238,131 @@ class RedisKV:
 
 def _s(value: object) -> str:
     return value.decode() if isinstance(value, (bytes, bytearray)) else str(value)
+
+
+class FileKV:
+    """A KV that survives the process, without a server.
+
+    The hook runs as a fresh interpreter on every prompt, so `MemoryKV` cannot hold a
+    seeded tenant or a policy between two of them -- everything would vanish the moment
+    the process exited, and a control plane that forgets its own tenants is not one you
+    can test locally.
+
+    This is a single JSON file under ZT_HOME. It is not a database and does not pretend to
+    be: every operation reads and rewrites the whole file. That is fine for a laptop with
+    one operator and a handful of tenants, and it is wrong for anything else -- set
+    ZT_REDIS_URL and use `RedisKV` for a real deployment.
+
+    Writes go to a temporary file and are then renamed, so a crash mid-write leaves the
+    previous state rather than a truncated one. A ledger that can be half-written is a
+    ledger whose verifier reports tampering nobody did.
+    """
+
+    __slots__ = ("_path", "_lock")
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        import os as _os
+
+        home = Path(_os.environ.get("ZT_HOME") or (Path.home() / ".zerotrace"))
+        self._path = Path(path) if path else home / "store.json"
+        self._lock = asyncio.Lock()
+
+    # -- file --
+
+    def _read(self) -> dict:
+        try:
+            return json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"h": {}, "l": {}, "s": {}, "v": {}, "locks": {}}
+
+    def _write(self, data: dict) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(self._path)
+
+    # -- operations --
+
+    async def incr(self, key: str) -> int:
+        async with self._lock:
+            d = self._read()
+            value = int(d["v"].get(key, 0)) + 1
+            d["v"][key] = value
+            self._write(d)
+            return value
+
+    async def rpush(self, key: str, value: str) -> int:
+        async with self._lock:
+            d = self._read()
+            d["l"].setdefault(key, []).append(value)
+            self._write(d)
+            return len(d["l"][key])
+
+    async def lrange(self, key: str, start: int, stop: int) -> list[str]:
+        items = self._read()["l"].get(key, [])
+        return items[start:] if stop == -1 else items[start : stop + 1]
+
+    async def llen(self, key: str) -> int:
+        return len(self._read()["l"].get(key, []))
+
+    async def hset_many(self, key: str, mapping: dict[str, str]) -> None:
+        async with self._lock:
+            d = self._read()
+            d["h"].setdefault(key, {}).update(mapping)
+            self._write(d)
+
+    async def hgetall(self, key: str) -> dict[str, str]:
+        return dict(self._read()["h"].get(key, {}))
+
+    async def get(self, key: str) -> str | None:
+        value = self._read()["v"].get(key)
+        return None if value is None else str(value)
+
+    async def set(self, key: str, value: str) -> None:
+        async with self._lock:
+            d = self._read()
+            d["v"][key] = value
+            self._write(d)
+
+    async def sadd(self, key: str, value: str) -> None:
+        async with self._lock:
+            d = self._read()
+            members = set(d["s"].get(key, []))
+            members.add(value)
+            d["s"][key] = sorted(members)
+            self._write(d)
+
+    async def smembers(self, key: str) -> set[str]:
+        return set(self._read()["s"].get(key, []))
+
+    async def delete(self, key: str) -> None:
+        async with self._lock:
+            d = self._read()
+            for bucket in ("h", "l", "s", "v"):
+                d[bucket].pop(key, None)
+            self._write(d)
+
+    async def keys(self, pattern: str) -> list[str]:
+        import fnmatch
+
+        d = self._read()
+        everything = set(d["h"]) | set(d["l"]) | set(d["s"]) | set(d["v"])
+        return sorted(k for k in everything if fnmatch.fnmatch(k, pattern))
+
+    async def acquire(self, key: str, token: str, ttl_ms: int) -> bool:
+        async with self._lock:
+            d = self._read()
+            held = d["locks"].get(key)
+            if held is not None and held[1] > time.time():
+                return False
+            d["locks"][key] = [token, time.time() + ttl_ms / 1000]
+            self._write(d)
+            return True
+
+    async def release(self, key: str, token: str) -> None:
+        async with self._lock:
+            d = self._read()
+            held = d["locks"].get(key)
+            if held is not None and held[0] == token:
+                d["locks"].pop(key, None)
+                self._write(d)

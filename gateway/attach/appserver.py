@@ -105,9 +105,9 @@ def build_checker() -> Callable[[str], Decision]:
     from gateway.detect.obfuscation import ObfuscationScanner
     from gateway.detect.s0_credentials import scan_span_credentials
     from gateway.detect.s1_context import ContextScanner
-    from gateway.detectors.example import EXAMPLE_DETECTORS
+    from gateway.detectors import ALL_DETECTORS
 
-    detectors = list(EXAMPLE_DETECTORS)
+    detectors = list(ALL_DETECTORS)
     pack = DetectorPack.build(
         detectors, version=1,
         scanners=[scan_span_credentials, ObfuscationScanner(detectors),

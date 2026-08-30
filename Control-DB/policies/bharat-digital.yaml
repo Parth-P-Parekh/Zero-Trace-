@@ -39,9 +39,12 @@ fail: closed
 rules:
   # 0 — citizen identifiers. The core statutory holding, and the reason the
   #     agency needs a control plane at all.
+  #     CUSTOMER_DATA is here too: a grievance file or a case record is citizen data
+  #     whether or not an identifier happens to appear in it. Listing only the numbers
+  #     would restrict the Aadhaar and leave the case notes about that citizen open.
   - match:
       direction: inbound
-      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER]
+      class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER, CUSTOMER_DATA]
     action: mask
     unless:
       - actor_group: [citizen-services]
@@ -92,6 +95,12 @@ rules:
 
   # 5 — citizen identifiers leave only as a one-way token of the same shape, so a
   #     model can still reason about "the same citizen" without holding the number.
+  #
+  #     The `except` block is where a role changes what you may TYPE, not only what you
+  #     may read. A caseworker in citizen-services is doing casework: including a PAN in
+  #     a prompt to the internal assistant is the job. Nobody else has that reason, so
+  #     for everybody else it is tokenised. This is the only outbound clearance in the
+  #     policy, and it deliberately does not extend to credentials.
   #     Part A cannot honour this yet: tokenize needs the vault (C8), so redact.py
   #     degrades it to mask and says so. It never fakes a token.
   - match:
@@ -99,7 +108,9 @@ rules:
       class: [AADHAAR, VOTER_ID, PAN, DL_NUMBER]
     action: tokenize
     format_preserving: true
-    reason: "citizen identifiers leave only as a derived, shape-preserving token"
+    except:
+      - actor_group: [citizen-services]
+    reason: "citizen identifiers leave only as a derived, shape-preserving token, except for caseworkers"
 
   # 6 — financial and staff records, same treatment.
   - match:

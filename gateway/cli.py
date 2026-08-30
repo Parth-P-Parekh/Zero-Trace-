@@ -351,6 +351,90 @@ def _check(args: argparse.Namespace) -> int:
     return 1
 
 
+# ----------------------------------------------------------------------- role --
+
+def _seed(args: argparse.Namespace) -> int:
+    """Put the worked example in the persistent store, once."""
+    import asyncio
+
+    from gateway.part_a.session import plane
+    from gateway.part_a.wiring import DEMO_ACTORS, DEMO_TENANT, seed_demo
+
+    p = plane()
+    asyncio.run(seed_demo(p))
+    print(f"Seeded {DEMO_TENANT} into {p.backend}")
+    print(f"  {len(DEMO_ACTORS)} people, 2 policies, 1 business unit")
+    print()
+    print("`zerotrace roles` to see them, `zerotrace login <id>` to be one.")
+    return 0
+
+
+def _roles(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from gateway.part_a.session import current, roles
+
+    people = asyncio.run(roles(args.tenant))
+    if not people:
+        print("No one in the store yet -- run `zerotrace seed`.")
+        return 1
+
+    here = current()
+    print("Who you can be:")
+    print("")
+    for actor_id, role, groups in people:
+        mark = "*" if here and here.actor == actor_id else " "
+        print(f"  {mark} {actor_id:<12} {role:<11} {', '.join(groups) or '-'}")
+    print()
+    print("* = current.  `zerotrace login <id>` to change.")
+    return 0
+
+
+def _login(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from gateway.part_a.session import login, plane, roles
+    from gateway.part_a.wiring import DEMO_TENANT
+
+    tenant = args.tenant or DEMO_TENANT
+    known = {a for a, _r, _g in asyncio.run(roles(tenant))}
+    if args.actor not in known:
+        print(f"{args.actor!r} is not in the store for {tenant}.")
+        print(f"  known: {', '.join(sorted(known)) or '(none -- run `zerotrace seed`)'}")
+        return 1
+
+    login(args.actor, tenant)
+    groups = next(g for a, _r, g in asyncio.run(roles(tenant)) if a == args.actor)
+    print(f"Acting as {args.actor} in {tenant}")
+    print(f"  groups: {', '.join(groups) or 'none'}")
+    print()
+    print("Prompts are now decided by this actor's policy as well as by detection.")
+    print("  Credentials are blocked either way -- a role is not a clearance for those.")
+    return 0
+
+
+def _whoami(args: argparse.Namespace) -> int:
+    from gateway.part_a.session import current, session_path
+
+    here = current()
+    if here is None:
+        print("Not logged in. Detection still runs; policy does not.")
+        print("  `zerotrace roles` then `zerotrace login <id>`.")
+        return 1
+    print(f"{here.actor} in {here.tenant}")
+    print(f"  {session_path()}")
+    print("  Note: choosing a role is not authentication. Anyone who can write that")
+    print("  file can claim any actor -- real identity is Part A's mTLS/OIDC path.")
+    return 0
+
+
+def _logout(args: argparse.Namespace) -> int:
+    from gateway.part_a.session import logout
+
+    print("Logged out." if logout() else "Was not logged in.")
+    return 0
+
+
 # ---------------------------------------------------------------------- codex --
 
 def _codex(args: argparse.Namespace) -> int:
@@ -428,6 +512,18 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("check", help="run one string through the checker")
     c.add_argument("text", nargs="?", help="text to check (or pipe on stdin)")
     c.set_defaults(fn=_check)
+
+    sub.add_parser("seed", help="put the worked example in the store").set_defaults(fn=_seed)
+    rl = sub.add_parser("roles", help="who you can act as")
+    rl.add_argument("--tenant", help="look in a business unit instead of the agency")
+    rl.set_defaults(fn=_roles)
+    sub.add_parser("whoami", help="who you are acting as").set_defaults(fn=_whoami)
+    sub.add_parser("logout", help="stop acting as anyone").set_defaults(fn=_logout)
+
+    lg = sub.add_parser("login", help="act as one of the seeded people")
+    lg.add_argument("actor")
+    lg.add_argument("--tenant")
+    lg.set_defaults(fn=_login)
 
     x = sub.add_parser("codex", help="run Codex with ZeroTrace in front (no hooks)")
     x.add_argument("--cwd", help="working directory for the session")

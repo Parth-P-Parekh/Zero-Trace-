@@ -51,7 +51,7 @@ from .detect.encodings import EncodedScanner
 from .detect.obfuscation import ObfuscationScanner
 from .detect.s0_credentials import scan_span_credentials
 from .detect.s1_context import ContextScanner
-from .detectors.example import EXAMPLE_DETECTORS
+from .detectors import ALL_DETECTORS
 from .intel.agent import IntelPlane
 from .ledger import JsonlLedgerStore, Ledger
 from .ledger import records as ledger_records
@@ -74,7 +74,7 @@ UPSTREAM = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     assert_production_engines()
-    detectors = list(EXAMPLE_DETECTORS)
+    detectors = list(ALL_DETECTORS)
     app.state.pack = DetectorPack.build(
         detectors,
         version=1,

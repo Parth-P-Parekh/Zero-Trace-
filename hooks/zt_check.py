@@ -104,14 +104,14 @@ def check_embedded(text: str, session_id: str) -> dict:
     from gateway.base.checker import Checker, CheckerConfig
     from gateway.base.scanner import DetectorPack
     from gateway.check import text_tree, to_verdict
-    from gateway.detectors.example import EXAMPLE_DETECTORS
+    from gateway.detectors import ALL_DETECTORS
 
     from gateway.detect.encodings import EncodedScanner
     from gateway.detect.obfuscation import ObfuscationScanner
     from gateway.detect.s0_credentials import scan_span_credentials
     from gateway.detect.s1_context import ContextScanner
 
-    detectors = list(EXAMPLE_DETECTORS)
+    detectors = list(ALL_DETECTORS)
     pack = DetectorPack.build(
         detectors,
         version=1,
@@ -231,8 +231,26 @@ def run(event: dict) -> None:
             f"Set ZT_FAIL=open to proceed unprotected."
         )
 
+    # Who is authoritative.
+    #
+    # Standing alone, the checker both detects and enforces -- there is nobody else to
+    # ask. When a control plane is present (`zerotrace login`), detection reports and
+    # POLICY decides: an organisation that has written rules about who may send what
+    # should not be overruled by our built-in threshold, or the rules are decoration.
+    #
+    # With one exception, which is not negotiable. A CREDENTIAL never leaves, whoever is
+    # asking and whatever the policy says. The gov policy's only outbound clearance is
+    # for citizen identifiers and deliberately does not extend here -- but the guarantee
+    # cannot rest on a policy file being written correctly, so it is enforced in code.
+    role = _role_decision(text)
+    classes = tuple(result.get("classes") or ())
+
     if not result.get("allow", False):
-        deny(result.get("reason") or "ZeroTrace blocked this prompt.")
+        if _has_credential(classes) or role is None or not role.allow:
+            deny(result.get("reason") or "ZeroTrace blocked this prompt.")
+        # else: policy cleared this actor for a non-credential class. Fall through.
+    elif role is not None and not role.allow:
+        deny(role.reason)
 
     # This prompt is clean on its own. It may still be the second half of a credential
     # whose first half was typed a turn ago, so the carried tail is joined to this
@@ -273,6 +291,46 @@ def run(event: dict) -> None:
             pass
 
     allow()
+
+
+def _has_credential(classes: tuple) -> bool:
+    """True when any class is in the CREDENTIAL family.
+
+    Read from the contract rather than a list kept here, so adding a credential class in
+    one place does not silently create a policy-clearable secret in another.
+    """
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from gateway.contracts.entity_classes import CLASS_TO_FAMILY, EntityClass
+
+        for name in classes:
+            family = CLASS_TO_FAMILY[EntityClass(name)]
+            if getattr(family, "value", str(family)) == "CREDENTIAL":
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        # If we cannot tell, assume it is a credential. The safe direction is to keep the
+        # block, never to hand policy a class it might be allowed to clear.
+        return True
+
+
+def _role_decision(text: str):
+    """This actor's policy verdict, or None when there is no role in play.
+
+    Losing it must never block a prompt: a setup step nobody ran is our problem, not the
+    user's, so every failure here degrades to "no policy layer today".
+    """
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        import asyncio
+
+        from gateway.part_a.session import decide_prompt
+
+        return asyncio.run(decide_prompt(text))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _prompt_window():
