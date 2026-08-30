@@ -100,13 +100,24 @@ class ReadDecision:
         class name and the rule index are structural facts about the policy; they are
         already public in `Control-DB/policies/`.
         """
-        who = f"{self.actor}" + (f" ({', '.join(self.groups)})" if self.groups
-                                 else " (no clearance groups)")
-        lines = [
-            f"ZeroTrace withheld {len(self.withheld)} file(s) from this read: "
-            f"{who} is not cleared for them. Nothing was read and nothing entered the "
-            f"transcript."
-        ]
+        if not self.actor:
+            # No role was in play, so this was the credential floor and not a clearance
+            # decision. Saying "you are not cleared" would send the reader to ask for an
+            # access grant that does not exist and would not help.
+            lines = [
+                f"ZeroTrace withheld {len(self.withheld)} file(s) from this read: they "
+                f"contain credentials. Nothing was read and nothing entered the "
+                f"transcript. No role clears this -- a secret pulled into the context "
+                f"window is in the transcript for good."
+            ]
+        else:
+            who = f"{self.actor}" + (f" ({', '.join(self.groups)})" if self.groups
+                                     else " (no clearance groups)")
+            lines = [
+                f"ZeroTrace withheld {len(self.withheld)} file(s) from this read: "
+                f"{who} is not cleared for them. Nothing was read and nothing entered "
+                f"the transcript."
+            ]
         for w in self.withheld:
             lines.append(
                 f"  - {w.path}: {', '.join(w.classes) or 'restricted'} "
@@ -341,6 +352,70 @@ def _value_classes_local(text: str) -> tuple[str, ...]:
 
 # --------------------------------------------------------------------- deciding --
 
+def credential_files(paths: list[Path], *, scan: Any = None) -> list[Withheld]:
+    """Files whose contents are a credential, judged without reference to any role.
+
+    The prompt path already works this way: `zt_check` blocks a secret whether or not
+    anyone has run `zerotrace login`, because a credential leaving is not a question about
+    clearance. The read path did not, and the asymmetry was a real hole -- with no session
+    there was no policy layer at all, so a `.env` full of live keys was pulled straight
+    into the transcript. Anyone can find that in ten seconds by not logging in.
+
+    So the CREDENTIAL family is enforced here unconditionally, ahead of and independent of
+    the clearance decision. The family is read from the contract rather than listed here,
+    so adding a credential class in one place cannot quietly create a readable secret in
+    another -- the same reasoning, and the same source, as `zt_check._has_credential`.
+
+    This deliberately does *not* cover the record classes. Whether a payslip may be read
+    is a question about who is asking, and with nobody logged in there is no answer to
+    it. Whether a private key may be read into a context window is not that kind of
+    question.
+    """
+    from gateway.contracts.entity_classes import CLASS_TO_FAMILY, EntityClass
+
+    def is_credential(name: str) -> bool:
+        try:
+            family = CLASS_TO_FAMILY[EntityClass(name)]
+        except (KeyError, ValueError):
+            # An unknown class is not assumed to be a credential here: this function runs
+            # with no policy behind it, so a wrong guess blocks a read nobody can clear.
+            return False
+        return getattr(family, "value", str(family)) == "CREDENTIAL"
+
+    scanner = scan or value_classes
+    out: list[Withheld] = []
+    for path in paths:
+        text = _sample(path)
+        if not text:
+            continue
+        found = tuple(sorted(c for c in set(scanner(text)) if is_credential(c)))
+        if found:
+            out.append(Withheld(path=_doc_id(path), action="block", classes=found,
+                                rule_index=None, rule_scope="credential"))
+    return out
+
+
+def _credential_only(paths: list[Path], scan: Any) -> ReadDecision | None:
+    """The floor that applies when the policy cannot answer.
+
+    With no session, or a tenant nobody has seeded, there is no clearance layer -- and
+    that used to mean no protection at all on this path, so a `.env` full of live keys
+    was pulled straight into the transcript by anyone who had not run `zerotrace login`.
+
+    Records stay unguarded here, because "may this person read a payslip" has no answer
+    when there is no person. A credential is different: there is no role that makes a
+    private key safe to pull into a context window, which is exactly why the outbound
+    rule for credentials carries no clearance block either. Deny-by-default when the
+    identity is unknown, explicit grant when it is known -- the policy still decides for
+    a logged-in actor, including granting infosec its own runbooks.
+    """
+    creds = credential_files(paths, scan=scan)
+    if not creds:
+        return None
+    return ReadDecision(allow=False, actor="", tenant="", groups=(),
+                        withheld=tuple(creds))
+
+
 async def decide_read(paths: list[Path], *, plane: dict | None = None,
                       scan: Any = None) -> ReadDecision | None:
     """Judge every file this read would surface. None when there is no role in play.
@@ -366,7 +441,7 @@ async def decide_read(paths: list[Path], *, plane: dict | None = None,
 
     session = current()
     if session is None:
-        return None
+        return _credential_only(paths, scan)
 
     if plane is None:
         p = build_plane()
@@ -376,7 +451,7 @@ async def decide_read(paths: list[Path], *, plane: dict | None = None,
         p = plane["p"]
 
     if not await p.store.tenant_exists(session.tenant):
-        return None
+        return _credential_only(paths, scan)
 
     ctx = PartAContext(p.store, p.ledger)
     actor = await ctx.resolve(session.tenant, session.actor)

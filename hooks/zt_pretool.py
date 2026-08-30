@@ -344,9 +344,13 @@ def _clearance_gate(tool: str, args: dict) -> None:
     check that cannot run has failed to enforce a policy that may not even be seeded. The
     read still goes through the detectors either way.
     """
-    if not _logged_in():
-        return
-
+    # Deliberately NOT gated on being logged in. It used to be, on the reasoning that
+    # without a role there is no clearance layer -- but that also meant no protection at
+    # all on this path, so a `.env` full of live keys was read straight into the
+    # transcript by anyone who had not run `zerotrace login`. The credential floor in
+    # `reading.credential_files` applies with or without a session, exactly as the prompt
+    # hook's credential check does, and the policy layer still only applies with one.
+    #
     # The warm daemon first, before anything from `gateway` is imported. Building the
     # Part A store measured at ~397ms and the detector pack at ~300ms more, which turned
     # a gated `Read` into two thirds of a second. The daemon holds both, so ask it before
@@ -381,22 +385,6 @@ def _clearance_gate(tool: str, args: dict) -> None:
 
     if decision is not None and not decision.allow:
         deny(decision.reason)
-
-
-def _logged_in() -> bool:
-    """Is there a session at all -- answered without importing anything.
-
-    The same cheap test `zt_check` makes, for the same reason: the Part A stack measured
-    at ~117ms to import, and this runs in front of every tool call.
-    """
-    import json as _json
-
-    home = Path(os.environ.get("ZT_HOME") or (Path.home() / ".zerotrace"))
-    try:
-        raw = _json.loads((home / "session.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return bool(raw.get("tenant") and raw.get("actor"))
 
 
 def _escalate(session_id: str, tool: str, text: str, assessment) -> None:

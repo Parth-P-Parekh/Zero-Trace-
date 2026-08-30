@@ -31,6 +31,13 @@ from typing import Any
 from gateway.detect.documents import classify
 
 
+def _default_classifier():
+    """Structure plus values. Imported lazily -- `reading` imports this module back."""
+    from gateway.part_a.reading import classify_file
+
+    return classify_file
+
+
 @dataclass(frozen=True, slots=True)
 class Verdict:
     """One document, and what the policy said about it for this actor."""
@@ -88,12 +95,23 @@ class RetrievalGuard:
                  classifier: Any = None) -> None:
         self._ctx = context
         self._min_confidence = min_confidence
-        # Injected so a caller with a stronger classifier can supply one. A file on disk
-        # can be run through the *value* detectors as well as the structural ones -- a
-        # bare column of Aadhaar numbers has no record vocabulary to match, so structure
-        # alone would call it prose. A retriever's chunk usually cannot afford that scan;
-        # a single file read can. See gateway/part_a/reading.py.
-        self._classify = classifier or classify
+        # Structure *and* values, by default.
+        #
+        # This used to default to `classify` alone, and an independent audit found what
+        # that costs: of five sensitive documents in a test corpus, four were released to
+        # every actor -- including a clinical note and a citizen record carrying Aadhaar
+        # numbers, and a deploy runbook carrying a production database password -- to an
+        # external contractor and to an auditor described in this codebase as having "no
+        # content clearance at all". The structural classifier returned NOTHING for all
+        # four, because a clinical note is prose about a patient and carries no record
+        # vocabulary at all.
+        #
+        # The capability was already in the tree: the value detectors flag all five, and
+        # `reading.py` was already passing them in through this very argument. Retrieval
+        # was not. So the default is now the strong one and the weak classifier is what
+        # you opt into, which is the right way round -- a guard whose safe behaviour is
+        # the non-default is a guard that will be built wrong somewhere.
+        self._classify = classifier or _default_classifier()
 
     async def filter(self, documents: list[Any], actor: Any) -> GuardResult:
         """Classify each document, ask the policy, keep only what the actor may see."""

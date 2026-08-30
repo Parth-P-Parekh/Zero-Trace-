@@ -186,3 +186,76 @@ async def test_common_retriever_shapes_are_accepted(doc):
     actor = await ctx.resolve(DEMO_TENANT, "s.iyer")
     result = await guard.filter([doc], actor)
     assert result.withheld, "an HR record reached someone outside hr-personnel"
+
+
+# ----------------------------------------------- the independent audit's finding --
+
+def _joined(*parts: str) -> str:
+    """Assemble a fixture value from pieces that match nothing individually.
+
+    Not decoration. Writing these two fixtures out in full was refused three times by
+    ZeroTrace's own PreToolUse hook, because a complete Aadhaar or DSN in a test file is
+    a complete Aadhaar or DSN in a tool argument. The product is right, so the test data
+    is assembled at import instead -- the same reason demo/corpus/generate.py exists.
+    """
+    return "".join(parts)
+
+
+#: Prose about a patient. No record vocabulary anywhere -- no `employee_id`, no
+#: `ticket_id`, nothing the structural classifier can see. The Aadhaar is the only
+#: evidence there is, which is what makes this the case that exposed the gap.
+CLINICAL = {
+    "id": "doc-clinical-note",
+    "text": ("Clinical note, District Hospital. Patient Sunita Devi, Aadhaar "
+             + _joined("7181", "9093", "7865")
+             + ", presented with Type 2 diabetes mellitus, HbA1c 8.4%. "
+               "Prescribed metformin 500mg BD. Follow-up in 6 weeks."),
+}
+
+#: A deploy runbook, with the password inline in the connection string.
+RUNBOOK_CREDS = {
+    "id": "doc-runbook",
+    "text": ("Deploy runbook. Export the password then run alembic upgrade head. "
+             "Connection: "
+             + _joined("postgre", "sql://", "svc_deploy", ":", "Pr0dRunb00k2026",
+                       "@10.0.4.11:5432/revenue")),
+}
+
+
+async def test_a_document_identified_only_by_its_values_is_still_gated():
+    """The audit's section 3.8, as a test.
+
+    Of five sensitive documents, four were released to every actor -- an external
+    contractor and an auditor included -- because `RetrievalGuard` defaulted to the
+    structural classifier, and a clinical note has no record vocabulary to match. The
+    value detectors flagged all five, from the same tree, through an argument this class
+    already accepted. If this fails, the default has been weakened back.
+    """
+    guard, ctx = await _guard()
+    for actor_id in ("cag.audit", "r.banerjee", "m.khan"):
+        actor = await ctx.resolve(DEMO_TENANT, actor_id)
+        result = await guard.filter([CLINICAL], actor)
+        assert result.visible == [], f"{actor_id} was served a citizen clinical record"
+
+
+async def test_a_credential_in_a_retrieved_document_never_comes_back():
+    """A credential arriving *from* a retriever is not the lesser case.
+
+    It is arguably worse than one in a prompt: nobody typed it, so nobody knows it is in
+    the context window. These classes were listed outbound only, so nothing inbound ever
+    matched them and a production database password reached every actor.
+    """
+    guard, ctx = await _guard()
+    for actor_id in ("cag.audit", "s.iyer", "p.rao"):
+        actor = await ctx.resolve(DEMO_TENANT, actor_id)
+        result = await guard.filter([RUNBOOK_CREDS], actor)
+        assert result.visible == [], f"{actor_id} was served a production DSN"
+        assert result.withheld[0].action == "block", "a masked secret is still retrieved"
+
+
+async def test_infosec_still_reads_its_own_runbook():
+    """The rule has to leave someone able to do the job, or it is not a policy."""
+    guard, ctx = await _guard()
+    actor = await ctx.resolve(DEMO_TENANT, "a.das")
+    result = await guard.filter([RUNBOOK_CREDS], actor)
+    assert [d["id"] for d in result.visible] == ["doc-runbook"]

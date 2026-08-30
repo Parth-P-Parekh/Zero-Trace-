@@ -418,3 +418,85 @@ def test_a_redirect_target_is_not_a_read():
     # ...but a genuine read that happens to redirect its OUTPUT still counts.
     assert [p.name for p in candidate_paths(
         "Bash", {"command": f"cat {target} > /tmp/out"})] == ["circular-2026-11.md"]
+
+
+# ------------------------------------------- the credential floor, role or no role --
+
+def _key_file(tmp_path):
+    """A config file with a correctly-shaped credential in it.
+
+    Assembled rather than written whole, for the reason the rest of this suite is: a
+    complete key in a source file is a complete key in a tool argument.
+    """
+    key = "sk-" + "ant-" + "api03-" + "x7Kq9mZp2Wv4Bn8Rt6" + "Yu3Ia5Oe1Ld0Sf3Gh7Jk2Mn5Pq8Rs"
+    path = tmp_path / "config.env"
+    path.write_text(f"ANTHROPIC_API_KEY={key}" + chr(10) + "DEBUG=1" + chr(10),
+                    encoding="utf-8")
+    return path, key
+
+
+def test_a_credential_in_a_file_is_refused_with_nobody_logged_in(tmp_path):
+    """The hole this closed.
+
+    The clearance gate used to return early when there was no session, on the reasoning
+    that without a role there is no policy layer. True -- but it also meant no protection
+    at all, so a `.env` full of live keys was read straight into the transcript by anyone
+    who had not run `zerotrace login`. Ten seconds to find, and the prompt hook had never
+    worked that way: it blocks a credential whether or not you have a role.
+    """
+    import asyncio
+
+    from gateway.part_a.reading import candidate_paths, decide_read
+
+    path, key = _key_file(tmp_path)
+    monkey_home = tmp_path / "empty-home"
+    monkey_home.mkdir()
+    import os
+
+    old = os.environ.get("ZT_HOME")
+    os.environ["ZT_HOME"] = str(monkey_home)
+    try:
+        decision = asyncio.run(decide_read(candidate_paths("Read",
+                                                           {"file_path": str(path)})))
+    finally:
+        if old is None:
+            os.environ.pop("ZT_HOME", None)
+        else:
+            os.environ["ZT_HOME"] = old
+
+    assert decision is not None, "no session meant no protection at all"
+    assert decision.allow is False
+    assert "ANTHROPIC_KEY" in decision.withheld[0].classes
+    assert key not in decision.reason
+
+
+def test_the_credential_refusal_does_not_claim_a_clearance_problem(tmp_path):
+    """"You are not cleared for this" would send the reader to ask for a grant that does
+    not exist. There is no role that makes a private key safe to pull into a context
+    window, which is why the outbound credential rule carries no clearance block either.
+    """
+    from gateway.part_a.reading import ReadDecision, Withheld
+
+    decision = ReadDecision(
+        allow=False, actor="", tenant="", groups=(),
+        withheld=(Withheld(path="config.env", action="block",
+                           classes=("ANTHROPIC_KEY",), rule_index=None,
+                           rule_scope="credential"),),
+    )
+    assert "contain credentials" in decision.reason
+    assert "No role clears this" in decision.reason
+    assert "is not cleared for them" not in decision.reason
+
+
+def test_the_floor_covers_credentials_and_leaves_records_to_the_policy(tmp_path):
+    """Scope matters. "May this person read a payslip" has no answer when there is no
+    person, so records are left to the policy layer and only credentials are refused
+    outright. A floor that also blocked records would refuse every read on a machine
+    where nobody had logged in."""
+    from gateway.part_a.reading import credential_files
+
+    path, _ = _key_file(tmp_path)
+    payslip = CORPUS / "hr-personnel" / "payslip-2026-03-EMP4471.md"
+
+    assert credential_files([path]), "a credential file was not caught"
+    assert credential_files([payslip]) == [], "a record was caught by the credential floor"

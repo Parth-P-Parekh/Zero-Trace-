@@ -100,13 +100,26 @@ rules:
   # 4 — an infrastructure secret never surfaces in a model reply, for anyone
   #     outside infosec. Blocked rather than masked: a masked secret is still a
   #     secret that was retrieved.
+  #
+  #     The credential classes are listed here as well as outbound, and they were
+  #     added because an independent audit found the gap: a deploy runbook holding a
+  #     production database password, and an incident report quoting a leaked AWS key,
+  #     were released to every actor including an external contractor. The detectors
+  #     flagged both correctly -- as DB_URI and AWS_ACCESS_KEY -- but those classes
+  #     appeared only in the outbound rule, so nothing inbound ever matched them.
+  #
+  #     A credential arriving from a retriever is not less dangerous than one leaving in
+  #     a prompt. It is arguably worse: nobody typed it, so nobody knows it is in the
+  #     context window.
   - match:
       direction: inbound
-      class: [INFRA_SECRET, SECURITY_FINDING]
+      class: [INFRA_SECRET, SECURITY_FINDING, DB_URI, PRIVATE_KEY, SSH_PRIVATE_KEY,
+              AWS_ACCESS_KEY, AWS_SECRET_KEY, GITHUB_TOKEN, ANTHROPIC_KEY, OPENAI_KEY,
+              JWT]
     action: block
     unless:
       - actor_group: [infosec]
-    reason: "infrastructure secrets and security findings stay inside infosec"
+    reason: "infrastructure secrets, credentials and security findings stay inside infosec"
 
   # 5 — a credential must never leave the agency. No `except` block, on purpose:
   #     there is no role, group or destination for which this is negotiable, and
