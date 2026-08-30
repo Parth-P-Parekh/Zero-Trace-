@@ -11,7 +11,7 @@ import { Demo } from '@/components/site/Demo';
 export const metadata = {
   title: 'ZeroTrace - an egress firewall for AI traffic',
   description:
-    'Government runs on citizen data. AI runs on prompts. ZeroTrace takes citizen data out of the outbound payload, restores it in the response, stops any prompt carrying a credential, and writes a tamper-evident record of every decision.',
+    'An egress firewall security agent. Sensitive data comes out of the outbound payload and goes back into the response, a prompt carrying a credential is stopped outright, and every decision lands in a tamper-evident record.',
 };
 
 /**
