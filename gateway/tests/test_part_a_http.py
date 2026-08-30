@@ -10,17 +10,18 @@ relying on the environment.
 
 from __future__ import annotations
 
-from pathlib import Path
+
 
 import pytest
 from fastapi.testclient import TestClient
 
 from gateway.app import create_app
 from gateway.part_a.store import PartAStore
-from gateway.part_a.wiring import PartAPlane
+from gateway.part_a.wiring import DEMO_TENANT, PartAPlane, seed_demo
 
-TENANT = "acme-tech"
-POLICY = Path(__file__).resolve().parents[2] / "Control-DB" / "policies" / "acme-tech.yaml"
+#: The government worked example, seeded through the same path an operator uses.
+TENANT = DEMO_TENANT
+OFFICER = "s.iyer"
 
 
 def _key() -> str:
@@ -47,12 +48,7 @@ def client(monkeypatch):
     store = PartAStore(kv)
     plane = PartAPlane(store=store, ledger=RedisLedger(kv), backend="memory")
 
-    async def seed():
-        await store.put_tenant(TENANT)
-        await store.put_policy(TENANT, POLICY.read_text(encoding="utf-8"), version=1)
-        await store.put_actor(TENANT, "marketer", role="engineer", groups=("marketing",))
-
-    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(seed())
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(seed_demo(plane))
 
     app = create_app()
     with TestClient(app) as c:
@@ -62,7 +58,7 @@ def client(monkeypatch):
         yield c
 
 
-def _headers(actor: str = "marketer", tenant: str = TENANT) -> dict:
+def _headers(actor: str = OFFICER, tenant: str = TENANT) -> dict:
     return {
         "x-zerotrace-actor": actor,
         "x-zerotrace-tenant": tenant,
@@ -143,7 +139,7 @@ def test_the_decision_is_in_the_ledger_before_the_response(client):
     decided = [r for r in recorded if r.event_type == "request.decided"]
     assert decided, "a blocked request left no evidence"
     assert decided[0].payload["applied_action"] == "block"
-    assert decided[0].payload["actor_id"] == "marketer"
+    assert decided[0].payload["actor_id"] == OFFICER
 
 
 def test_the_ledger_verifies_after_traffic(client):

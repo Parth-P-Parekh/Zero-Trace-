@@ -37,7 +37,7 @@ class PartAPlane:
     store: Any
     ledger: Any
     backend: str
-    default_tenant: str = "acme-tech"
+    default_tenant: str = "bharat-digital"
 
     async def context(self):
         from gateway.part_a.context import PartAContext
@@ -90,17 +90,64 @@ def identity_of(headers: Any, *, default_tenant: str) -> tuple[str, str]:
     return tenant or default_tenant, actor or "anonymous"
 
 
-async def seed_demo(plane: PartAPlane, policy_yaml: str) -> None:
-    """Put one tenant, one policy and two actors in the store.
+#: The worked example, a government digital services agency. Each group maps to a
+#: function rather than to seniority, which is what makes "who was cleared to see this"
+#: answerable afterwards. See Control-DB/policies/bharat-digital.yaml.
+DEMO_TENANT = "bharat-digital"
+DEMO_BU = "bharat-digital-contractors"
 
-    For a demo or a first run. Kept out of `build()` on purpose: a control plane that
-    invents its own tenants is one whose evidence means nothing.
+#: actor id -> (role, groups). The security groups, as they sit in the store.
+DEMO_ACTORS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # Cleared for citizen identifiers: Aadhaar, voter ID, PAN, driving licence.
+    "s.iyer":     ("officer", ("citizen-services",)),
+    # Cleared for tax and financial records, and nothing else.
+    "r.banerjee": ("officer", ("revenue",)),
+    # Staff records only. Deliberately not also citizen-services: one person cleared
+    # for both would defeat the separation the groups exist to create.
+    "m.khan":     ("officer", ("hr-personnel",)),
+    # Infrastructure secrets. The only group that may see them inbound.
+    "a.das":      ("officer", ("infosec",)),
+    # Oversight. Sees decisions in the ledger, no content clearance at all -- an
+    # auditor who could read the data would be auditing themselves.
+    "cag.audit":  ("auditor", ("audit",)),
+    # Clears inbound classes one rule at a time. There is no global override, because
+    # an override that applies to everything is indistinguishable from no policy.
+    "p.rao":      ("director", ()),
+    # An empanelled vendor: in the request path, in no clearance group. Decided by the
+    # contractors business unit, which raises citizen data to block.
+    "vendor.dev": ("contractor", ()),
+}
+
+
+def demo_policies() -> tuple[str, str]:
+    """The org policy and its business unit, read from the shipped files."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "Control-DB" / "policies"
+    return (
+        (root / f"{DEMO_TENANT}.yaml").read_text(encoding="utf-8"),
+        (root / f"{DEMO_BU}.yaml").read_text(encoding="utf-8"),
+    )
+
+
+async def seed_demo(plane: PartAPlane, org_yaml: str | None = None,
+                    bu_yaml: str | None = None) -> None:
+    """Put the agency, its vendor business unit, its policies and its people in the store.
+
+    Kept out of `build()` on purpose: a control plane that invents its own tenants is one
+    whose evidence means nothing. Seeding is something an operator does, once, knowingly.
     """
-    await plane.store.put_tenant(plane.default_tenant)
-    await plane.store.put_policy(plane.default_tenant, policy_yaml, version=1)
-    await plane.store.put_actor(
-        plane.default_tenant, "marketer", role="engineer", groups=("marketing",)
-    )
-    await plane.store.put_actor(
-        plane.default_tenant, "contractor", role="contractor", groups=()
-    )
+    if org_yaml is None or bu_yaml is None:
+        org_yaml, bu_yaml = demo_policies()
+
+    await plane.store.put_tenant(DEMO_TENANT)
+    await plane.store.put_policy(DEMO_TENANT, org_yaml, version=1)
+
+    # The business unit names the agency as its parent, which is what makes the child a
+    # BU layer over the org rather than a second organisation.
+    await plane.store.put_tenant(DEMO_BU, parent_id=DEMO_TENANT)
+    await plane.store.put_policy(DEMO_BU, bu_yaml, version=1)
+
+    for actor_id, (role, groups) in DEMO_ACTORS.items():
+        tenant = DEMO_BU if role == "contractor" else DEMO_TENANT
+        await plane.store.put_actor(tenant, actor_id, role=role, groups=groups)

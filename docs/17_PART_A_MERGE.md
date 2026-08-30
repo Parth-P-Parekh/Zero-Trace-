@@ -203,3 +203,56 @@ verification. Identity is still header-based (`X-ZeroTrace-Actor`), which is spo
 Part A's mTLS/OIDC path needs a request object this layer does not have. What Part A adds
 today is that an *unknown* actor is recorded as unregistered and decided as such, instead
 of being waved through as `anonymous`.
+
+## The worked example is a government agency
+
+`bharat-digital` — a government digital services agency — replaces the generic company as
+the seeded example, because a public body demonstrates security groups better than a
+private one. Its access control is not a preference: citizen identifiers are held under
+statute, the people who may see them are named by *function* rather than seniority, and an
+auditor must be able to ask "who was cleared to see this, and under which rule" long after
+the request.
+
+### The groups
+
+| Group | Cleared for |
+|---|---|
+| `citizen-services` | `AADHAAR`, `VOTER_ID`, `PAN`, `DL_NUMBER` |
+| `revenue` | `GSTIN`, `FINANCIAL_RECORD`, `BANK_ACCOUNT`, `IFSC` |
+| `hr-personnel` | `HR_RECORD` |
+| `infosec` | `INFRA_SECRET`, `SECURITY_FINDING` |
+| `audit` | nothing — oversight reads decisions, never content |
+
+The vocabulary already carried these: `AADHAAR`, `VOTER_ID`, `PAN` and `GSTIN` are in the
+`INDIA_ID` family, so the example needed no new classes.
+
+Three decisions worth stating, each with a test:
+
+- **The separation runs both ways.** `revenue` sees tax records and *not* citizen
+  identifiers; `citizen-services` the reverse. A group cleared for both would defeat the
+  point of having two.
+- **The auditor has no content clearance.** An auditor who could read the data would be
+  auditing themselves.
+- **`director` clears inbound classes one rule at a time, and does not clear
+  infrastructure secrets at all.** An override that applies to everything is
+  indistinguishable, to an auditor, from no policy.
+
+Outbound, rule 4 blocks credentials with *no clearance block at all* — no role, group or
+destination reaches it. Writing an empty `except` there would only invite someone to fill
+it in.
+
+### The business unit that may only raise
+
+`bharat-digital-contractors` is the empanelled-vendor unit. A vendor debugging a service
+has a legitimate reason to be in the request path and none to see a citizen's Aadhaar
+number, so the child raises the org's `mask` to `block` and drops the group clearances
+entirely — membership does not follow a person into a vendor engagement. Staff records get
+no exception even for a director.
+
+It cannot go the other way: `check_bu_may_only_raise` is asserted against the shipped
+files, not described in prose, because publish-time validation is what stops a business
+unit quietly becoming the easiest route to data the organisation restricted.
+
+`seed_demo()` puts the agency, the vendor unit, both policies and seven people in the
+store. It stays out of `build()`: a control plane that invents its own tenants is one
+whose evidence means nothing.
