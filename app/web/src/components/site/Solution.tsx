@@ -22,7 +22,7 @@ export function Solution() {
         <SectionHead
           step="03 · The product"
           title="Nothing sensitive leaves. Everything still works."
-          lead="Sensitive data comes out of the outbound payload and is restored in the response, so the model reasons correctly and your user gets a real answer. Credentials are the exception - a key or a connection string is never tokenised, so a prompt carrying one is stopped before it reaches the provider."
+          lead="ZeroTrace redacts sensitive data on the way out and restores it on the way back, so the answer still lands. Credentials are the exception: a key is never tokenised, so a prompt carrying one is stopped."
         />
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(224px,1fr))', gap: 30 }}>
