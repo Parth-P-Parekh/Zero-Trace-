@@ -8,8 +8,10 @@ import { Section, SectionHead, Source, Pull, Stat } from './Shared';
  * each and no more.
  */
 
-const CLAIMS: Array<[string, string]> = [
-  ['p50 ≤25ms', 'Added latency, inside the noise band of a cross-region model call.'],
+/** Third field is a caveat, rendered at ramp .36 like every other attribution. */
+const CLAIMS: Array<[string, string, string?]> = [
+  ['p50 ≤25ms', 'Added latency, inside the noise band of a cross-region model call.',
+    'Placeholder. Design budget, not yet measured.'],
   ['One container', 'No GPU, no external classifier. Runs on infrastructure you already have.'],
   ['One package', 'A dependency, not an infrastructure project. No proxy tier, no gateway, no endpoint agent.'],
   ['Zero telemetry', 'Fully in-country, in your VPC, or air-gapped. The product cannot be the leak.'],
@@ -26,7 +28,7 @@ export function Solution() {
         />
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(224px,1fr))', gap: 30 }}>
-          {CLAIMS.map(([value, body]) => (
+          {CLAIMS.map(([value, body, note]) => (
             <div key={value}>
               <div
                 className="zt-nums"
@@ -40,6 +42,11 @@ export function Solution() {
               <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-body)', maxWidth: '34ch' }}>
                 {body}
               </p>
+              {note ? (
+                <p style={{ margin: '8px 0 0' }}>
+                  <Source>{note}</Source>
+                </p>
+              ) : null}
             </div>
           ))}
         </div>
