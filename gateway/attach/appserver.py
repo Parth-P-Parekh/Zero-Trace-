@@ -126,6 +126,19 @@ def build_checker() -> Callable[[str], Decision]:
     return check
 
 
+def _default_window():
+    """The cross-prompt window, or None when it cannot be loaded.
+
+    Losing it costs missed bridges, never a blocked prompt, so a client still starts.
+    """
+    try:
+        from gateway.base.window import PromptWindow
+
+        return PromptWindow()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def payload_of(method: str, params: dict) -> str:
     """The text worth scanning in one approval request.
 
@@ -190,6 +203,10 @@ class AppServerClient:
     approvals_reviewer: str = "user"
     thread_id: str | None = None
     blocked: list[Decision] = field(default_factory=list)
+    #: Cross-prompt carry. Set to None to disable; the session id keys it, so a client
+    #: serving several threads keeps their carries apart.
+    window: Any = field(default_factory=lambda: _default_window())
+    session_id: str = "appserver"
     _next_id: int = 1
 
     # -- plumbing --
@@ -282,6 +299,32 @@ class AppServerClient:
         if not decision.allow:
             self.blocked.append(decision)
             return decision
+
+        # Clean alone is not clean in sequence: half a key one turn and the rest the
+        # next reaches the model whole. The carried tail is joined to this prompt's head
+        # and scanned once more. Both sides were allowed on their own, so a hit here
+        # exists only across the boundary. See gateway/base/window.PromptWindow.
+        if self.window is not None:
+            joined = self.window.bridge(self.session_id, text)
+            if joined:
+                bridged = self.check(joined)
+                if not bridged.allow:
+                    split = Decision(
+                        False,
+                        "ZeroTrace blocked this prompt: joined with what you sent just "
+                        "before, it forms "
+                        + (", ".join(bridged.classes) or "a credential")
+                        + ". Nothing was sent. Splitting a secret across two messages "
+                        "does not divide it -- the conversation holds both halves.",
+                        bridged.classes,
+                    )
+                    self.blocked.append(split)
+                    self.window.clear(self.session_id)
+                    return split
+            # Carry only from prompts that were allowed, so a blocked one never leaves a
+            # tail for the next to trip over.
+            self.window.remember(self.session_id, text)
+
         self._request("turn/start", {
             "threadId": self.thread_id,
             "input": [{"type": "text", "text": text}],

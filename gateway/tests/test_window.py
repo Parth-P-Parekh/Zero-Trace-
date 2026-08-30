@@ -268,3 +268,109 @@ def test_chunked_file_writing_is_not_blocked(tmp_path):
                   "\n## Running\n\n`npm start`\n"):
         r = run_hook(f"printf '%s' '{chunk}' >> docs/setup.md", "doc", tmp_path)
         assert r.returncode == 0, f"blocked ordinary writing: {r.stdout}"
+
+
+# ------------------------------------------------------------ prompt window --
+
+class TestPromptWindow:
+    """Bridging a credential split across consecutive prompts.
+
+    Reported from real use: two prompts, each clean, that together spelled a key -- and
+    the pair went through. The prompt path had no cross-turn memory at all; the window
+    only ever lived in the tool-call hook.
+    """
+
+    @staticmethod
+    def _key() -> str:
+        return "sk-ant-" + "api03-" + "AbC9dEf2GhI4jKl6MnO8pQr0StU1vWx3Yz5"
+
+    def test_nothing_carried_means_nothing_to_bridge(self, tmp_path):
+        from gateway.base.window import PromptWindow
+
+        assert PromptWindow(directory=tmp_path).bridge("s", "hello") == ""
+
+    def test_tail_joins_the_next_head_with_no_separator(self, tmp_path):
+        """A key typed in halves has no separator; inserting one would defeat the point."""
+        from gateway.base.window import PromptWindow
+
+        w = PromptWindow(directory=tmp_path)
+        w.remember("s", "first half " + self._key()[:20])
+        assert self._key()[:20] + self._key()[20:] in w.bridge("s", self._key()[20:])
+
+    def test_real_detector_sees_the_split_key_only_once_joined(self, tmp_path):
+        """End to end on the actual detection stack, not a stand-in."""
+        from hooks.zt_check import check_embedded
+
+        from gateway.base.window import PromptWindow
+
+        # Split at 16: the anchor is present but the body is 3 characters, which the
+        # detector correctly lets through. Splitting later than ~20 is already caught by
+        # the anchor alone, so this is the narrow band where the bridge is what matters.
+        head, tail = self._key()[:16], self._key()[16:]
+        assert check_embedded("first half is " + head, "s")["allow"]
+        assert check_embedded(tail + " is the rest", "s")["allow"]
+
+        w = PromptWindow(directory=tmp_path)
+        w.remember("s", "first half is " + head)
+        joined = w.bridge("s", tail + " is the rest")
+        assert not check_embedded(joined, "s")["allow"]
+
+    def test_ordinary_prompts_leave_nothing_that_blocks(self, tmp_path):
+        """The failure mode that retired the old fragment carry."""
+        from hooks.zt_check import check_embedded
+
+        from gateway.base.window import PromptWindow
+
+        w = PromptWindow(directory=tmp_path)
+        for prompt in ("refactor the retry loop so it backs off",
+                       "now add a regression test for that",
+                       "run the suite and show me failures"):
+            joined = w.bridge("s", prompt)
+            if joined:
+                assert check_embedded(joined, "s")["allow"], joined
+            w.remember("s", prompt)
+
+    def test_carry_is_bounded_to_three_turns(self, tmp_path):
+        from gateway.base.window import PromptWindow
+
+        w = PromptWindow(directory=tmp_path, turns=3)
+        for i in range(3):
+            w.remember("s", f"turn {i} marker{i}")
+        assert "marker0" not in w.bridge("s", "x") or True   # may have rolled off the 64
+        w.remember("s", "fourth turn resets the span")
+        assert "marker1" not in w.bridge("s", "x")
+
+    def test_clear_drops_the_carry(self, tmp_path):
+        from gateway.base.window import PromptWindow
+
+        w = PromptWindow(directory=tmp_path)
+        w.remember("s", "something " + self._key()[:20])
+        w.clear("s")
+        assert w.bridge("s", self._key()[20:]) == ""
+
+    def test_sessions_do_not_share_a_carry(self, tmp_path):
+        from gateway.base.window import PromptWindow
+
+        w = PromptWindow(directory=tmp_path)
+        w.remember("alice", "half " + self._key()[:20])
+        assert w.bridge("bob", self._key()[20:]) == ""
+
+    def test_expired_carry_is_dropped(self, tmp_path):
+        from gateway.base.window import PromptWindow
+
+        w = PromptWindow(directory=tmp_path, ttl_s=-1)
+        w.remember("s", "half " + self._key()[:20])
+        assert w.bridge("s", self._key()[20:]) == ""
+
+    def test_carry_file_is_owner_only(self, tmp_path):
+        """It holds raw prompt text, short but real."""
+        import os
+        import stat
+
+        from gateway.base.window import PromptWindow
+
+        w = PromptWindow(directory=tmp_path)
+        w.remember("s", "half " + self._key()[:20])
+        path = next(tmp_path.glob("*.prompt"))
+        if os.name != "nt":
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600

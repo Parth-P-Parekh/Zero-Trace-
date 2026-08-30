@@ -234,7 +234,62 @@ def run(event: dict) -> None:
     if not result.get("allow", False):
         deny(result.get("reason") or "ZeroTrace blocked this prompt.")
 
+    # This prompt is clean on its own. It may still be the second half of a credential
+    # whose first half was typed a turn ago, so the carried tail is joined to this
+    # prompt's head and scanned once more. Both sides were allowed individually, so
+    # anything found here exists only across the boundary.
+    window, joined = _prompt_window(), ""
+    if window is not None:
+        try:
+            joined = window.bridge(session_id, text)
+        except Exception:  # noqa: BLE001
+            joined = ""
+
+    if joined:
+        try:
+            bridged = (check_service(joined, session_id, event.get("cwd"))
+                       if CHECKER else check_embedded(joined, session_id))
+        except SystemExit:
+            raise
+        except Exception:  # noqa: BLE001
+            # The prompt itself already passed; losing the join costs one missed bridge.
+            bridged = {"allow": True}
+        if not bridged.get("allow", True):
+            classes = ", ".join(bridged.get("classes") or []) or "a credential"
+            window.clear(session_id)
+            deny(
+                f"ZeroTrace blocked this prompt: joined with what you sent just before, "
+                f"it forms {classes}. Nothing was sent. Splitting a secret across two "
+                f"messages does not divide it -- the conversation holds both halves."
+            )
+
+    # Carry only from prompts that were allowed. A blocked prompt must not leave a tail
+    # for the next one to trip over; that asymmetry is what stopped the old fragment
+    # carry from poisoning unrelated work.
+    if window is not None:
+        try:
+            window.remember(session_id, text)
+        except Exception:  # noqa: BLE001
+            pass
+
     allow()
+
+
+def _prompt_window():
+    """The cross-prompt window, or None if it cannot be loaded.
+
+    ROOT goes on sys.path first: importing from `gateway` before that raises
+    ModuleNotFoundError, and a broad except would turn it into a silent "no window
+    today" with nothing to show anything had broken.
+    """
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from gateway.base.window import PromptWindow
+
+        return PromptWindow()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 if __name__ == "__main__":

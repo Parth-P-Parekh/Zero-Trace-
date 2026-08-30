@@ -360,3 +360,106 @@ def payload_of(tool: str, args: dict) -> str:
         # Drop format strings like '%s' -- they are syntax, not payload.
         return "".join(p for p in parts if p and not re.fullmatch(r"%[a-z]", p))
     return ""
+
+
+# ------------------------------------------------------------ prompt window --
+
+#: Consecutive prompts a carry may span. The user types the parts; three is enough for
+#: "here is the first half" / "and the second" / "and the rest", and bounding it stops a
+#: carry from following a session forever.
+MAX_PROMPT_TURNS = 3
+
+
+class PromptWindow:
+    """Bridge a credential split across consecutive prompts.
+
+    **A tail window is the right shape here, and that is the difference from tool calls.**
+    `CallWindow` above carries *fragments* because a tool call wraps its payload in syntax:
+    the interesting run sits mid-command and the tail is `>> /tmp/k`, so keeping the tail
+    bridges nothing. A prompt is free text. When someone pastes half a key and then the
+    rest, the split lands on the boundary -- exactly the streaming case in CODE-01 §9.2,
+    where holding back the last N characters is what matches a secret straddling two SSE
+    chunks.
+
+    That difference is also why this is safe where fragment carry was not. Fragment carry
+    joined every carried fragment to every candidate run in the next call, so one `sk-ant-`
+    in a doc fused with any later high-entropy token; it produced repeated false positives
+    on ordinary work and was removed. This joins one tail to one head, in order, once.
+
+    Two further things keep the false-positive surface at essentially nothing:
+
+    * **Only allowed prompts leave a tail.** A blocked prompt is not carried, so both
+      sides of any join were individually clean. A join that blocks therefore describes a
+      match that exists only across the boundary -- which is the thing being looked for.
+    * **64 characters, three turns, owner-only, TTL.** The at-rest cost is one short tail
+      per session, not a transcript.
+    """
+
+    __slots__ = ("_dir", "_window", "_ttl", "_turns")
+
+    def __init__(
+        self,
+        directory: str | Path | None = None,
+        window: int = DEFAULT_WINDOW,
+        ttl_s: int = DEFAULT_TTL_S,
+        turns: int = MAX_PROMPT_TURNS,
+    ) -> None:
+        self._dir = Path(directory or (Path(tempfile.gettempdir()) / "zerotrace-window"))
+        self._window = window
+        self._ttl = ttl_s
+        self._turns = turns
+
+    def _path(self, session_id: str) -> Path:
+        digest = hashlib.sha256((session_id or "-").encode()).hexdigest()[:16]
+        return self._dir / f"{digest}.prompt"
+
+    def _load(self, session_id: str) -> tuple[str, int]:
+        p = self._path(session_id)
+        try:
+            if not p.exists():
+                return "", 0
+            if time.time() - p.stat().st_mtime > self._ttl:
+                p.unlink(missing_ok=True)
+                return "", 0
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "", 0
+        if not isinstance(data, dict):
+            return "", 0
+        return str(data.get("tail") or "")[-self._window:], int(data.get("turns") or 0)
+
+    def bridge(self, session_id: str, text: str) -> str:
+        """The joined text to scan, or empty when there is nothing carried.
+
+        The head of this prompt is appended to the carried tail with no separator: a key
+        typed in two halves has no separator either, and inserting one would defeat the
+        only case this exists for.
+        """
+        tail, _ = self._load(session_id)
+        if not tail or not text.strip():
+            return ""
+        return tail + text[: self._window]
+
+    def remember(self, session_id: str, text: str) -> None:
+        """Carry this prompt's tail. Call only for prompts that were allowed."""
+        if not text.strip():
+            return
+        tail, turns = self._load(session_id)
+        if turns >= self._turns:
+            # The span is bounded, so start a fresh carry rather than trailing forever.
+            tail, turns = "", 0
+        carried = (tail + text)[-self._window:]
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self._path(session_id), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"tail": carried, "turns": turns + 1}, fh)
+        except OSError:
+            # A window we cannot persist costs one missed bridge, never a blocked prompt.
+            pass
+
+    def clear(self, session_id: str) -> None:
+        try:
+            self._path(session_id).unlink(missing_ok=True)
+        except OSError:
+            pass
