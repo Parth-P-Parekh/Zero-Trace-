@@ -8,7 +8,7 @@ import { Icon } from '@/ds';
 
 /**
  * The page heading. Display type set large and light, measure capped so it reads
- * as drawn ink rather than a banner. No eyebrow above it — the rail and the
+ * as drawn ink rather than a banner. No eyebrow above it - the rail and the
  * topbar already say where you are, and a third label would be decoration.
  */
 export function PageHead({
@@ -54,7 +54,7 @@ export function PageHead({
 
 /**
  * A capability that is designed but not built. Stated plainly wherever it would
- * otherwise be implied as working — overclaiming is what loses a security buyer.
+ * otherwise be implied as working - overclaiming is what loses a security buyer.
  */
 export function StubNote({ capability, detail }: { capability: string; detail: string }) {
   return (

@@ -11,7 +11,7 @@
  * The gesture is the identity's own, inverted. The wordmark drains left to right
  * and completes; here the scan sweeps left to right and **halts** at the breach.
  * The part of the payload past the halt is never revealed, because the request
- * never got that far. Nothing loops — this is an event, not an animation.
+ * never got that far. Nothing loops - this is an event, not an animation.
  *
  * Example data is rendered the way the product renders it: solid ink blocks at
  * the original character length, never plaintext, never asterisks.
@@ -25,7 +25,7 @@ type Part =
 /**
  * The sweep crosses the whole payload, because detection reads all of it. What
  * stops is the request, and the boundary it does not cross is the rule the sweep
- * arrives at — not a cut through the middle of a value.
+ * arrives at - not a cut through the middle of a value.
  */
 const SWEEP_END = 1;
 
@@ -138,7 +138,7 @@ export function BreachHero() {
           />
         </div>
 
-        {/* What the caller gets back. Not the model's answer — an error. */}
+        {/* What the caller gets back. Not the model's answer - an error. */}
         <div
           style={{
             padding: '18px 24px 22px',
@@ -159,7 +159,7 @@ export function BreachHero() {
             className="zt-mono-sm"
             style={{ margin: '10px 0 0', color: 'var(--text-on-dark-quiet)' }}
           >
-            (2) values matched a rule with no redaction strategy — pan, razorpay_key.
+            (2) values matched a rule with no redaction strategy - pan, razorpay_key.
           </p>
           <p
             className="zt-mono-sm"
@@ -174,7 +174,7 @@ export function BreachHero() {
         style={{ font: 'var(--type-body-sm)', color: 'var(--text-quiet)', marginTop: 14, maxWidth: '60ch' }}
       >
         The application that sent this was not modified. It resolved the provider domain and
-        ZeroTrace answered — the request stopped at the perimeter, and the caller got an error
+        ZeroTrace answered - the request stopped at the perimeter, and the caller got an error
         naming what was in it.
       </figcaption>
     </figure>
@@ -195,7 +195,7 @@ function Block({
   const flagged = Boolean(breach) && stopped;
   return (
     <span
-      title={`${type}${breach ? ' — matched a blocking rule' : ''}`}
+      title={`${type}${breach ? ' - matched a blocking rule' : ''}`}
       style={{ position: 'relative', display: 'inline-block', whiteSpace: 'pre' }}
     >
       {/* Sized by character count, so the block is the length of what it stands in for. */}

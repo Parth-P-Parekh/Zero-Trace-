@@ -22,7 +22,7 @@ export default async function LoginPage({
   const params = await searchParams;
   const next = safeNext(params.next);
 
-  // Already signed in — no reason to make anyone type it twice.
+  // Already signed in - no reason to make anyone type it twice.
   if (await getSession()) redirect(next);
 
   const available = authAvailable();
@@ -84,7 +84,7 @@ export default async function LoginPage({
           ) : demo ? (
             <StubNote
               capability="Single sign-on"
-              detail="The console is opening on the shipped development credential — admin / zerotrace-demo. Override it with ZT_ADMIN_ID and ZT_ADMIN_PASSWORD before this runs anywhere real."
+              detail="The console is opening on the shipped development credential - admin / zerotrace-demo. Override it with ZT_ADMIN_ID and ZT_ADMIN_PASSWORD before this runs anywhere real."
             />
           ) : (
             <StubNote

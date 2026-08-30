@@ -3,7 +3,7 @@ import { Button, Card, Icon, Tag, Wordmark } from '@/ds';
 import { BreachHero } from '@/components/BreachHero';
 
 export const metadata = {
-  title: 'ZeroTrace — an egress firewall for AI traffic',
+  title: 'ZeroTrace - an egress firewall for AI traffic',
   description:
     'Deployed in the egress path, inside your perimeter. Redacts secrets and personal data out of outbound and inbound model payloads, one way, and logs every decision.',
 };
@@ -16,7 +16,7 @@ export default function SitePage() {
       <SiteNav />
 
       <main>
-        {/* Hero. The payload is the thesis — the most characteristic thing the
+        {/* Hero. The payload is the thesis - the most characteristic thing the
             product does, shown doing it, rather than described. */}
         <section style={{ ...SHELL, paddingTop: 72, paddingBottom: 88 }}>
           <h1
@@ -39,7 +39,7 @@ export default function SitePage() {
           >
             ZeroTrace is an egress firewall for AI traffic. It runs inside your perimeter, in the
             path every application already takes to reach a model. When a payload carries something
-            policy forbids, the request stops there — the provider never receives it, and the caller
+            policy forbids, the request stops there - the provider never receives it, and the caller
             is told exactly what was found.
           </p>
 
@@ -90,18 +90,18 @@ export default function SitePage() {
           </div>
         </section>
 
-        {/* The three mechanisms. Prose, not a feature grid — each one is an
+        {/* The three mechanisms. Prose, not a feature grid - each one is an
             argument that takes a paragraph to make honestly. */}
         <section style={{ ...SHELL, paddingTop: 96, paddingBottom: 96 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 48 }}>
             <Pillar
               title="It writes its own detectors"
-              body="The expensive model is a teacher, not the runtime. When it catches something the deterministic rules missed, a detector is written, validated against the full corpus, and promoted to the hot path. Escalation rate, latency and cost all fall as traffic grows — the inverse of every model-in-the-loop guardrail."
+              body="The expensive model is a teacher, not the runtime. When it catches something the deterministic rules missed, a detector is written, validated against the full corpus, and promoted to the hot path. Escalation rate, latency and cost all fall as traffic grows - the inverse of every model-in-the-loop guardrail."
               proof="Escalation fell from 11.4% to 3.8% across three runs on a fixed corpus."
             />
             <Pillar
               title="It scores the combination, not the entity"
-              body="A record with no name, no email and no identifier can still identify one person. Risk is computed over the whole set of quasi-identifiers present — pincode alone is safe, pincode with a date of birth and an employer is a person. Entity filters pass these records unflagged."
+              body="A record with no name, no email and no identifier can still identify one person. Risk is computed over the whole set of quasi-identifiers present - pincode alone is safe, pincode with a date of birth and an employer is a person. Entity filters pass these records unflagged."
               proof="Pincode, DOB, gender and employer scored 0.78 with no entity match."
             />
             <Pillar
@@ -153,7 +153,7 @@ export default function SitePage() {
           </h2>
           <p style={{ font: 'var(--type-body)', color: 'var(--text-body)', margin: '20px 0 40px', maxWidth: '60ch' }}>
             Metered on tokens scanned, both legs. The meter is a signed counter your own deployment
-            emits — counts and hashes only, readable before it is sent.
+            emits - counts and hashes only, readable before it is sent.
           </p>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 12 }}>

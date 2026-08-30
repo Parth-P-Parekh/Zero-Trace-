@@ -1,13 +1,13 @@
 /**
  * Fixtures shaped to the contract in `types.ts`.
  *
- * No backend exists yet — CODE-01 is a plan, not code. These stand in for it and
+ * No backend exists yet - CODE-01 is a plan, not code. These stand in for it and
  * are deliberately shaped like real traffic from the benchmark corpus (CODE-01
  * §18): the credential cases, the compositional case with no flaggable entity,
  * the inbound clearance case, one degraded request, one unregistered workload.
  *
  * Every value here is synthetic. No fixture contains a real secret, and no
- * fixture field can hold an original value — see the note in `types.ts`.
+ * fixture field can hold an original value - see the note in `types.ts`.
  */
 import type {
   Actor, CoverageReport, Counterfactual, Detector, EscalationPoint, Licence, LedgerHead,
@@ -263,7 +263,7 @@ export const DETECTORS: Detector[] = [
   },
 ];
 
-/** Runs 1 to 3 of the benchmark. The line falls — this is EV-NOV-03. */
+/** Runs 1 to 3 of the benchmark. The line falls - this is EV-NOV-03. */
 export const ESCALATION_CURVE: EscalationPoint[] = [
   { run: 1, label: 'Run 1', escalationRate: 0.114, p95Ms: 62, costPaisePerMillion: 81, activeDetectors: 24 },
   { run: 2, label: 'Run 2', escalationRate: 0.071, p95Ms: 55, costPaisePerMillion: 68, activeDetectors: 26 },
@@ -317,7 +317,7 @@ escalation:
   },
   {
     version: 6, createdBy: 'a.kulkarni', createdAt: '2026-08-29T11:05:00Z', active: false,
-    note: 'Outbound only. Superseded when the inbound leg went live.', yaml: '# version 6 — outbound rules only',
+    note: 'Outbound only. Superseded when the inbound leg went live.', yaml: '# version 6 - outbound rules only',
   },
   {
     version: 5, createdBy: 's.rao', createdAt: '2026-08-29T09:12:00Z', active: false,

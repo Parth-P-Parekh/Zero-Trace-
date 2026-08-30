@@ -5,7 +5,7 @@
  * FastAPI data plane lands, `client.ts` swaps its fetcher and no view changes.
  *
  * The invariant that shapes every type here: **a finding carries a span path, a
- * class and offsets — never the value.** There is no field on any type below
+ * class and offsets - never the value.** There is no field on any type below
  * that could hold a sensitive original, and adding one would be a product bug,
  * not a feature.
  */
@@ -44,7 +44,7 @@ export const STAGE_LABEL: Record<Stage, string> = {
   S7: 'Adjudicator',
 };
 
-/** Detected entity classes. Credentials are never tokenized — policy sends them to block. */
+/** Detected entity classes. Credentials are never tokenized - policy sends them to block. */
 export type EntityClass =
   | 'RAZORPAY_KEY' | 'OPENAI_KEY' | 'AWS_ACCESS_KEY' | 'GITHUB_TOKEN' | 'JWT' | 'PRIVATE_KEY' | 'DB_URI'
   | 'PAN' | 'AADHAAR_FORMAT' | 'CREDIT_CARD' | 'IFSC' | 'GSTIN' | 'UPI_VPA'
@@ -57,7 +57,7 @@ export const CREDENTIAL_CLASSES: readonly EntityClass[] = [
   'RAZORPAY_KEY', 'OPENAI_KEY', 'AWS_ACCESS_KEY', 'GITHUB_TOKEN', 'JWT', 'PRIVATE_KEY', 'DB_URI',
 ];
 
-/** Who made the request. Resolved from the IdP or the mesh — never a developer key. */
+/** Who made the request. Resolved from the IdP or the mesh - never a developer key. */
 export interface Actor {
   id: string;
   label: string;
@@ -119,7 +119,7 @@ export interface RequestRecord {
   ruleFired?: number;
 }
 
-/** The payload as the inspector renders it — masked spans only, never originals. */
+/** The payload as the inspector renders it - masked spans only, never originals. */
 export interface PayloadSpan {
   text?: string;
   mask?: string;
@@ -143,7 +143,7 @@ export interface Detector {
   kind: 'regex' | 'checksum' | 'entropy' | 'heuristic' | 'ner' | 'composite';
   pattern: string;
   entityClass: EntityClass;
-  /** `synthesized` detectors carry provenance — the finding that produced them. */
+  /** `synthesized` detectors carry provenance - the finding that produced them. */
   source: 'seed' | 'synthesized';
   originFindingId?: string;
   /** Set for synthesized detectors: when it was written, and from what. */
@@ -157,7 +157,7 @@ export interface Detector {
   reason?: string;
 }
 
-/** One point on the escalation curve — N1's proof that the system gets cheaper. */
+/** One point on the escalation curve - N1's proof that the system gets cheaper. */
 export interface EscalationPoint {
   run: number;
   label: string;
@@ -182,7 +182,7 @@ export interface PolicyException {
   scope: { spanPathPrefix?: string; destination?: string; direction?: Leg };
   reason: string;
   requestedBy: string;
-  /** Null until an approver signs off. Never equal to `requestedBy` — enforced in the schema. */
+  /** Null until an approver signs off. Never equal to `requestedBy` - enforced in the schema. */
   approvedBy: string | null;
   createdAt: string;
   expiresAt: string;

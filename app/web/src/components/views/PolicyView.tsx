@@ -24,7 +24,7 @@ export function PolicyView({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 'var(--page-max)' }}>
       <PageHead
         title="One policy file, inherited down"
-        sub="Policy is org-scoped. A business unit may narrow an action, never widen it — the resolver takes the stronger of the two and refuses a weaker override at publish time."
+        sub="Policy is org-scoped. A business unit may narrow an action, never widen it - the resolver takes the stronger of the two and refuses a weaker override at publish time."
         right={
           <div style={{ display: 'flex', gap: 8 }}>
             <Button variant="secondary" size="sm" icon="copy">Copy YAML</Button>

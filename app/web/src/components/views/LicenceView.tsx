@@ -46,7 +46,7 @@ export function LicenceView({ licence, stub }: { licence: Licence; stub: StubNot
           </div>
           <p style={{ margin: '12px 0 0', font: 'var(--type-body-sm)', color: 'var(--text-on-dark-body)', maxWidth: '46ch' }}>
             {percent(used)} of the licensed volume across {licence.businessUnits} business units.
-            Above it, overage is invoiced as an add-on rather than enforced as a cut-off — a firewall
+            Above it, overage is invoiced as an add-on rather than enforced as a cut-off - a firewall
             that stops inspecting when the meter runs out is not a firewall.
           </p>
 

@@ -205,7 +205,7 @@ export function InspectorView({
                       />
                     </span>
                     <span className="zt-mono-sm zt-nums" style={{ color: over ? 'var(--signal-info)' : 'var(--text-quiet)', textAlign: 'right' }}>
-                      {spent ? ms(spent) : '—'}
+                      {spent ? ms(spent) : '-'}
                     </span>
                   </div>
                 );

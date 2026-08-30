@@ -5,12 +5,12 @@
  *
  * This directive is why the bridge exists at all. The design system's components
  * use hooks but carry no `'use client'` of their own, and the folder is
- * read-only — so the boundary is declared here instead. Server components import
+ * read-only - so the boundary is declared here instead. Server components import
  * from `@/ds` and get client components back, and the design system stays
  * untouched.
  *
  * The design system at `app/ZeroTrace Design System/` is read-only. Nothing is
- * copied, wrapped or re-implemented here — these are the real components, given
+ * copied, wrapped or re-implemented here - these are the real components, given
  * the prop types their `.d.ts` files describe, restated against a real React
  * import so they type-check inside this app.
  *
@@ -133,7 +133,7 @@ export interface StatusDotProps {
   style?: CSSProperties;
 }
 
-// `size` is narrowed away from the DOM's numeric attribute on both of these —
+// `size` is narrowed away from the DOM's numeric attribute on both of these -
 // in this system it names a density step, not a character width.
 export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size' | 'prefix'> {
   label?: string;

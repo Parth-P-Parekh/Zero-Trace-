@@ -7,7 +7,7 @@ import { GridHead, PageHead, SectionLabel } from '@/components/Chrome';
 import { classToken, count, micros, percent } from '@/lib/format';
 import type { Detector, EscalationPoint } from '@/lib/types';
 
-// The class column carries a mono tag, so it needs real width — at 84px the tag
+// The class column carries a mono tag, so it needs real width - at 84px the tag
 // overflowed into precision.
 const COLUMNS = 'minmax(200px,1fr) minmax(150px,190px) 128px 78px 68px 78px 96px';
 

@@ -112,7 +112,7 @@ export function CoverageView({
             <SectionLabel>Observed harnesses · this gateway process</SectionLabel>
             <p style={{ margin: 0, font: 'var(--type-body-sm)', color: 'var(--text-quiet)' }}>
               {exact(harnessCoverage.total_requests)} checks traversed ZeroTrace since startup.
-              Direct egress is not visible here, so this is traversal evidence—not a coverage percentage.
+              Direct egress is not visible here, so this is traversal evidence-not a coverage percentage.
             </p>
           </div>
           <div className="zt-table">

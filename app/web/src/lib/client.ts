@@ -27,7 +27,7 @@ export function getRequest(id: string): RequestRecord | undefined {
   return REQUESTS.find((r) => r.id === id);
 }
 
-/** GET /api/requests/:id/diff — span paths, classes and offsets only. */
+/** GET /api/requests/:id/diff - span paths, classes and offsets only. */
 export function getPayload(id: string): PayloadLeg[] {
   return PAYLOADS[id] ?? [];
 }
@@ -60,7 +60,7 @@ export function getCoverage(): CoverageReport {
   return COVERAGE;
 }
 
-/** GET /v1/coverage — gateway traversals only; never presented as a bypass ratio. */
+/** GET /v1/coverage - gateway traversals only; never presented as a bypass ratio. */
 export async function getHarnessCoverage(): Promise<HarnessCoverageSnapshot | null> {
   const base = process.env.ZT_GATEWAY_URL?.replace(/\/$/, '');
   if (!base) return null;

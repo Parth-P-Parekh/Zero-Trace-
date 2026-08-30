@@ -170,7 +170,7 @@ function TrafficRow({ row }: { row: RequestRecord }) {
 
         <span style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 0 }}>
           {shown.length === 0 ? (
-            <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-faint)' }}>—</span>
+            <span style={{ font: 'var(--type-body-sm)', color: 'var(--text-faint)' }}>-</span>
           ) : (
             shown.map((c) => (
               <Tag key={c} mono>{classToken(c)}</Tag>
@@ -199,7 +199,7 @@ function TrafficRow({ row }: { row: RequestRecord }) {
           <StatusDot state={row.status} size={6} />
           <span style={{ font: 'var(--type-body-sm)' }}>{statusLabel(row.status)}</span>
           {row.degraded ? (
-            <Tooltip label={`${row.degraded} failed open — result is incomplete`}>
+            <Tooltip label={`${row.degraded} failed open - result is incomplete`}>
               <span style={{ display: 'inline-flex', color: 'var(--signal-info)' }}>
                 <Icon name="clock" size={14} />
               </span>

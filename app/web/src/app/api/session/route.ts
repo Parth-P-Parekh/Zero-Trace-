@@ -6,7 +6,7 @@ import {
 
 export const runtime = 'nodejs';
 
-/** POST /api/session — sign in. */
+/** POST /api/session - sign in. */
 export async function POST(request: Request) {
   const cfg = adminConfig();
 
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
   return response;
 }
 
-/** DELETE /api/session — sign out. */
+/** DELETE /api/session - sign out. */
 export async function DELETE() {
   const response = NextResponse.json({ ok: true });
   response.cookies.set({

@@ -7,7 +7,7 @@
  *
  * The one extension: the rail is grouped. Seven destinations is past the point
  * where a flat list scans, so they sit under three labelled groups following the
- * kit's own "Environments" precedent — Traffic, Control, Assurance.
+ * kit's own "Environments" precedent - Traffic, Control, Assurance.
  */
 import { useState } from 'react';
 import Link from 'next/link';

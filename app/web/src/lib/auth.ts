@@ -2,7 +2,7 @@
  * Console access control.
  *
  * A note on what this is and is not. PROD-01 C22 has actors resolving from the
- * enterprise IdP — OIDC/SAML for people, SPIFFE for services — and the product
+ * enterprise IdP - OIDC/SAML for people, SPIFFE for services - and the product
  * holds no accounts of its own. That is still the position. What lives here is a
  * **break-glass local admin**: the one credential that opens the console while
  * SSO is stubbed, so the console is not simply open to anyone who knows the URL.

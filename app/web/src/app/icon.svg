@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ZeroTrace">
+  <title>ZeroTrace</title>
+  <desc>App icon: ZT drawn at Inter's cap-height ratio on an approved dark surface. Corner radius follows the logo sheet's 0.219 app-icon ratio. Mono variant, since the sheet forces full density below 13px and a favicon never exceeds it. Letterforms are drawn rather than set, because Inter is rarely installed and a text element would fall back to a face the sheet forbids. A flagged stand-in until the real outlined favicon file exists.</desc>
+  <rect width="512" height="512" rx="112" ry="112" fill="#0B0B0B"/>
+  <g fill="#F2F2F0">
+    <path d="M116,168 H241 V189 L150,323 H241 V344 H116 V323 L207,189 H116 Z"/>
+    <path d="M271,168 H400 V189 H346 V344 H325 V189 H271 Z"/>
+  </g>
+</svg>

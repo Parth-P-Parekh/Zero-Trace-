@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * The escalation rate across benchmark runs. Drawn, not charted — a polyline over
+ * The escalation rate across benchmark runs. Drawn, not charted - a polyline over
  * a ramp-derived horizontal gradient, which is the readme's one sanctioned
  * functional use of a gradient and happens to be the product's own argument:
  * the line falls as the system writes its own detectors.

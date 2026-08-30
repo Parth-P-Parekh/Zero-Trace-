@@ -39,7 +39,7 @@ export function LoginForm({
         setBusy(false);
         return;
       }
-      // Keep the button busy through the transition — the console is a full
+      // Keep the button busy through the transition - the console is a full
       // navigation and a button that springs back reads as a failure.
       router.push(body.next ?? next);
       router.refresh();

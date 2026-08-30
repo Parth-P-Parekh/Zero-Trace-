@@ -41,9 +41,9 @@ export function percent(ratio: number, decimals = 1): string {
   return `${(ratio * 100).toFixed(decimals)}%`;
 }
 
-/** Risk reads as a bare two-decimal number — it is a score, not a percentage. */
+/** Risk reads as a bare two-decimal number - it is a score, not a percentage. */
 export function risk(v: number | null): string {
-  return v === null ? '—' : v.toFixed(2);
+  return v === null ? '-' : v.toFixed(2);
 }
 
 /** Microseconds to a readable unit-tagged string. */
@@ -56,7 +56,7 @@ export function className(c: EntityClass | string): string {
   return String(c).toLowerCase().replace(/_/g, ' ');
 }
 
-/** Class as it appears in mono contexts — unchanged, because there it is data. */
+/** Class as it appears in mono contexts - unchanged, because there it is data. */
 export function classToken(c: EntityClass | string): string {
   return String(c).toLowerCase();
 }
@@ -94,7 +94,7 @@ export function legLabel(leg: Leg): string {
 
 /**
  * The one-line result sentence, in the product's voice.
- * `(2) values redacted — us_ssn, api_key. Dispatched.`
+ * `(2) values redacted - us_ssn, api_key. Dispatched.`
  */
 export function resultSentence(
   status: 'clean' | 'redacted' | 'blocked',
@@ -102,8 +102,8 @@ export function resultSentence(
 ): string {
   if (status === 'clean') return 'Clean. Nothing redacted.';
   const list = Array.from(new Set(classes.map(classToken))).join(', ');
-  if (status === 'blocked') return `Blocked. ${count(classes.length)} values matched a rule with no redaction strategy — ${list}.`;
-  return `${count(classes.length)} values redacted — ${list}. Dispatched.`;
+  if (status === 'blocked') return `Blocked. ${count(classes.length)} values matched a rule with no redaction strategy - ${list}.`;
+  return `${count(classes.length)} values redacted - ${list}. Dispatched.`;
 }
 
 /** A span path is machine data and is never truncated in the middle of a segment. */
