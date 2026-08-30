@@ -9,9 +9,10 @@
  * where a flat list scans, so they sit under three labelled groups following the
  * kit's own "Environments" precedent — Traffic, Control, Assurance.
  */
+import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { Badge, IconButton, RailItem, StatusDot, Tooltip, Wordmark } from '@/ds';
+import { usePathname, useRouter } from 'next/navigation';
+import { Badge, Button, IconButton, RailItem, StatusDot, Tooltip, Wordmark } from '@/ds';
 
 type NavItem = { href: string; icon: string; label: string; count?: number | string };
 type NavGroup = { label: string; items: NavItem[] };
@@ -23,6 +24,8 @@ export interface ConsoleShellProps {
   counts?: Record<string, number | string>;
   /** Right-hand slot in the topbar for page-level controls. */
   actions?: React.ReactNode;
+  /** The signed-in admin, from the session. */
+  signedInAs?: string;
 }
 
 const ROUTE_TITLES: Array<[string, string]> = [
@@ -63,9 +66,23 @@ const GROUPS = (counts: Record<string, number | string>): NavGroup[] => [
   },
 ];
 
-export function ConsoleShell({ children, title, counts = {}, actions }: ConsoleShellProps) {
+export function ConsoleShell({
+  children, title, counts = {}, actions, signedInAs,
+}: ConsoleShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const heading = title ?? titleFor(pathname);
+  const [signingOut, setSigningOut] = useState(false);
+
+  const initials = (signedInAs ?? 'admin').slice(0, 2).toUpperCase();
+
+  async function signOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    await fetch('/api/session', { method: 'DELETE' });
+    router.push('/login');
+    router.refresh();
+  }
 
   return (
     <div className="zt-shell" style={{ display: 'flex', minHeight: '100vh', background: 'var(--paper)' }}>
@@ -149,16 +166,20 @@ export function ConsoleShell({ children, title, counts = {}, actions }: ConsoleS
           <Tooltip label="Documentation">
             <IconButton name="book-open" label="Documentation" />
           </Tooltip>
-          <div
-            aria-hidden
-            style={{
-              width: 26, height: 26, borderRadius: '50%', background: 'var(--ink)',
-              color: 'var(--ink-inverse)', display: 'flex', alignItems: 'center',
-              justifyContent: 'center', font: 'var(--type-eyebrow)',
-            }}
-          >
-            AK
-          </div>
+          <Tooltip label={`Signed in as ${signedInAs ?? 'admin'}`} mono>
+            <div
+              style={{
+                width: 26, height: 26, borderRadius: '50%', background: 'var(--ink)',
+                color: 'var(--ink-inverse)', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', font: 'var(--type-eyebrow)',
+              }}
+            >
+              {initials}
+            </div>
+          </Tooltip>
+          <Button size="sm" variant="ghost" onClick={signOut} disabled={signingOut}>
+            {signingOut ? 'Signing out' : 'Sign out'}
+          </Button>
         </header>
 
         <div className="zt-content" style={{ padding: '24px 24px 64px', flex: 1 }}>{children}</div>

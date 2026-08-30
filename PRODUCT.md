@@ -68,6 +68,7 @@ Marketing page (zerotrace.dev) also confirmed in scope — a separate visitor mo
 
 - **The console must never display a sensitive value.** Findings carry span paths, classes and offsets only. The decision diff renders `⟨PERSON_a41⟩` against `[PERSON, 12 chars]` — enough to understand the decision, not enough to leak it. This is a product invariant (PROD-01 §7), not a preference.
 - **Tokens are never reversible.** No UI affordance may imply "reveal original" or "unmask". There is no such operation.
+- **The console is closed by default.** It is reachable only through sign-in, and no surface links to it directly. While the IdP integration is stubbed, a single **break-glass local admin credential** opens it — a session cookie signed server-side, rate-limited, with no shipped default in production. This is a stand-in for C22, labelled as one in the interface, and it is the first thing deleted when OIDC and SCIM are real. It does not change the position that the product holds no accounts of its own.
 - **Redaction is one-way and covers both legs** — outbound to the model, inbound from it. Findings carry a `leg`.
 - **Latency is a first-class number**: p50 ≤ 30ms, p95 ≤ 65ms across both legs, per-stage budgets S0–S6.
 - **Degradation is stated, never hidden.** A stage that fails open sets `X-ZeroTrace-Degraded` and the UI must show it.
