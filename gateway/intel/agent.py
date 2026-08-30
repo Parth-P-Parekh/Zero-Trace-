@@ -23,7 +23,7 @@ import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from .features import EscalationFeatures
 
@@ -121,7 +121,15 @@ class EscalationQueue:
 class IntelPlane:
     """Wires the queue to the adjudicator. Owns Loop 2 entirely."""
 
-    __slots__ = ("queue", "_adjudicator", "proposals", "_task")
+    __slots__ = ("queue", "_adjudicator", "proposals", "_task", "_pack", "poll_seconds")
+
+    #: How long the worker sleeps between drains. Loop 2 runs after the response has
+    #: already gone, so latency here is irrelevant and batching is free -- a second of
+    #: delay costs nothing and lets one wake-up adjudicate a whole burst. An instance
+    #: attribute rather than a class constant because `__slots__` makes a class-level
+    #: default unassignable per instance, and a test that cannot shorten the interval
+    #: has to sleep a real second to prove the worker runs.
+    DEFAULT_POLL_SECONDS = 1.0
 
     def __init__(
         self,
@@ -132,6 +140,73 @@ class IntelPlane:
         self._adjudicator = adjudicator or StubAdjudicator()
         self.proposals: list[Proposal] = []
         self._task: asyncio.Task | None = None
+        self._pack: Any = None
+        self.poll_seconds: float = self.DEFAULT_POLL_SECONDS
+
+    def start(self, pack: object | None = None) -> None:
+        """Begin draining the queue in the background.
+
+        Nothing called this before, and that was the defect: `maybe_escalate` enqueued,
+        `run_once` was only ever called by tests, and so on a running gateway the queue
+        filled to `maxlen` and then counted drops for the rest of the process's life.
+        Every privacy property of Loop 2 was tested and none of its *liveness* was.
+
+        The task is fire-and-forget on purpose. It owns no request, holds no lock, and
+        its failure mode is "no new detectors get proposed", which is a degradation of an
+        improvement loop rather than an outage.
+        """
+        if self._task is not None and not self._task.done():
+            return
+        self._pack = pack
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            log.info("no running loop; Loop 2 worker not started")
+            return
+        self._task = loop.create_task(self._run_forever(), name="zt-loop2")
+
+    async def stop(self) -> None:
+        """Cancel the worker and drain what is already queued, once."""
+        task, self._task = self._task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+
+    async def _run_forever(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self.poll_seconds)
+                proposals = await self.run_once()
+                if proposals:
+                    self._absorb(proposals)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                # One bad batch must not end the loop for the life of the process.
+                log.warning("Loop 2 worker iteration failed", exc_info=True)
+
+    def _absorb(self, proposals: list[Proposal]) -> None:
+        """Offer any proposed detector to the learned pack.
+
+        `LearnedPack.offer` re-validates against the closed DSL and caps confidence below
+        the enforcement threshold, so nothing arriving here can block a request no matter
+        what the model returned. This is the step that makes the loop actually accrue
+        something; without it `run_once` produced proposals into a list nobody read.
+        """
+        if self._pack is None:
+            return
+        for proposal in proposals:
+            doc = getattr(proposal, "candidate_detector", None)
+            if not doc:
+                continue
+            try:
+                if self._pack.offer(doc) is not None:
+                    self._pack.save()
+            except Exception:  # noqa: BLE001
+                log.info("a proposed detector was refused", exc_info=True)
 
     def maybe_escalate(self, features: EscalationFeatures) -> None:
         """Enqueue and return. **Synchronous, non-blocking, never awaits a model.**

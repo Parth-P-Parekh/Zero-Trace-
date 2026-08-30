@@ -200,7 +200,7 @@ zerotrace logout && zerotrace login cag.audit
 **Expected:** both refused. Then:
 
 ```bash
-zerotrace ledger --tail 20
+python scripts/verify_ledger.py
 ```
 
 The auditor can see *that* the reads happened, who made them, which rule decided and which

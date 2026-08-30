@@ -60,6 +60,8 @@ class _Handler(BaseHTTPRequestHandler):
     checker = None          # set by serve()
     tool_checker = None
     read_checker = None
+    drain = None
+    intel_status = None
     token = ""
     last_seen = time.monotonic()
 
@@ -85,6 +87,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(200, _Handler.checker(
                 str(body.get("text") or ""), str(body.get("session_id") or "")
             ))
+            # After the reply is written. The caller already has its answer, so the
+            # adjudication cannot show up in the hook's measured latency.
+            if _Handler.drain is not None:
+                _Handler.drain()
         elif self.path == "/check-tool":
             self._reply(200, _Handler.tool_checker(
                 str(body.get("tool") or ""), body.get("tool_input") or {},
@@ -94,6 +100,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(200, _Handler.read_checker(
                 str(body.get("tool") or ""), body.get("tool_input") or {},
             ))
+        elif self.path == "/intel":
+            self._reply(200, _Handler.intel_status())
         elif self.path == "/shutdown":
             self._reply(200, {"stopping": True})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
@@ -152,10 +160,64 @@ def build_checker():
 
     window = PromptWindow()
 
+    # Loop 2, on the hook path. The hook itself never had one: `zt_pretool._escalate`
+    # appended a JSON line to a file when `ZT_ESCALATION_LOG` was set and did nothing
+    # otherwise, and its `EscalationQueue` import carried a comment saying it existed to
+    # "document the sink". So the harness people actually use -- Claude Code -- fed the
+    # improvement loop nothing at all.
+    #
+    # The daemon is the right home for it, for the same reason it owns the checker and
+    # the prompt window: it is the only part of this path that lives longer than one
+    # prompt, and Loop 2 needs a process that can drain a queue in the background.
+    from gateway.intel.agent import IntelPlane
+    from gateway.intel.escalation import escalate as escalate_tree
+    from gateway.intel.learned import LearnedPack
+    from gateway.intel.llm import build as build_adjudicator
+
+    intel = IntelPlane(adjudicator=build_adjudicator())
+    learned = LearnedPack()
+    tenant_key = os.environ.get("ZT_VAULT_MASTER_KEY", "dev-key").encode()
+
+    def drain_intel() -> None:
+        """Adjudicate whatever is queued, on this thread, between requests.
+
+        The gateway runs a background task for this. The daemon cannot: it is a
+        `ThreadingHTTPServer` with one manually-driven event loop, and a task created on
+        that loop would only advance while some request happened to be awaiting on it.
+        Draining after each check is honest about that -- it is the same work, on the
+        same loop, at a point where no caller is waiting for the answer.
+        """
+        if not len(intel.queue):
+            return
+        try:
+            proposals = loop.run_until_complete(intel.run_once())
+            intel._absorb(proposals)  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            pass
+
+    def intel_status() -> dict:
+        """What Loop 2 has seen and produced. Introspection, not control.
+
+        Worth having beyond debugging: "show me what it learned" is the only way to
+        demonstrate an improvement loop, and until this existed the honest answer was
+        that nobody could see whether it had run at all.
+        """
+        return {
+            "adjudicator": type(intel._adjudicator).__name__,  # noqa: SLF001
+            "queued": len(intel.queue),
+            "dropped": intel.queue.dropped,
+            "proposals": len(intel.proposals),
+            "learned_rules": len(learned),
+            "rule_names": [r.name for r in learned.rules][:20],
+        }
+
     def scan(text: str) -> dict:
-        verdict = to_verdict(loop.run_until_complete(
-            checker.check(text_tree(text), "daemon")
-        ))
+        tree = text_tree(text)
+        check = loop.run_until_complete(checker.check(tree, "daemon"))
+        verdict = to_verdict(check)
+        # After the verdict is computed, never before it: Loop 2 must not be able to
+        # delay or change the answer this call is about to return.
+        escalate_tree(intel, tree, check, tenant_key)
         return {"allow": verdict.allow, "reason": verdict.reason,
                 "classes": list(verdict.classes), "latency_ms": verdict.latency_ms}
 
@@ -255,12 +317,13 @@ def build_checker():
         return {"allow": decision.allow, "reason": decision.reason if not decision.allow
                 else ""}
 
-    return check, check_tool, check_read
+    return check, check_tool, check_read, drain_intel, intel_status
 
 
 def serve(port: int = 0) -> None:
     """Run until idle. Publishes its endpoint only once it is ready to answer."""
-    _Handler.checker, _Handler.tool_checker, _Handler.read_checker = build_checker()
+    (_Handler.checker, _Handler.tool_checker, _Handler.read_checker,
+     _Handler.drain, _Handler.intel_status) = build_checker()
     _Handler.token = secrets.token_hex(16)
 
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)

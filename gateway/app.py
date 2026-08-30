@@ -56,7 +56,7 @@ from .detectors import ALL_DETECTORS
 from .intel.agent import IntelPlane
 from .ledger import JsonlLedgerStore, Ledger
 from .ledger import records as ledger_records
-from .intel.features import features_of
+from .intel.escalation import escalate as _escalate
 from .redact import (
     DispatchVerificationError, apply_redaction, plan_redaction, verify_dispatch,
 )
@@ -113,13 +113,30 @@ async def lifespan(app: FastAPI):
     from .part_a.wiring import build as _build_part_a
 
     app.state.part_a = _build_part_a()
-    app.state.intel = IntelPlane()
+    # Loop 2. `llm.build()` returns the model-backed adjudicator when credentials
+    # resolve and the deterministic stub when they do not -- it never raises, because a
+    # deployment with no model configured should run with deterministic detection and no
+    # synthesis rather than fall over. This used to be a bare `IntelPlane()`, which meant
+    # the stub was the only adjudicator that ever ran, in every deployment, regardless of
+    # configuration.
+    from .intel.learned import LearnedPack
+    from .intel.llm import build as _build_adjudicator
+
+    app.state.learned = LearnedPack()
+    app.state.intel = IntelPlane(adjudicator=_build_adjudicator())
+    # ...and something has to drain it. Without this the queue filled and dropped.
+    app.state.intel.start(pack=app.state.learned)
+    log.info("Loop 2: %s, %d learned rule(s) on disk",
+             type(app.state.intel._adjudicator).__name__, len(app.state.learned))
     app.state.coverage = CoverageMonitor()
     # File-backed until persistence lands; the chain semantics are the Postgres ones.
     app.state.ledger = Ledger(JsonlLedgerStore(os.getenv("ZT_LEDGER_DIR", "evidence/ledger")))
     log.info("gateway up: %d detectors, pack v%d",
              len(app.state.pack), app.state.pack.version)
     yield
+    # Drain what is queued before the process goes, so a shutdown mid-burst loses the
+    # improvement rather than stranding it.
+    await app.state.intel.stop()
 
 
 def create_app() -> FastAPI:
@@ -204,14 +221,11 @@ async def prompt_check(request: Request) -> Response:
     check = await request.app.state.checker.check(tree, actor.tenant_id)
 
     # Loop 2 -- an uncertain span still teaches the next request, even though this
-    # path never rewrites anything.
-    for span in tree:
-        matching = tuple(f for f in check.findings if f.span_path == span.path)
-        if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
-            request.app.state.intel.maybe_escalate(
-                features_of(span, matching, request.app.state.checker._tenant_key,
-                            neighbours=_neighbours(check, span))
-            )
+    # path never rewrites anything. `escalate` covers both the amber finding and the span
+    # nobody claimed; the second was missing entirely, which cut the loop off from the
+    # classes it exists to learn. See intel/escalation.py.
+    _escalate(request.app.state.intel, tree, check,
+              request.app.state.checker._tenant_key, _neighbours)
 
     verdict: CheckVerdict = to_verdict(check, actor)
     await request.app.state.ledger.append(
@@ -352,13 +366,7 @@ async def _run(request: Request, tree: SpanTree, actor: Actor):
     )
 
     # Loop 2 — enqueue and move on. Never awaited; see intel/agent.py.
-    for span in tree:
-        matching = tuple(f for f in check.findings if f.span_path == span.path)
-        if matching and any(0.35 <= f.confidence < 0.75 for f in matching):
-            app.state.intel.maybe_escalate(
-                features_of(span, matching, app.state.checker._tenant_key,
-                            neighbours=_neighbours(check, span))
-            )
+    _escalate(app.state.intel, tree, check, app.state.checker._tenant_key, _neighbours)
 
     if decision.action is Action.BLOCK:
         # Nothing is dispatched. The caller decides how to say so, because a CLI and a

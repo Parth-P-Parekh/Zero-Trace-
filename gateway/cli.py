@@ -316,7 +316,41 @@ def _status(args: argparse.Namespace) -> int:
     if sink:
         print("    -> `zerotrace reset` clears these. Pieces written to one destination")
         print("       are concatenated, so test fixtures can linger for the TTL.")
+
+    _print_intel()
     return 0
+
+
+def _print_intel() -> None:
+    """Loop 2, if a daemon is up to answer for it.
+
+    Shown in `status` rather than hidden behind its own command because an improvement
+    loop nobody can see is indistinguishable from one that is switched off -- and this
+    one was switched off, in four places, while all of its tests passed.
+    """
+    from hooks import daemon_client
+
+    print()
+    print("  loop 2 (learns from spans no detector claimed)")
+    info = daemon_client.intel()
+    if info is None:
+        print("    not running   no warm daemon. Loop 2 lives in the daemon, which")
+        print("                  starts itself on the first prompt or tool call.")
+        return
+    print(f"    adjudicator   {info.get('adjudicator', '?')}")
+    if info.get("adjudicator") == "StubAdjudicator":
+        print("                  deterministic stand-in -- set ANTHROPIC_API_KEY for the")
+        print("                  model-backed one. The stub proposes checks, never rules.")
+    print(f"    queued        {info.get('queued', 0)}   (drained between requests)")
+    print(f"    adjudicated   {info.get('proposals', 0)}")
+    print(f"    learned rules {info.get('learned_rules', 0)}")
+    for name in info.get("rule_names") or []:
+        print(f"      - {name}")
+    if info.get("dropped"):
+        print(f"    dropped       {info['dropped']}  (queue was full; escalation rate is")
+        print("                  understated by this much)")
+    print("    nothing learned here can block a request: learned rules are capped")
+    print("    below the enforcement threshold by construction.")
 
 
 def _state_dir() -> Path:

@@ -287,13 +287,22 @@ on screen, and it needs the Act 4 framing to land as honesty rather than as a bu
 ## Act 5 — the audit trail (30 seconds)
 
 ```bash
-zerotrace ledger --tail 20
+python scripts/verify_ledger.py
+```
+
+Output:
+
+```
+  ok      bharat-digital         508 records   head 6c01ac5838e00f73...
+
+PASS -- every chain verifies from genesis.
 ```
 
 **Say:** "Every decision in this demo is on a hash-chained ledger — who asked, which rule
-decided, which policy version, and whether we could honour it. The auditor can see that the
-reads happened and never what was in them. An auditor who could read the data would be
-auditing themselves."
+decided, which policy version, and whether we could honour it. That command re-walks each
+chain from its genesis record, so a single altered or removed entry breaks it. The auditor
+can see that the reads happened and never what was in them — an auditor who could read the
+data would be auditing themselves."
 
 ---
 

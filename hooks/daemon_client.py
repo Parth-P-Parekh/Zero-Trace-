@@ -228,6 +228,25 @@ def ask_read(tool: str, args: dict) -> dict | None:
         return None
 
 
+def intel() -> dict | None:
+    """What Loop 2 has seen and produced, or None when no daemon is running.
+
+    Introspection only. An improvement loop nobody can look at is indistinguishable
+    from one that is switched off -- which this one was, for a while.
+    """
+    if disabled():
+        return None
+    endpoint = _endpoint()
+    if endpoint is None:
+        return None
+    port, token = endpoint
+    try:
+        answer = _post(port, token, "/intel", {})
+        return answer if isinstance(answer, dict) and "queued" in answer else None
+    except (OSError, ValueError):
+        return None
+
+
 def start() -> None:
     """Spawn a daemon and return immediately. Best effort, never fatal.
 
