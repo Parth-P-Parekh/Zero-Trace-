@@ -1,11 +1,18 @@
 /**
  * Primitives for the pitch scroll.
  *
- * The page is one argument told in eight moves, so the parts that repeat are
- * defined once here and the sections spend their variation on composition
- * instead of on chrome. Everything resolves to a design-system token.
+ * The page is one argument, so the parts that repeat are defined once here and
+ * the sections spend their variation on composition instead of on chrome.
+ * Everything resolves to a design-system token.
+ *
+ * Two things every primitive here carries. First, the reveal: ink arrives left
+ * to right, which is the identity's own gesture rather than a second one
+ * invented for the scroll. Second, attribution that is a link. A figure a
+ * procurement officer cannot check is a figure they will discount, and a
+ * source they have to search for is one they will not open.
  */
 import type { CSSProperties, ReactNode } from 'react';
+import { Reveal } from './Reveal';
 
 export const SHELL: CSSProperties = { maxWidth: 1120, margin: '0 auto', padding: '0 32px' };
 
@@ -33,7 +40,11 @@ export function Section({
   tight?: boolean;
 }) {
   return (
-    <section id={id} style={{ ...GROUNDS[ground], scrollMarginTop: 64 }}>
+    <section
+      id={id}
+      className={ground === 'dark' ? 'zt-on-dark' : undefined}
+      style={{ ...GROUNDS[ground], scrollMarginTop: 64 }}
+    >
       <div style={{ ...SHELL, paddingTop: tight ? 72 : 112, paddingBottom: tight ? 72 : 112 }}>
         {children}
       </div>
@@ -59,13 +70,17 @@ export function SectionHead({
 }) {
   return (
     <header style={{ marginBottom: 48 }}>
-      <div
+      <Reveal
+        variant="sweep"
         className="zt-eyebrow"
         style={{ color: onDark ? 'rgba(242,242,240,0.52)' : 'var(--muted)', marginBottom: 20 }}
       >
         {step}
-      </div>
-      <h2
+      </Reveal>
+      <Reveal
+        as="h2"
+        variant="sweep"
+        delay={1}
         style={{
           font: 'var(--w-regular) clamp(28px, 3.4vw, 42px)/var(--lh-snug) var(--font-core)',
           letterSpacing: 'var(--tr-display)', margin: 0, maxWidth: '22ch',
@@ -74,34 +89,58 @@ export function SectionHead({
         }}
       >
         {title}
-      </h2>
+      </Reveal>
       {lead ? (
-        <p
+        <Reveal
+          as="p"
+          delay={2}
           style={{
             font: 'var(--type-body)', margin: '20px 0 0', maxWidth: '64ch',
             color: onDark ? 'var(--text-on-dark-body)' : 'var(--text-body)',
           }}
         >
           {lead}
-        </p>
+        </Reveal>
       ) : null}
     </header>
   );
 }
 
 /**
- * Inline attribution. GOVW-01's own rule: the source sits next to the number,
- * not in a footer, because a procurement officer will ask and a footnote is an
- * answer they have to go looking for.
+ * Inline attribution, and a link when there is one to give.
+ *
+ * The source sits next to the number rather than in a footer, because the
+ * person who will ask is reading the number, not the footer. Where the source
+ * is a published document, the citation is the document.
  */
-export function Source({ children, onDark }: { children: ReactNode; onDark?: boolean }) {
+export function Source({
+  children,
+  href,
+  onDark,
+}: {
+  children: ReactNode;
+  href?: string;
+  onDark?: boolean;
+}) {
+  const color = onDark ? 'rgba(242,242,240,0.36)' : 'var(--text-faint)';
+  if (!href) {
+    return <span className="zt-mono-sm" style={{ color }}>{children}</span>;
+  }
   return (
-    <span
-      className="zt-mono-sm"
-      style={{ color: onDark ? 'rgba(242,242,240,0.36)' : 'var(--text-faint)' }}
+    <a
+      className="zt-mono-sm zt-cite"
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        color,
+        textDecoration: 'underline',
+        textDecorationColor: onDark ? 'rgba(242,242,240,0.22)' : 'rgba(17,17,17,0.22)',
+        textUnderlineOffset: 3,
+      }}
     >
       {children}
-    </span>
+    </a>
   );
 }
 
@@ -111,6 +150,7 @@ export function Stat({
   unit,
   body,
   source,
+  href,
   onDark,
   size = 'md',
 }: {
@@ -118,6 +158,7 @@ export function Stat({
   unit?: string;
   body: ReactNode;
   source: string;
+  href?: string;
   onDark?: boolean;
   size?: 'md' | 'lg';
 }) {
@@ -152,95 +193,7 @@ export function Stat({
       >
         {body}
       </p>
-      <Source onDark={onDark}>{source}</Source>
-    </div>
-  );
-}
-
-/**
- * A pull statement. The scroll's punctuation - used where a sentence is doing
- * more work than a paragraph would.
- */
-export function Pull({
-  children,
-  sub,
-  onDark,
-}: {
-  children: ReactNode;
-  sub?: ReactNode;
-  onDark?: boolean;
-}) {
-  return (
-    <div
-      style={{
-        paddingTop: 28, marginTop: 8,
-        boxShadow: `inset 0 1px 0 ${onDark ? 'var(--border-on-dark)' : 'var(--border-hairline)'}`,
-      }}
-    >
-      <p
-        style={{
-          font: 'var(--w-regular) clamp(21px, 2.2vw, 26px)/var(--lh-snug) var(--font-core)',
-          letterSpacing: 'var(--tr-heading)', margin: 0, maxWidth: '30ch',
-          color: onDark ? 'var(--ink-inverse)' : 'var(--text-strong)',
-        }}
-      >
-        {children}
-      </p>
-      {sub ? (
-        <p
-          style={{
-            font: 'var(--type-body-sm)', margin: '14px 0 0', maxWidth: '58ch',
-            color: onDark ? 'var(--text-on-dark-body)' : 'var(--text-quiet)',
-          }}
-        >
-          {sub}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/** A dense row list. Cards would be the lazy container for content this uniform. */
-export function Rows({ children }: { children: ReactNode }) {
-  return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
-}
-
-export function Row({
-  lead,
-  children,
-  meta,
-  onDark,
-}: {
-  lead: ReactNode;
-  children: ReactNode;
-  meta?: ReactNode;
-  onDark?: boolean;
-}) {
-  return (
-    <div
-      style={{
-        display: 'grid', gridTemplateColumns: 'minmax(160px,240px) minmax(0,1fr) auto',
-        gap: 24, padding: '18px 0', alignItems: 'baseline',
-        boxShadow: `inset 0 -1px 0 ${onDark ? 'var(--border-on-dark)' : 'var(--border-hairline)'}`,
-      }}
-    >
-      <div
-        style={{
-          font: 'var(--type-label)',
-          color: onDark ? 'var(--ink-inverse)' : 'var(--text-strong)',
-        }}
-      >
-        {lead}
-      </div>
-      <div
-        style={{
-          font: 'var(--type-body-sm)',
-          color: onDark ? 'var(--text-on-dark-body)' : 'var(--text-body)',
-        }}
-      >
-        {children}
-      </div>
-      <div style={{ textAlign: 'right' }}>{meta}</div>
+      <Source href={href} onDark={onDark}>{source}</Source>
     </div>
   );
 }

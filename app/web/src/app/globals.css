@@ -223,3 +223,356 @@ a:hover {
     animation: none;
   }
 }
+
+/* --- The reveal layer --------------------------------------------------
+   The page reveals with the identity's own gesture rather than with a
+   generic entrance. Ink arrives left to right, the way the wordmark drains
+   and the way the scan crosses a payload - so the scroll is animated
+   without a second bold move being invented for it.
+
+   Three variants, one mechanic. `zt-r` fades and rises 8px for prose and
+   figures. `zt-r-sweep` uncovers left to right for anything that reads as
+   ink being laid down. `zt-r-rule` draws a hairline from its left edge.
+   `--i` staggers members of a group; the delay ladder is capped so a long
+   list never leaves the reader waiting on the last row. */
+
+.zt-r,
+.zt-r-sweep,
+.zt-r-rule {
+  --i: 0;
+  --stagger: 55ms;
+  transition-delay: calc(var(--i) * var(--stagger));
+}
+
+.zt-r {
+  opacity: 0;
+  transform: translateY(8px);
+  transition-property: opacity, transform;
+  transition-duration: var(--d-slow);
+  transition-timing-function: var(--ease-out);
+}
+
+.zt-r-sweep {
+  opacity: 0;
+  clip-path: inset(0 100% 0 0);
+  transition-property: opacity, clip-path;
+  transition-duration: var(--d-base), var(--d-drain);
+  transition-timing-function: var(--ease-out);
+}
+
+.zt-r-rule {
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--d-drain) var(--ease-out);
+}
+
+/* The element observes itself, or a `RevealGroup` above it does - so both the
+   compound and the descendant form resolve to the same arrived state. */
+.is-in.zt-r,
+.is-in .zt-r {
+  opacity: 1;
+  transform: none;
+}
+
+.is-in.zt-r-sweep,
+.is-in .zt-r-sweep {
+  opacity: 1;
+  clip-path: inset(0 0 0 0);
+}
+
+.is-in.zt-r-rule,
+.is-in .zt-r-rule {
+  transform: scaleX(1);
+}
+
+/* A hairline that draws itself. Used as a section rule and as the divider
+   between rows in a list, so the list assembles rather than appearing. */
+.zt-hair {
+  height: 1px;
+  background: var(--border-hairline);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--d-drain) var(--ease-out);
+  transition-delay: calc(var(--i, 0) * 55ms);
+}
+
+.zt-hair-dark {
+  background: var(--border-on-dark);
+}
+
+.is-in .zt-hair,
+.is-in.zt-hair {
+  transform: scaleX(1);
+}
+
+/* Rows that respond to the pointer. A wash and a 2px shift of the leading
+   label - never a lift, never a colour, never a scale. */
+.zt-lift {
+  transition: background-color var(--d-fast) var(--ease-out);
+}
+
+.zt-lift:hover {
+  background: rgba(17, 17, 17, 0.03);
+}
+
+.zt-lift-dark:hover {
+  background: rgba(242, 242, 240, 0.03);
+}
+
+.zt-lift > :first-child {
+  transition: transform var(--d-base) var(--ease-out);
+}
+
+.zt-lift:hover > :first-child {
+  transform: translateX(3px);
+}
+
+/* Nav links resolve to full ink on hover, and the section the reader is
+   actually in stays there. */
+.zt-nav-link:hover,
+.zt-nav-link[data-active='true'] {
+  color: var(--ink) !important;
+}
+
+@media (max-width: 720px) {
+  .zt-nav-links {
+    display: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zt-r,
+  .zt-r-sweep,
+  .zt-r-rule,
+  .zt-hair {
+    transition-duration: 1ms;
+    transition-delay: 0ms;
+  }
+
+  .zt-r {
+    transform: none;
+  }
+
+  .zt-lift:hover > :first-child {
+    transform: none;
+  }
+}
+
+/* A citation resolves to full ink on hover, so a source reads as reachable. */
+.zt-cite:hover {
+  text-decoration-color: currentColor !important;
+}
+
+/* --- The gap section ---------------------------------------------------
+   Claim on the left, the artefact that backs it on the right. Below the
+   point where the panel's mono rows start wrapping mid-value, the panel
+   goes under the claims rather than beside them. */
+
+.zt-gap-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.92fr);
+  gap: 48px;
+  align-items: start;
+}
+
+.zt-gap-panel {
+  position: sticky;
+  top: 96px;
+}
+
+@media (max-width: 960px) {
+  .zt-gap-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+
+  .zt-gap-panel {
+    position: static;
+  }
+}
+
+/* The panel changes when a different claim is selected. It fades and rises
+   4px - the same entrance every other block on the page uses, so a swap
+   reads as the page's own motion rather than as a widget's. */
+.zt-panel-in {
+  animation: zt-fade-up var(--d-base) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zt-panel-in {
+    animation: none;
+  }
+}
+
+/* --- The horizon matrix ------------------------------------------------
+   Who the buyer is, against when they can actually buy. One time axis is
+   set above both lanes and every row aligns to it, so "reachable this
+   quarter" and "the thing it has to become" are read as one picture rather
+   than as two lists that happen to sit near each other.
+
+   Three columns need roughly 900px before the second column's measure drops
+   under reading width. Below that the lanes stack and the time labels come
+   back as headings inside each one. */
+
+.zt-horizon {
+  display: grid;
+  grid-template-columns: minmax(150px, 210px) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 40px;
+  box-shadow: inset 0 -1px 0 var(--border-hairline);
+}
+
+.zt-horizon:last-of-type {
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  .zt-horizon {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  /* The axis heads carry no rows of their own once stacked. */
+  .zt-horizon:first-of-type {
+    display: none;
+  }
+
+  .zt-horizon > :last-child {
+    padding-left: 16px !important;
+  }
+}
+
+/* Only present once the matrix has stacked and lost its shared axis. */
+.zt-lane-label {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .zt-lane-label {
+    display: block;
+  }
+}
+
+/* --- The go-to-market rows ---------------------------------------------
+   When, what, and the rule it is pitched against. Three columns hold until
+   the middle one's measure drops below reading width; then the date moves
+   above the move it dates. */
+
+.zt-move {
+  display: grid;
+  grid-template-columns: 88px minmax(160px, 220px) minmax(0, 1fr) minmax(150px, 210px);
+  gap: 24px;
+  padding: 15px 0;
+  align-items: baseline;
+}
+
+.zt-move-cite {
+  text-align: right;
+}
+
+@media (max-width: 1020px) {
+  .zt-move {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 8px 20px;
+    padding: 16px 0;
+  }
+
+  /* The move and its rule fall under the claim rather than beside it; the
+     month keeps its own column so the sequence still reads down the page. */
+  .zt-move > :nth-child(3),
+  .zt-move-cite {
+    grid-column: 2;
+    text-align: left;
+  }
+}
+
+/* --- The moat rows ------------------------------------------------------
+   The right column is the argument: what crossing this would actually cost
+   someone else. It is set in mono because it is a measurement, and it is
+   right-aligned so the four values read as one column. */
+
+.zt-moat,
+.zt-moat-head {
+  display: grid;
+  grid-template-columns: 34px minmax(170px, 250px) minmax(0, 1fr) minmax(150px, 200px);
+  gap: 24px;
+  align-items: baseline;
+}
+
+.zt-moat {
+  padding: 16px 0;
+}
+
+.zt-moat-head {
+  padding-bottom: 12px;
+}
+
+.zt-moat-cost {
+  text-align: right;
+}
+
+@media (max-width: 980px) {
+  .zt-moat,
+  .zt-moat-head {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 6px 16px;
+    padding: 16px 0;
+  }
+
+  .zt-moat-head > :last-child {
+    display: none;
+  }
+
+  /* Stacked, the line and its price sit under the claim they belong to rather
+     than being pushed into rows that read as unrelated. */
+  .zt-moat > :nth-child(3),
+  .zt-moat-cost {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .zt-moat-cost {
+    padding-top: 6px;
+  }
+}
+
+/* --- The procurement scale ---------------------------------------------
+   Four zones of signing authority, drawn to scale as a run of hairlines.
+   The fourth is dashed and dimmed because it is the one the pricing exists
+   to stay under, not a tier being offered. */
+
+.zt-scale {
+  display: grid;
+  grid-template-columns: 0.7fr 1fr 1.4fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 760px) {
+  .zt-scale {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px 16px;
+  }
+}
+
+/* --- The pricing ladder ------------------------------------------------
+   Price, what it buys, and who is allowed to sign it. The third column is
+   the one that matters: a number nobody can approve is not a price. */
+
+.zt-rung {
+  display: grid;
+  grid-template-columns: minmax(150px, 210px) minmax(0, 1fr) minmax(180px, 250px);
+  gap: 30px;
+  padding: 24px 0;
+  align-items: start;
+}
+
+.zt-rung-signer {
+  padding-top: 2px;
+}
+
+@media (max-width: 940px) {
+  .zt-rung {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding: 22px 0;
+  }
+}

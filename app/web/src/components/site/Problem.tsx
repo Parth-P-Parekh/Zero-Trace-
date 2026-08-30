@@ -1,12 +1,42 @@
-import { Section, SectionHead, Stat, Pull } from './Shared';
+import { Section, SectionHead, Stat } from './Shared';
+import { RevealGroup, RevealItem } from './Reveal';
 
 /**
  * Move 2: why it exists, in one idea and four numbers.
  *
  * One band, not two. The idea is that prohibition is the only control most
- * organisations have and it does not work, and the numbers are the evidence -
- * so they share a ground instead of the heading getting a stripe of its own.
+ * organisations have and it does not work; the numbers are the evidence, and
+ * each one carries a link to where it came from rather than a name a reader
+ * would have to go and search for.
  */
+
+const FIGURES: Array<{ value: string; body: string; source: string; href: string }> = [
+  {
+    value: '39.7%',
+    body: 'of AI interactions carry sensitive data.',
+    source: 'Cyberhaven research',
+    href: 'https://www.cyberhaven.com/research',
+  },
+  {
+    value: '66%',
+    body: 'of staff have used AI in ways that break their own policy.',
+    source: 'PagerDuty / Wakefield',
+    href: 'https://www.pagerduty.com/newsroom/',
+  },
+  {
+    value: '78%',
+    body: 'of leaders believe they have visibility into it. 23% actually do.',
+    source: 'Reported, May 2026',
+    href: 'https://www.cyberhaven.com/research',
+  },
+  {
+    value: '₹25.5 cr',
+    body: 'average cost of one breach in India. Shadow AI adds ₹1.79 crore.',
+    source: 'IBM Cost of a Data Breach',
+    href: 'https://www.ibm.com/reports/data-breach',
+  },
+];
+
 export function Problem() {
   return (
     <Section id="problem" ground="dark" tight>
@@ -14,22 +44,18 @@ export function Problem() {
         step="01 · The problem"
         onDark
         title="A ban is not a control. It is a blind spot with paperwork."
-        lead="Most organisations have exactly two options today: ban AI and watch people use it anyway, or allow it and hope nothing sensitive is in the prompt."
+        lead="Two options exist today: ban AI and watch people use it anyway, or allow it and hope nothing sensitive is in the prompt."
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 36 }}>
-        <Stat onDark value="39.7%" body="of AI interactions carry sensitive data." source="Cyberhaven, 2026" />
-        <Stat onDark value="66%" body="of staff have used AI in ways that break their own policy." source="PagerDuty/Wakefield, 2026" />
-        <Stat onDark value="23%" body="of leaders actually have visibility into it. 78% believe they do." source="Reported, May 2026" />
-        <Stat onDark value="₹25.5 cr" body="average cost of one data breach in India. Shadow AI adds ₹1.79 crore." source="IBM, 2026" />
-      </div>
-
-      <div style={{ marginTop: 44 }}>
-        <Pull onDark sub="Nobody typed it, no browser extension sees it, no endpoint DLP sees it, and it leaves anyway.">
-          And the fastest-growing surface is the one no human touches: agent tool
-          results entering context on hop three of a chain nobody reviewed.
-        </Pull>
-      </div>
+      <RevealGroup
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 36 }}
+      >
+        {FIGURES.map((f, i) => (
+          <RevealItem key={f.value} index={i}>
+            <Stat onDark value={f.value} body={f.body} source={f.source} href={f.href} />
+          </RevealItem>
+        ))}
+      </RevealGroup>
     </Section>
   );
 }
