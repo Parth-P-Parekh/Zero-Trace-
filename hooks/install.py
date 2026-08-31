@@ -59,12 +59,28 @@ def claude_entry(
     and exited 0 -- a silent allow, on every prompt and every tool call, with nothing on
     stderr and nothing in any log to say the guard had stopped guarding.
 
-    `subprocess.list2cmdline` does the quoting rather than `shlex.quote`, which uses
-    POSIX single-quote rules that Windows shells do not honour -- and this is a Windows
-    path with a hyphen in it.
+    Quoted for **bash**, with POSIX separators. Claude Code runs a command hook through
+    bash -- Git Bash on Windows -- not through cmd.exe.
+
+    This was `subprocess.list2cmdline([sys.executable, ...])`, on the reasoning that a
+    Windows path wants Windows quoting. The reasoning named the wrong shell. Neither
+    path here contains a space, so `list2cmdline` returned them unquoted with their
+    backslashes intact, and in bash an unquoted backslash escapes the next character:
+    `C:\\Users\\parth\\...\\python.exe` arrived as `C:Usersparth...python.exe`. Every
+    prompt and every tool call died with exit 127, `command not found` -- which Claude
+    Code reports as a *non-blocking* hook error and then proceeds, so the guard was off
+    and the session looked normal.
+
+    `sys.executable` is the only part that carries backslashes; `as_posix` is what makes
+    it parseable, and `shlex.quote` covers an interpreter under `C:/Program Files/`.
     """
-    command = subprocess.list2cmdline(
-        [sys.executable, f"{script_path}/{script}", "--claude"]
+    command = " ".join(
+        shlex.quote(part)
+        for part in (
+            Path(sys.executable).as_posix(),
+            Path(script_path, script).as_posix(),
+            "--claude",
+        )
     )
     block: dict = {
         "hooks": [

@@ -19,6 +19,8 @@ The lesson generalises: a guard's wiring needs a test that runs the wiring, not 
 from __future__ import annotations
 
 import json
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -55,6 +57,43 @@ def test_the_entry_names_a_real_interpreter(script):
     assert Path(interpreter.strip('"')).exists(), f"interpreter not found: {interpreter}"
 
 
+def _run_installed(command: str, event: dict) -> subprocess.CompletedProcess:
+    """Run the installed string the way Claude Code runs it: through bash.
+
+    Not `shell=True`. On Windows that is cmd.exe, and cmd.exe honours a backslash as a
+    path separator while bash treats it as an escape character. So `shell=True` is the
+    one shell that cannot see this class of bug, and using it here is how the second
+    wiring bug shipped past the file written to catch the first.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash on PATH; Claude Code runs command hooks through bash")
+    return subprocess.run(
+        [bash, "-c", command], input=json.dumps(event),
+        capture_output=True, text=True, timeout=180,
+    )
+
+
+def test_the_command_survives_posix_word_splitting():
+    """The parse test, with no shell needed -- `shlex` splits by bash's own rules.
+
+    `claude_entry` used `subprocess.list2cmdline`, which quotes for CreateProcess and
+    leaves a space-free Windows path unquoted with its separators intact. bash then ate
+    every separator: the interpreter arrived as `C:UsersparthAppData...` and the hook
+    exited 127. Claude Code logs a 127 as a *non-blocking* hook error and proceeds, so
+    every prompt and every tool call was waved through while `zerotrace status` reported
+    both hooks installed.
+    """
+    for script in ("zt_check.py", "zt_pretool.py"):
+        parts = shlex.split(_entry(script)["command"])
+        assert len(parts) == 3 and parts[2] == "--claude"
+        for part in parts[:2]:
+            assert Path(part).exists(), (
+                f"bash would resolve {part!r}, which does not exist -- the command "
+                "string is not parseable by the shell Claude Code uses"
+            )
+
+
 def _key() -> str:
     return "sk-" + "ant-" + "api03-" + "x7Kq9mZp2Wv4Bn8Rt6" + "Yu3Ia5Oe1Ld0Sf3Gh7Jk2Mn5Pq8Rs"
 
@@ -64,8 +103,7 @@ def test_running_the_installed_command_actually_blocks_a_prompt():
     command = _entry("zt_check.py")["command"]
     event = {"session_id": "shape", "hook_event_name": "UserPromptSubmit",
              "prompt": "my key is " + _key(), "cwd": str(ROOT)}
-    r = subprocess.run(command, shell=True, input=json.dumps(event),
-                       capture_output=True, text=True, timeout=180)
+    r = _run_installed(command, event)
     assert r.returncode == 2, (
         "the installed command did not block a credential; it exited "
         f"{r.returncode}. Exit 0 here means the product is off."
@@ -76,6 +114,5 @@ def test_running_the_installed_command_allows_ordinary_text():
     command = _entry("zt_check.py")["command"]
     event = {"session_id": "shape", "hook_event_name": "UserPromptSubmit",
              "prompt": "refactor the retry loop", "cwd": str(ROOT)}
-    r = subprocess.run(command, shell=True, input=json.dumps(event),
-                       capture_output=True, text=True, timeout=180)
+    r = _run_installed(command, event)
     assert r.returncode == 0

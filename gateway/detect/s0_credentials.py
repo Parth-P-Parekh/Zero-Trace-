@@ -71,17 +71,31 @@ _DETECTORS: list[CredentialDetector] = [
     CredentialDetector(
         entity_class=EntityClass.OPENAI_KEY,
         anchors=["sk-"],
-        pattern=r"sk-[A-Za-z0-9]{20,}",
+        # The `sk-proj-` arm is not decoration: it is the format OpenAI issues by
+        # default today. `sk-[A-Za-z0-9]{20,}` cannot match it, because the character
+        # class excludes the hyphen and so the match dies after `sk-proj` -- seven
+        # characters, under the floor. Every current-format OpenAI key was invisible.
+        #
+        # The arms are spelled out rather than folded into one permissive class. A
+        # pattern like `sk-[A-Za-z0-9_\-]{20,}` would also match `sk-` followed by any
+        # long hyphenated run of prose, and the entropy floor is not a reliable guard
+        # against that once hyphens are in the alphabet.
+        pattern=(
+            r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"
+            r"|sk-[A-Za-z0-9]{20,}"
+        ),
         post_check="entropy_check",
     ),
     CredentialDetector(
         entity_class=EntityClass.GITHUB_TOKEN,
-        anchors=["ghp_", "gho_", "ghu_", "ghs_", "ghr_"],
+        # `github_pat_` is the fine-grained PAT, which is what GitHub's UI hands out
+        # now; the `gh*_` classic prefixes were the whole list when this was written.
+        anchors=["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"],
         # 12, not 36. A classic PAT is 36 characters, but the most common accidental
         # form is a clipped copy -- and `ghp_` followed by 12 alphanumerics is still
         # unmistakably a GitHub token. Requiring the full length missed exactly the
         # partial paste it most needed to catch.
-        pattern=r"gh[pousr]_[A-Za-z0-9]{12,}",
+        pattern=r"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{12,}",
         post_check="token_body_check",
     ),
     CredentialDetector(
@@ -137,6 +151,109 @@ _DETECTORS: list[CredentialDetector] = [
         pattern=r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s\"']+:[^\s\"'@]+@[^\s\"']+",
         post_check="db_uri_check",
         min_length=15,
+    ),
+
+    # ── Provider-anchored, mapped onto the existing closed vocabulary ──────────
+    #
+    # These map to classes that already exist rather than adding one class per
+    # vendor. The vocabulary is closed on purpose (VOCAB-01) and every policy rule
+    # enumerates classes by name, so a new class is inert until someone remembers to
+    # add it to `bharat-digital.yaml` -- which is exactly the failure the audit found
+    # for DB_URI and AWS_ACCESS_KEY. A vendor token that lands on GENERIC_SECRET is
+    # covered by the credential floor the moment the detector ships.
+    CredentialDetector(
+        entity_class=EntityClass.GOOGLE_API_KEY,
+        # Google's OAuth *client secret*, which is a different shape from an AIza
+        # browser key and is the one that appears in committed client_secret.json.
+        anchors=["GOCSPX-"],
+        pattern=r"GOCSPX-[A-Za-z0-9_\-]{20,}",
+        post_check="token_body_check",
+    ),
+    CredentialDetector(
+        entity_class=EntityClass.SLACK_TOKEN,
+        # An incoming-webhook URL is a bearer credential: anyone holding it can post
+        # into the channel. It carries no `xox` prefix, so the token detector above
+        # never saw it.
+        anchors=["hooks.slack.com/services/"],
+        pattern=r"hooks\.slack\.com/services/T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]{16,}",
+        post_check=None,
+        min_length=48,
+    ),
+    CredentialDetector(
+        entity_class=EntityClass.AWS_SECRET_KEY,
+        # The *secret*, not the key id. AKIA... alone is a public identifier; this is
+        # the half that actually authenticates, and nothing emitted this class before,
+        # despite it being listed in both policy rules and in the family map.
+        #
+        # A bare 40-character base64 run is far too common to flag on shape, so this
+        # requires the AWS-specific assignment context on the same line.
+        anchors=["aws_secret_access_key", "AWS_SECRET_ACCESS_KEY"],
+        pattern=(
+            r"(?i)aws_secret_access_key[\"']?\s*[:=]\s*[\"']?"
+            r"([A-Za-z0-9/+=]{40})"
+        ),
+        post_check=None,
+        min_length=40,
+    ),
+    # ── AI providers ───────────────────────────────────────────────────────────
+    #
+    # The keys most likely to be in a developer's clipboard on this machine, and the
+    # ones a coding agent is most likely to be handed mid-conversation. OpenAI,
+    # Anthropic and Google have their own classes above; the rest land on
+    # GENERIC_SECRET, which is in the same family and so hits the same floor.
+    CredentialDetector(
+        entity_class=EntityClass.GENERIC_SECRET,
+        anchors=["r8_", "gsk_", "xai-", "pplx-", "tgp_v1_", "fw_", "sk-or-v1-",
+                 "lsv2_pt_", "lsv2_sk_", "dapi", "AIzaSy"],
+        pattern=(
+            r"r8_[A-Za-z0-9]{37,}"               # Replicate
+            r"|gsk_[A-Za-z0-9]{40,}"             # Groq
+            r"|xai-[A-Za-z0-9]{60,}"             # xAI / Grok
+            r"|pplx-[A-Za-z0-9]{32,}"            # Perplexity
+            r"|tgp_v1_[A-Za-z0-9_\-]{40,}"       # Together
+            r"|fw_[A-Za-z0-9]{24,}"              # Fireworks
+            r"|sk-or-v1-[a-f0-9]{64}"            # OpenRouter
+            r"|lsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}"   # LangSmith
+            r"|dapi[a-f0-9]{32}"                 # Databricks
+        ),
+        post_check="token_body_check",
+        min_length=20,
+    ),
+
+    # ── Subscription / SaaS services ───────────────────────────────────────────
+    CredentialDetector(
+        entity_class=EntityClass.GENERIC_SECRET,
+        anchors=["glpat-", "npm_", "pypi-", "hf_", "SG.", "shpat_", "shpss_",
+                 "dop_v1_", "sq0atp-", "sq0csp-", "AccountKey=", "secret_",
+                 "ntn_", "lin_api_", "sbp_", "sntrys_", "figd_", "ATATT",
+                 "PMAK-", "dp.pt.", "SK", "AC"],
+        pattern=(
+            r"glpat-[A-Za-z0-9_\-]{20,}"         # GitLab
+            r"|npm_[A-Za-z0-9]{36}"              # npm
+            r"|pypi-[A-Za-z0-9_\-]{50,}"         # PyPI
+            r"|hf_[A-Za-z0-9]{30,}"              # Hugging Face
+            r"|SG\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}"   # SendGrid
+            # Both are documented as hex, but the character class is the wider
+            # `[a-z0-9]`: the prefix is the evidence here, and a detector that
+            # rejects a real token for containing a `w` has chosen the wrong risk.
+            r"|shp(?:at|ss)_[a-z0-9]{32}"        # Shopify
+            r"|dop_v1_[a-z0-9]{64}"              # DigitalOcean
+            r"|sq0(?:atp|csp)-[A-Za-z0-9_\-]{20,}"             # Square
+            r"|AccountKey=[A-Za-z0-9+/=]{60,}"   # Azure storage connection string
+            r"|secret_[A-Za-z0-9]{40,}"          # Notion (legacy)
+            r"|ntn_[A-Za-z0-9]{40,}"             # Notion (current)
+            r"|lin_api_[A-Za-z0-9]{40,}"         # Linear
+            r"|sbp_[a-f0-9]{40}"                 # Supabase
+            r"|sntrys_[A-Za-z0-9+/=]{40,}"       # Sentry
+            r"|figd_[A-Za-z0-9_\-]{40,}"         # Figma
+            r"|ATATT[A-Za-z0-9_\-=]{40,}"        # Atlassian
+            r"|PMAK-[a-f0-9]{24}-[a-f0-9]{34}"   # Postman
+            r"|dp\.pt\.[A-Za-z0-9]{40,}"         # Doppler
+            r"|SK[a-f0-9]{32}"                   # Twilio API key SID
+            r"|AC[a-f0-9]{32}"                   # Twilio account SID
+        ),
+        post_check="token_body_check",
+        min_length=20,
     ),
 ]
 
@@ -210,8 +327,15 @@ def entropy_check(text: str, match_start: int, match_end: int,
     # Exclude Stripe keys — they have their own detector
     if matched.startswith(("sk_live_", "sk_test_")):
         return False
-    # Extract the random portion after "sk-"
+    # Extract the random portion after "sk-", and after the account-type infix if one
+    # is present. `proj-` is fixed text on every project key, so leaving it in the
+    # sample drags the measured entropy toward a constant and makes the floor mean
+    # something slightly different for that arm than for the legacy one.
     random_part = matched[3:]
+    for infix in ("proj-", "svcacct-", "admin-"):
+        if random_part.startswith(infix):
+            random_part = random_part[len(infix):]
+            break
     if len(random_part) < 20:
         return False
     return _shannon_entropy(random_part) >= 3.5
@@ -237,6 +361,11 @@ _SPEC_BODY_LENGTH: dict[str, int] = {
     # minimum, not the spec -- using it here let `xoxb-000000000000` past the entropy
     # guard on length alone.
     "xoxb-": 24, "xoxa-": 24, "xoxp-": 24, "xoxr-": 24, "xoxs-": 24,
+    "github_pat_": 82,
+    "GOCSPX-": 28,
+    "glpat-": 20, "npm_": 36, "pypi-": 50, "hf_": 34,
+    "shpat_": 32, "shpss_": 32, "dop_v1_": 64,
+    "sq0atp-": 22, "sq0csp-": 22,
 }
 
 #: Entropy floor for a *short* token body. A real token of 12 random characters clears
@@ -467,6 +596,156 @@ def _check_ssh_heuristic(span: Span) -> Finding | None:
 
 
 # ────────────────────────────────────────────────────────────────────
+# Generic secrets — the pass that does not need to know the vendor
+# ────────────────────────────────────────────────────────────────────
+#
+# Every detector above is a vendor list, and a vendor list is a losing position: it
+# covers what somebody thought of on the day they wrote it, and an internal service's
+# own token has no published prefix to be on the list at all. This pass keys on what
+# is common to all of them instead -- a secret-shaped value on the right-hand side of
+# a name that says it is a secret.
+#
+# It is context-anchored rather than entropy-only on purpose. Scanning for "any
+# high-entropy string" finds every git SHA, UUID, content hash and base64 image in the
+# repository, and a guard that fires on those gets switched off within a day -- which
+# is a worse outcome than the gap it closed.
+
+#: `name = value` where the name claims to be a secret. Quoted arms come first so a
+#: quoted value ends at its closing quote instead of running into trailing text.
+_GENERIC_SECRET_PATTERN = re2.compile(
+    # The leading boundary is `[^A-Za-z0-9]`, not `\b`. `\b` treats underscore as a
+    # word character, so it does not fire between `DB_` and `PASSWORD` -- and
+    # snake_case with a vendor prefix is the ordinary way these names are written.
+    # `DB_PASSWORD`, `dd_api_key` and `twilio_auth_token` were all missed by `\b`.
+    r"(?i)(?:^|[^A-Za-z0-9])"
+    r"(?:api[_\-]?key|apikey|api[_\-]?token|secret[_\-]?key|client[_\-]?secret|"
+    r"access[_\-]?token|auth[_\-]?token|refresh[_\-]?token|session[_\-]?token|"
+    r"encryption[_\-]?key|signing[_\-]?key|private[_\-]?token|"
+    r"password|passwd|secret|token|credential)"
+    r"[\"']?\s*[:=]\s*"
+    r"(?:\"([^\"\n]{16,200})\"|'([^'\n]{16,200})'|([A-Za-z0-9+/=_\-\.]{16,200}))"
+)
+
+#: `Authorization: Bearer <token>` carries no assignment operator, so the pattern
+#: above cannot see it -- and it is the most common way a token reaches a model,
+#: because it is what every curl command and every captured request looks like.
+_AUTH_HEADER_PATTERN = re2.compile(
+    r"(?i)\bauthorization\b\s*[:=]\s*[\"']?"
+    r"(?:bearer|basic|token)\s+([A-Za-z0-9+/=_\-\.]{16,200})"
+)
+
+#: Substrings that mark a value as a stand-in rather than a live secret, matched
+#: case-insensitively against the whole value. A real secret does not contain the
+#: word "example"; a redacted one nearly always says so.
+_PLACEHOLDER_MARKERS = (
+    "your", "example", "changeme", "change_me", "placeholder", "redacted",
+    "dummy", "sample", "insert", "replace", "todo", "fixme", "xxxx",
+    "fake", "<", ">", "${", "{{", "abc123", "foobar", "n/a",
+    "none", "null", "unset", "omitted", "hidden", "removed", "notreal",
+)
+
+#: A generic hit is an inference in a way that `sk-ant-` is not, so it is reported
+#: below the provider-anchored classes rather than at their 0.99.
+_GENERIC_SECRET_CONFIDENCE = 0.85
+
+#: Entropy floor for a generic value. Lower than it looks, because this runs *after*
+#: the keyword and placeholder filters: it is only separating a real secret from a
+#: descriptive string that survived both.
+_MIN_GENERIC_ENTROPY = 3.0
+
+
+def _looks_like_a_real_secret(value: str) -> bool:
+    """Decide whether a keyword-anchored value is a credential or a description."""
+    if len(value) < 16:
+        return False
+
+    lowered = value.lower()
+    if any(marker in lowered for marker in _PLACEHOLDER_MARKERS):
+        return False
+
+    # A run of one or two repeated characters is a mask, not a secret: `****`,
+    # `--------`, `aaaaaaaa`. Real secrets are not this compressible.
+    if len(set(value)) <= 4:
+        return False
+
+    # A path or a URL is neither, and both clear the length floor easily.
+    if value.startswith(("/", "./", "../", "~/")) or "://" in value:
+        return False
+    if value.count("/") >= 3 and " " not in value:
+        return False
+
+    # `secret = process.env.MY_SERVICE_SECRET` names a secret; it does not contain
+    # one. Reading the code that fetches a credential correctly is the single most
+    # common thing an agent does near these keywords, and flagging it would make the
+    # generic pass fire on well-written source precisely because it is well written.
+    #
+    # An attribute chain is three or more identifier-shaped, human-length segments.
+    # The length cap is what keeps a JWT -- also dotted, but with long base64
+    # segments -- from being read as one, in the case where its own detector did not
+    # already claim the span.
+    segments = value.split(".")
+    if len(segments) >= 3 and all(
+        seg and len(seg) <= 40
+        and (seg[0].isalpha() or seg[0] == "_")
+        and all(c.isalnum() or c == "_" for c in seg)
+        for seg in segments
+    ):
+        return False
+
+    # Mixed letter and digit, or long enough that a base64 body without digits is
+    # still the likelier reading. A passphrase like `correcthorsebattery` is a real
+    # secret and clears this on length alone.
+    has_alpha = any(c.isalpha() for c in value)
+    has_digit = any(c.isdigit() for c in value)
+    if not (has_alpha and has_digit) and len(value) < 24:
+        return False
+
+    return _shannon_entropy(value) >= _MIN_GENERIC_ENTROPY
+
+
+def _check_generic_secrets(
+    span: Span, covered_ranges: Sequence[tuple[int, int]]
+) -> list[Finding]:
+    """Find `name = value` secrets that no vendor pattern claimed.
+
+    `covered_ranges` are the spans the provider detectors already accounted for. A
+    GitHub token written as `api_key = "ghp_..."` matches both this and the
+    GITHUB_TOKEN detector, and reporting it twice would inflate the finding count that
+    the ledger and the policy engine both read.
+    """
+    findings: list[Finding] = []
+    text = span.text
+
+    for pattern in (_GENERIC_SECRET_PATTERN, _AUTH_HEADER_PATTERN):
+        for m in pattern.finditer(text):
+            group_index = next(
+                (i for i, g in enumerate(m.groups(), start=1) if g), None
+            )
+            if group_index is None:
+                continue
+            value = m.group(group_index)
+            start, end = m.span(group_index)
+
+            if any(start >= c0 and end <= c1 for c0, c1 in covered_ranges):
+                continue
+            if not _looks_like_a_real_secret(value):
+                continue
+
+            findings.append(Finding(
+                span_path=span.path,
+                start=start,
+                end=end,
+                entity_class=EntityClass.GENERIC_SECRET.value,
+                confidence=_GENERIC_SECRET_CONFIDENCE,
+                detector_id=None,
+                stage="S0",
+                leg=span.leg,
+            ))
+
+    return findings
+
+
+# ────────────────────────────────────────────────────────────────────
 # Main scan function
 # ────────────────────────────────────────────────────────────────────
 
@@ -579,6 +858,11 @@ def scan_span_credentials(span: Span) -> list[Finding]:
     ssh_finding = _check_ssh_heuristic(span)
     if ssh_finding is not None:
         findings.append(ssh_finding)
+
+    # ── Generic secrets ────────────────────────────────────────────
+    # Last, and given the ranges the vendor detectors already claimed, so a token
+    # with a known prefix keeps its specific class instead of being reported twice.
+    findings.extend(_check_generic_secrets(span, covered_ranges))
 
     return deduplicate_findings(findings)
 
